@@ -126,6 +126,17 @@ FinanceModel SHALL obtain real market data only by reading approved platform inp
 - **WHEN** an approved snapshot carries a platform quality flag for an empty or partial provider response on some dates
 - **THEN** the flag is recorded in the dataset lineage and the affected dates are excluded or the preparation fails, as set in the preparation configuration, and never silently filled
 
+### Requirement: Yahoo-derived data leaves FinanceModel only as research descriptors
+Data derived from Yahoo Finance snapshots SHALL be sent to an external service (TypeSafe) only by runs with a research purpose (`research`, `tuning`, `holdout_evaluation`) and only as derived, bucketed text descriptors. The shared outbound payload check MUST reject any payload carrying raw price or volume series or bulk data before it is sent.
+
+#### Scenario: Raw-series payload rejected
+- **WHEN** an outbound payload built from a real SPY dataset contains the daily adjusted closes of the last 30 sessions as numbers
+- **THEN** the outbound payload check rejects it with `VALIDATION_FAILED`, no network request is made, and the rejection is logged with the run ID but without the payload values
+
+#### Scenario: Descriptor payload allowed for research
+- **WHEN** a `research` run's outbound payload contains only bucketed text descriptors derived from the dataset
+- **THEN** the check passes
+
 ### Requirement: No retrieved market data in the public repository
 Retrieved market data (raw or curated provider series, including yfinance output) SHALL NOT be committed to the FinanceModel repository, which is public; test fixtures MUST stay synthetic. Derived research outputs (datasets, run results, staged bundles and reports) SHALL be kept in FinanceModel research storage or the platform staging area, not in the repository, because Yahoo Finance data is provided for personal and research use.
 

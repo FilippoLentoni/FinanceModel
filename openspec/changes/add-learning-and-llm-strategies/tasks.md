@@ -59,6 +59,7 @@ Scope: FinanceModel phase 2 (contracts phase 3). Depends on `add-research-job-fo
 - [ ] 7.1 Implement the Jev enable flag and mandatory approval (flag off returns `DEPENDENCY_UNAVAILABLE`; every run waits in `awaiting_approval` showing AWS and TypeSafe estimates); verify JEV-01 unit tests
 - [ ] 7.2 Implement the `choice` question builder (options exactly `buy`, `hold`, `sell`; versioned template in `configuration_id`), response validation, argmax decision with tie-break to `hold`, and invalid/tie counters; verify JEV-02 and JEV-03 unit tests with mocked responses (missing option probability, exact tie)
 - [ ] 7.3 Implement the text and bucketed state encoder from point-in-time features with decision-time bucket edges and the token-budget check; verify JEV-04 unit tests (look-ahead bucket edge refused; oversized state not sent; state built from a synthetic snapshot marked as real-provider-derived contains no raw series)
+- [ ] 7.3a Apply the foundation's shared outbound payload check (`add-research-job-foundation` task 3.9a) as the pre-send guard on every Jev request, and add the research-only purpose rule for Yahoo-derived datasets (the check rejects runs of more than the configured number of consecutive numbers, any value equal to a raw price or volume observation of the source dataset, tables or attachments; refuse `production_candidate` Jev runs on Yahoo-derived data); verify JEV-17 unit tests (raw-series payload rejected with no network call, bucketed descriptors pass, `production_candidate` refused with `FORBIDDEN`) (FM2-OQ-12 RESOLVED 2026-10-07)
 - [ ] 7.4 Implement the TypeSafe API client (bearer auth from the secret named `finplan/shared/financemodel/jev-api-key`, client-side rate limit, 429 retry-after, 529 and network backoff, 401 and 422 no-retry mapping, response cache by request hash, authorization redaction in logs) and the job-role policy that reads only that secret; verify JEV-10 with a fault-injecting mock and JEV-11 with an IAM policy simulation plus the leak scan on a planted key
 - [ ] 7.5 Record the returned `model` per decision and flag `model_drift`; verify JEV-05 unit tests (two model values in one run flagged and refused for promotion)
 - [ ] 7.6 Implement label definition and the chronological development/calibration/policy/test ranges with horizon embargo and holdout access rule; verify JEV-06 and JEV-07 unit tests
@@ -69,16 +70,17 @@ Scope: FinanceModel phase 2 (contracts phase 3). Depends on `add-research-job-fo
 - [ ] 7.11 Report classification and portfolio metrics in separate sections; verify JEV-14 with a fixture where accuracy is high and net return is negative
 - [ ] 7.12 Build the TypeSafe API mock (recorded fixture responses, fault injection) used by build, beta and gamma tests, and an egress guard that fails a pipeline stage on any request to the real API host; verify JEV-15 in every stage
 - [ ] 7.13 Fill `docs/jev-identification.md` with the verified facts and their evidence (vendor documentation, `GET /v1/models` observation, version aliases, pricing, rate limits, numeric-precision weakness) and no other claims; verify JEV-16 by review
-- [ ] 7.14 With user approval, send one test request with an exact model ID to resolve FM2-OQ-11 and review vendor terms (FM2-OQ-12); record the outcome in the identification record (uses the secret already stored by the user; no CI involvement)
-- [ ] 7.15 Run one approved small Jev evaluation in beta against the real API on fixture data, then on the SPY dataset prepared from approved platform snapshots (platform yfinance ingestion; FinanceModel reads snapshots only); verify JEV-02, JEV-04 (no raw retrieved series in requests), JEV-05, JEV-08, JEV-09 and JEV-12 integration-beta (real-data part depends on approved SPY snapshots in beta, foundation task 3.10, and the Yahoo part of FM2-OQ-12; the provider choice FM-OQ-4 is RESOLVED 2026-10-07)
+- [ ] 7.14 With user approval, send one test request with an exact model ID to resolve FM2-OQ-11 and read through the TypeSafe vendor terms (the Yahoo-data part of FM2-OQ-12 is RESOLVED 2026-10-07: research only, descriptors only); record the outcome in the identification record (uses the secret already stored by the user; no CI involvement)
+- [ ] 7.15 Run one approved small Jev evaluation in beta against the real API on fixture data, then on the SPY dataset prepared from approved platform snapshots (platform yfinance ingestion; FinanceModel reads snapshots only); verify JEV-02, JEV-04 (no raw retrieved series in requests), JEV-17 (payload guard active, run purpose `research` or `holdout_evaluation`), JEV-05, JEV-08, JEV-09 and JEV-12 integration-beta (real-data part depends on approved SPY snapshots in beta, foundation task 3.10; FM-OQ-4 and FM2-OQ-12 are RESOLVED 2026-10-07)
 
 ## 8. Strategy promotion
 
 - [ ] 8.1 Implement candidate registration without job execution; verify PRO-01 unit test
 - [ ] 8.2 Implement the versioned criteria store writable only by the approver role; verify PRO-02 with IAM policy simulation (agent and tool roles denied)
 - [ ] 8.3 Implement evaluation cycles with budget and run limits and the unevaluated-candidate report; verify PRO-03 unit tests
-- [ ] 8.4 Implement the promotion decision (all criteria, one holdout evaluation, optional prospective period, human approval, registry status only) and the limitations section; verify PRO-04 and PRO-05 unit tests (promotion changes no plan or risk preference)
-- [ ] 8.5 Approve criteria v1 with the user, then run one promotion cycle in beta on synthetic data; verify PRO-03 and PRO-04 integration-beta (BLOCKED by FM2-OQ-7)
+- [ ] 8.4 Implement the deterministic promotion check for criteria v1 (incumbent selection with `buy_and_hold` fallback, comparability check, R1 strict net-of-costs return, R2 drawdown not worse, result record with checksum) and store criteria v1 as version 1 in the criteria store; verify PRO-06 and PRO-07 unit tests with the worked fixtures (pass; higher return but worse drawdown; equal return; gross-beats-net-loses; evaluator-version mismatch → `not_comparable`; `model_drift` → `ineligible`; re-run gives an identical checksum) (FM2-OQ-7 RESOLVED 2026-10-07)
+- [ ] 8.5 Implement promotion with recorded user approval (approval only on a `pass` result, approver identity and time, registry status only) and the limitations section; verify PRO-04 and PRO-05 unit tests (approval of a failing result refused; promotion changes no plan or risk preference)
+- [ ] 8.6 Run one promotion cycle in beta on synthetic data under criteria v1 with the user's approval; verify PRO-03, PRO-04, PRO-06 and PRO-07 integration-beta
 
 ## 9. Pipeline and environment integration
 
@@ -128,6 +130,7 @@ Test types: unit, contract, integration-beta, gamma, smoke.
 | jev-classification-strategy | Single choice question per decision | JEV-02 | unit + integration-beta |
 | jev-classification-strategy | Deterministic decision and tie-break | JEV-03 | unit |
 | jev-classification-strategy | Text-encoded point-in-time features | JEV-04 | unit |
+| jev-classification-strategy | Yahoo-derived data sent to TypeSafe for research only | JEV-17 | unit (payload guard, purpose rule) + integration-beta |
 | jev-classification-strategy | Response model identity recorded | JEV-05 | unit + integration-beta |
 | jev-classification-strategy | Explicit label definition | JEV-06 | unit |
 | jev-classification-strategy | Separate development, calibration, policy and test ranges | JEV-07 | unit |
@@ -143,11 +146,13 @@ Test types: unit, contract, integration-beta, gamma, smoke.
 | strategy-promotion | Candidate registration | PRO-01 | unit |
 | strategy-promotion | Versioned, approved promotion criteria | PRO-02 | unit (policy simulation) |
 | strategy-promotion | Budgeted evaluation | PRO-03 | unit + integration-beta |
-| strategy-promotion | Promotion decision | PRO-04 | unit + integration-beta |
+| strategy-promotion | Deterministic promotion check (criteria v1) | PRO-06 | unit (worked fixtures, checksum stability) + integration-beta |
+| strategy-promotion | Comparable evaluation inputs | PRO-07 | unit (`not_comparable`, `ineligible`, `buy_and_hold` fallback) + integration-beta |
+| strategy-promotion | Promotion requires recorded user approval | PRO-04 | unit + integration-beta |
 | strategy-promotion | No guaranteed-improvement claims | PRO-05 | unit |
 
 ## Workflow follow-up
 
 - CG-8 is a planned phase 2 contract minor; CG-9 and CG-10 are resolved (CG-10 by the 2026-10-07 allocation).
-- Archive after the beta and gamma checks pass. If the real-data Jev evaluation (7.15) is still waiting for approved SPY snapshots or the FM2-OQ-12 review at archive time, split it into a follow-up change.
-- Remaining blockers: promotion criteria v1 (FM2-OQ-7), mode B trial approval (FM2-OQ-5, mode B only), GPU budget (FM2-OQ-2), Jev identity (FM2-OQ-4) and the data provider (foundation FM-OQ-4: yfinance in the platform ingestion; FinanceModel reads approved snapshots only and has no yfinance dependency) were resolved on 2026-10-07. Real-data runs depend on approved SPY snapshots in beta, not on an open decision.
+- Archive after the beta and gamma checks pass. If the real-data Jev evaluation (7.15) is still waiting for approved SPY snapshots at archive time, split it into a follow-up change.
+- Remaining blockers: mode B trial approval (FM2-OQ-5, mode B only). Promotion criteria v1 (FM2-OQ-7) and Yahoo-derived data to TypeSafe (FM2-OQ-12, research only, descriptors only) were RESOLVED 2026-10-07. GPU budget (FM2-OQ-2), Jev identity (FM2-OQ-4) and the data provider (foundation FM-OQ-4: yfinance in the platform ingestion; FinanceModel reads approved snapshots only and has no yfinance dependency) were resolved on 2026-10-07. Real-data runs depend on approved SPY snapshots in beta, not on an open decision.

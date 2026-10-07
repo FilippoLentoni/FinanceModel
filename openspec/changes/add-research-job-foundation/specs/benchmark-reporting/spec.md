@@ -24,6 +24,13 @@ The portfolio section SHALL report, per strategy and per evaluation period: net 
 - **WHEN** a benchmark completes
 - **THEN** every strategy row includes each listed metric for each walk-forward fold, the holdout (when evaluated) and the aggregate
 
+### Requirement: Holdout metrics record for promotion
+For every holdout evaluation, the common evaluator SHALL store a machine-readable record with the net-of-costs cumulative return and the maximum drawdown, together with the `dataset_id`, holdout bounds, simulation configuration and cost-model identity, and `evaluator_version`. These values MUST be the same numbers shown in the report's holdout column.
+
+#### Scenario: Record matches report
+- **WHEN** a holdout evaluation completes
+- **THEN** the stored record's net-of-costs return and maximum drawdown equal the report's holdout values, and the record carries all comparability fields
+
 ### Requirement: Compute cost reporting
 The cost section SHALL report, per run, instance type, instance count, billed runtime seconds, the estimated cost from the pre-flight check and, when available, the actual billed cost, labeled as estimated or actual.
 

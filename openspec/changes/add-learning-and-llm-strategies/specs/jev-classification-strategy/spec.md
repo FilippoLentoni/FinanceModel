@@ -50,6 +50,21 @@ The request `state` SHALL encode only features available at the decision time, r
 - **WHEN** the state is rendered from a dataset prepared from approved real ETF snapshots (retrieved by the platform's yfinance ingestion)
 - **THEN** the state contains only bucketed descriptors, never the raw retrieved price series, and the request and response cache stays in FinanceModel research storage, not in the repository
 
+### Requirement: Yahoo-derived data sent to TypeSafe for research only
+Requests built from Yahoo Finance-derived datasets (platform yfinance ingestion) SHALL be sent to TypeSafe only by runs with purpose `research`, `tuning` or `holdout_evaluation`, and their `state` MUST contain only derived, bucketed text descriptors. A pre-send payload guard MUST reject any request carrying raw price or volume series or bulk data.
+
+#### Scenario: Raw-series payload rejected
+- **WHEN** a Jev request built from a real SPY dataset has a `state` that contains a sequence of daily closing prices or volumes as numbers
+- **THEN** the guard rejects the request before any network call, the run fails with `VALIDATION_FAILED` naming the raw-series check, and nothing is sent to TypeSafe
+
+#### Scenario: Bucketed descriptors allowed
+- **WHEN** the `state` contains only descriptors such as "20-day return: strongly positive (top decile of the trailing year)"
+- **THEN** the guard passes and the request may be sent within the approved research run
+
+#### Scenario: Non-research purpose
+- **WHEN** a `production_candidate` run would send Yahoo-derived descriptors to TypeSafe
+- **THEN** the submission is refused with `FORBIDDEN` and no request is sent
+
 ### Requirement: Response model identity recorded
 Each Jev request SHALL use the configured `model` value (an alias such as `jev-latest` until an exact version ID is accepted by the API, then the exact ID), and each response's returned `model` field MUST be stored with the decision. A run whose responses report more than one distinct `model` value MUST be flagged `model_drift` and is ineligible for promotion.
 

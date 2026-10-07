@@ -107,12 +107,21 @@ Design:
 - **Cost.** Two estimates at approval: the AWS CPU job estimate (in `cpu_research`) and the TypeSafe estimate (input tokens × configured price, label `external_billing: typesafe`). The TypeSafe amount is recorded and reported separately and never counted against the USD 50 AWS budget. A configured per-run TypeSafe token cap stops the run when reached.
 - **Approval.** Jev job types are deployed in phase 2 with an enable flag in configuration. Every Jev run waits in `awaiting_approval` regardless of the auto-approve threshold. With the flag off, submissions return `DEPENDENCY_UNAVAILABLE`.
 - **CI.** Build, beta and gamma pipeline tests use a mocked TypeSafe API (recorded fixture responses and fault injection for 429, 529, 401, 422). No pipeline stage calls the real API or reads the secret value.
-- **Market data sent to the vendor.** On real data the `state` carries only bucketed descriptors derived from approved snapshots, never raw retrieved series. Yahoo Finance data (via the platform's yfinance ingestion) is for personal and research use, so whether derived descriptors may be sent to TypeSafe is part of the terms review before the first real-data Jev run (FM2-OQ-12). Request and response caches, swarm prompt and message logs, and reports derived from real data stay in research storage and are never committed to the public repository.
+- **Market data sent to the vendor (RESOLVED 2026-10-07, FM2-OQ-12, user decision 15d).** Yahoo Finance-derived data (via the platform's yfinance ingestion) may be sent to TypeSafe **for research only**: runs with purpose `research`, `tuning` or `holdout_evaluation`; a `production_candidate` Jev run on Yahoo-derived data is refused with `FORBIDDEN`. The `state` carries only derived, bucketed text descriptors, never raw price or volume series or bulk data. A **pre-send payload guard** runs on every request before the network call and rejects (`VALIDATION_FAILED`, nothing sent) a `state` that contains a run of more than a configured number of consecutive numeric values (default 2), any number equal to a raw price or volume observation of the source dataset at stored precision, or a table or attachment. Fixture-data requests pass the same guard. Request and response caches, swarm prompt and message logs, and reports derived from real data stay in research storage and are never committed to the public repository.
 - **Leakage.** The Jev training-data cutoff is not documented (FM2-OQ-10). Every historical result is labeled `leakage_risk: true`; only prospective paper results after the configuration freeze are presented as leakage-free.
 
 ### D8. Promotion loop
 
 - Candidate records live in the FinanceModel registry (status `candidate`). Criteria documents are versioned in research storage, written only by the approver role. Cycles have a budget, a run limit and a report. Promotion sets registry status `promoted` with approver identity. Publishing any plan stays a platform action outside FinanceModel.
+- **Criteria v1 (RESOLVED 2026-10-07, FM2-OQ-7, user decision 15c).** The promotion check is a pure, deterministic function over stored common-evaluator results; no LLM or agent judgement is involved.
+  - Test period: the dataset's untouched holdout range (the out-of-sample window after all training, calibration and selection data, walk-forward style). The frozen candidate is evaluated once on it with purpose `holdout_evaluation`; the incumbent is evaluated on the identical range.
+  - Incumbent: the currently `promoted` model version for the same instrument and universe; when none exists, the `buy_and_hold` control.
+  - Comparability: same `dataset_id`, holdout bounds, simulation configuration and cost model, and `evaluator_version`; otherwise the result is `not_comparable` and the incumbent is re-evaluated first. Runs flagged `model_drift` or out-of-configuration are `ineligible`.
+  - Rule R1: candidate net-of-costs cumulative return > incumbent net-of-costs cumulative return (strict).
+  - Rule R2: |candidate maximum drawdown| ≤ |incumbent maximum drawdown|.
+  - Values are compared as stored by the evaluator, with no tolerance. The check writes a result record (`pass`, `fail`, `not_comparable` or `ineligible`, per-rule outcomes, input run IDs, criteria version, checksum); re-running it gives the identical record.
+  - Rule R3: promotion additionally requires the user's approval recorded against a `pass` result (approver identity, time, result reference). Approval of any other result is refused.
+  - Prospective paper periods, seed minimums and margins are not part of v1; adding them needs a new user-approved criteria version.
 
 ## Risks / Trade-offs
 
@@ -124,7 +133,7 @@ Design:
 - [RL overfits to few folds] → walk-forward folds, multiple seeds, validation-only selection, holdout once.
 - [Jev is an external vendor API whose aliases can change behind the same name] → record the returned `model` per response, flag `model_drift`, pin an exact ID once accepted (FM2-OQ-11), cache responses for replay.
 - [Jev numeric weakness] → text and bucketed features; calibration on our own splits.
-- [yfinance is unofficial and Yahoo terms are personal or research use] → FinanceModel consumes only approved platform snapshots, keeps real-data-derived artifacts out of the public repo, sends only derived descriptors to TypeSafe after the FM2-OQ-12 review.
+- [yfinance is unofficial and Yahoo terms are personal or research use] → FinanceModel consumes only approved platform snapshots, keeps real-data-derived artifacts out of the public repo, sends only derived, bucketed descriptors to TypeSafe and only for research purposes, enforced by the pre-send payload guard (FM2-OQ-12 resolved 2026-10-07).
 - [Jev API key exposure] → Secrets Manager by name only, job role scoped to that secret, leak scan, key never logged.
 - [TypeSafe credits run out mid-run] → per-run token cap and estimate at approval; a 401 or credit error fails the run without retries.
 
@@ -135,7 +144,7 @@ Design:
 3. Deploy weight staging. Run it once (approved), verify the manifest.
 4. Deploy mode A swarm job type. Run one approved pilot on synthetic data with a short cap, and record startup, tokens per decision and cost.
 5. Optional: one approved mode B trial with measured startup, then decide (FM2-OQ-5).
-6. Jev: deploy the job type with the enable flag on in beta; run one approved small evaluation on synthetic or fixture data against the real API, then an approved evaluation on the SPY dataset once the platform's yfinance ingestion has produced approved snapshots in beta (provider decided 2026-10-07) and the terms review (FM2-OQ-12) covers sending derived descriptors.
+6. Jev: deploy the job type with the enable flag on in beta; run one approved small evaluation on synthetic or fixture data against the real API, then an approved research evaluation on the SPY dataset once the platform's yfinance ingestion has produced approved snapshots in beta (provider decided 2026-10-07); only bucketed descriptors pass the payload guard (FM2-OQ-12 resolved 2026-10-07).
 7. Rollback: redeploy the previous release. Staged weights, logs and registry entries remain (immutable). Orphan sweeper runs after rollback.
 
 ## Open Questions
@@ -148,12 +157,12 @@ Design:
 | FM2-OQ-4 | TypeSafe Jev identity, version, license, interface (contracts OQ-4) | None | RESOLVED 2026-10-07: TypeSafe AI "System One" API, `choice` question buy/hold/sell, key in Secrets Manager by name; see D7. Jev moves to phase 2, enabled behind per-run approval | n/a |
 | FM2-OQ-5 | Does the vLLM DLC work as an endpoint, and what is the measured startup time? | BLOCKER for mode B adoption only | One approved trial | Mode A only |
 | FM2-OQ-6 | Request a GPU Processing quota increase? | None | User decision | Not requested; mode A uses Training Jobs |
-| FM2-OQ-7 | Content of the promotion criteria | **BLOCKER** for any promotion | User approval of criteria v1 | Evaluation allowed; promotion disabled |
+| FM2-OQ-7 | Content of the promotion criteria | None | **RESOLVED 2026-10-07:** criteria v1 = on the untouched holdout test period under the common evaluator, candidate net-of-costs return strictly beats the incumbent AND its maximum drawdown is not worse AND the user's approval is recorded; deterministic check (D8) | n/a |
 | FM2-OQ-8 | Confirm swarm roles, arbitration policy and decision frequency | None (configuration) | User review | Defaults in D5 |
 | FM2-OQ-9 | Use the model's reasoning or thinking mode, if any? | None (configuration) | Model card review plus pilot | Recorded per run; default off |
 | FM2-OQ-10 | Jev training-data cutoff | None (reporting falls back to "unknown") | Vendor documentation or vendor statement | All historical Jev results `leakage_risk: true` |
 | FM2-OQ-11 | Does the API accept an exact model ID (for example `jev-1.13.0`) instead of an alias? | None | One approved test request | Request `jev-latest`; record the returned `model` per response |
-| FM2-OQ-12 | Jev license and terms of use for research backtests; also whether bucketed descriptors derived from Yahoo Finance (yfinance) data may be sent to TypeSafe | None for mocked CI; review before the first real-API run (and before the first real-data Jev run for the Yahoo part) | User review of vendor terms and Yahoo terms | Mocked API only until reviewed; fixture data only for real-API runs until the Yahoo part is reviewed |
+| FM2-OQ-12 | Jev license and terms of use for research backtests; also whether bucketed descriptors derived from Yahoo Finance (yfinance) data may be sent to TypeSafe | None | **RESOLVED 2026-10-07:** Yahoo-derived data may be sent to TypeSafe for research only (purposes `research`, `tuning`, `holdout_evaluation`), as derived, bucketed text descriptors, never raw price or volume series or bulk data; enforced by the pre-send payload guard (D7). The one-time TypeSafe vendor-terms read-through stays part of task 7.14 before the first real-API run | n/a |
 
 ## Contract gaps (status after the cross-repo review, 2026-10-07)
 

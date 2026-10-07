@@ -31,6 +31,7 @@ Scope: FinanceModel phase 1. CPU-only, fixture-backed, paper-only. Shared rules 
 - [ ] 3.7 Add the build-stage provider guard: a dependency and import check that fails if `yfinance` or any other market-data provider client appears in FinanceModel dependency files, images or source, and a fixture check that fails on any fixture without the `synthetic: true` marker; verify DS-12 (planted `yfinance` dependency and planted provider import both fail the build) and DS-13 (planted non-synthetic price file fails the build) unit tests
 - [ ] 3.8 Copy snapshot provider provenance (adapter `yfinance`, pinned library version, retrieval timestamp, `exchange_calendars` XNYS version and session list) and quality flags into the dataset lineage record, refuse real snapshots missing them, and apply the configured exclude-or-fail policy for flagged dates; verify DS-12 lineage and quality-flag scenarios as unit and contract tests on synthetic snapshots that mimic the platform provenance fields (field names confirmed against the platform snapshot schema, FM-A5)
 - [ ] 3.9 Ensure reports and results from real-data datasets are written only to research storage or platform staging with aggregate metrics and no raw retrieved series; verify DS-13 report scenario unit test
+- [ ] 3.9a Implement the shared outbound payload check for Yahoo-derived data (research purposes only; reject runs of consecutive numbers above the configured limit, values equal to raw price or volume observations of the source dataset, tables and attachments; log rejections without payload values); verify DS-14 unit tests (raw-series payload rejected with no network call, descriptor payload passes) (user decision 15d, 2026-10-07)
 - [ ] 3.10 Run dataset preparation in beta on a short range of approved SPY snapshots produced by the platform's yfinance ingestion (FinanceModel reads snapshots only); verify DS-09 and DS-12 integration-beta (depends on the platform ingestion release and an approved SPY snapshot in beta; no longer blocked by a provider choice)
 
 ## 4. Baseline strategies
@@ -47,6 +48,7 @@ Scope: FinanceModel phase 1. CPU-only, fixture-backed, paper-only. Shared rules 
 - [ ] 5.1 Implement the report schema with separate portfolio, accuracy, training-reward and cost sections and refuse blended scores; verify REP-01 unit tests
 - [ ] 5.2 Implement the portfolio metrics per fold, holdout and aggregate; verify REP-02 against hand-computed fixture values
 - [ ] 5.3 Implement period and `synthetic` labeling, the holdout access log attachment and seed dispersion; verify REP-04 and REP-05 unit tests
+- [ ] 5.3a Store the holdout metrics record (net-of-costs cumulative return, maximum drawdown, `dataset_id`, holdout bounds, simulation configuration and cost-model identity, `evaluator_version`) for every holdout evaluation; verify REP-07 (record equals the report's holdout column; missing comparability field fails) (user decision 15c, 2026-10-07)
 - [ ] 5.4 Implement the cost section (estimated vs. actual, pending state); verify REP-03 with a fixture run that lacks billing data
 - [ ] 5.5 Make report generation deterministic with a checksum and narrative kept separate; verify REP-06 (regenerated report has the same checksum)
 
@@ -123,6 +125,7 @@ Test types: unit, contract (schemas and conformance with shared fixtures), integ
 | research-datasets | Completed daily observations only | DS-10 | unit |
 | research-datasets | Mock provider until approved real snapshots exist | DS-11 | unit + integration-beta |
 | research-datasets | Market data only through approved platform snapshots | DS-12 | unit (dependency and import check) + contract + integration-beta |
+| research-datasets | Yahoo-derived data leaves FinanceModel only as research descriptors | DS-14 | unit (outbound payload check) |
 | research-datasets | No retrieved market data in the public repository | DS-13 | unit (fixture check) |
 | paper-execution-simulator | One evaluator for all strategy families | SIM-01 | unit |
 | paper-execution-simulator | Strategy interface | SIM-02 | unit |
@@ -169,6 +172,7 @@ Test types: unit, contract (schemas and conformance with shared fixtures), integ
 | model-registry | Results reference model_version | REG-04 | contract |
 | benchmark-reporting | Separate reporting sections | REP-01 | unit + integration-beta |
 | benchmark-reporting | Portfolio performance metrics | REP-02 | unit |
+| benchmark-reporting | Holdout metrics record for promotion | REP-07 | unit + integration-beta |
 | benchmark-reporting | Compute cost reporting | REP-03 | unit + integration-beta |
 | benchmark-reporting | Period labeling | REP-04 | unit |
 | benchmark-reporting | Variability disclosure | REP-05 | unit |

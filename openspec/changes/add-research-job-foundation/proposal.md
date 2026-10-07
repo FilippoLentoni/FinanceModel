@@ -24,14 +24,14 @@ FinanceModel owns research compute for the planning platform, but nothing yet de
 ### New Capabilities
 
 - `research-workspace`: FinanceModel-owned research storage, read-only consumption of approved platform snapshots, and isolation from authoritative plan state.
-- `research-datasets`: deterministic dataset preparation and versioning, point-in-time availability, chronological splits, walk-forward folds, untouched holdout and prospective paper periods.
+- `research-datasets`: deterministic dataset preparation and versioning, point-in-time availability, chronological splits, walk-forward folds, untouched holdout and prospective paper periods, and the rule that Yahoo-derived data leaves FinanceModel only for research and only as derived descriptors (RESOLVED 2026-10-07).
 - `paper-execution-simulator`: the common evaluator and paper execution simulator (constraints, fees, execution timing, liquidity, rebalancing) shared by all strategy families.
 - `baseline-strategies`: cash, buy-and-hold and equal-weight controls, and minimum-variance, mean-variance and scenario-CVaR optimizers.
 - `experiment-job-interface`: submit/status/result/cancel/list operations, `run_id` minting, idempotency, job lifecycle and result semantics for consumers.
 - `job-execution-controls`: time limits, concurrency lease, cancellation, failure handling, pre-flight cost checks and paid-job approval.
 - `run-output-staging`: handoff of production-candidate run outputs to the platform staging area for platform-side validation.
 - `model-registry`: `model_version` minting and registration of strategy implementations and their artifacts.
-- `benchmark-reporting`: comparable benchmark reports that separate portfolio performance, model accuracy and compute cost.
+- `benchmark-reporting`: comparable benchmark reports that separate portfolio performance, model accuracy and compute cost, plus the machine-readable holdout metrics record (net-of-costs return, maximum drawdown) used by the promotion check (criteria v1, RESOLVED 2026-10-07).
 - `job-deployment-pipeline`: what the FinanceModel pipeline deploys and promotes, and the ban on training in CodeBuild and Lambda.
 
 ### Modified Capabilities
