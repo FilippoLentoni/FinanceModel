@@ -6,7 +6,8 @@ retrieval"; JOB-06).
 run is still ``succeeded``), ``model_version``, ``evaluator_version``, ``dataset_checksum``,
 ``configuration_id``, ``input_snapshot_id``, trusted artifact references with checksums and the
 finance ``run_result`` payload with **separate** portfolio-performance, model-accuracy and
-compute-cost sections. Nothing in it is a storage location: the document is checked against the
+compute-cost sections, plus (backtest and benchmark runs) the compact ``benchmark`` comparison of every
+evaluated strategy (:mod:`finplan_model.jobs.comparison`). Nothing in it is a storage location: the document is checked against the
 contract schema and a storage-location scan before it is written.
 """
 
@@ -41,6 +42,7 @@ def succeeded_result(
     dataset_checksum: str | None = None,
     instance_seconds: float | None = None,
     proposed_allocation: Mapping[str, Any] | None = None,
+    benchmark: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "performance": performance_section(performance),
@@ -54,6 +56,10 @@ def succeeded_result(
         payload["compute_cost"]["instance_seconds"] = max(0.0, float(instance_seconds))
     if proposed_allocation:
         payload["proposed_allocation"] = dict(proposed_allocation)
+    if benchmark:
+        # Strategy comparison, weights and unit legend (finplan_model.jobs.comparison). The contract
+        # run-result payload is an open object, so this rides next to the contract sections.
+        payload["benchmark"] = dict(benchmark)
     if ctx.synthetic:
         payload["synthetic"] = True
     doc: dict[str, Any] = {

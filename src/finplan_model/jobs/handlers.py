@@ -38,6 +38,7 @@ from finplan_model.evaluate import assert_comparable, evaluate
 from finplan_model.sim.config import SimulationConfig
 from finplan_model.sim.market import MarketData
 
+from .comparison import benchmark_section
 from .results import succeeded_result
 from .strategy_resolver import CONTROLS, resolve_strategy
 
@@ -118,7 +119,7 @@ def run_backtest(inp: JobInputs) -> dict[str, Any]:
     if section is not None:
         body = {**body, "bias_section": section}
     ref = inp.artifacts.put_json(body, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
-    doc = succeeded_result(inp.ctx, inp.spec, solution_status=res.solution_status, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, res))
+    doc = succeeded_result(inp.ctx, inp.spec, solution_status=res.solution_status, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, res), benchmark=benchmark_section([res], inp.market, primary=name))
     return _with_bias(doc, section)
 
 
@@ -175,7 +176,7 @@ def run_benchmark(inp: JobInputs) -> dict[str, Any]:
         if section is not None:
             report_doc["bias_section"] = section  # mandatory "Hindsight and survivorship bias" section
         refs.append(inp.artifacts.put_json(report_doc, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance"))
-    out = succeeded_result(inp.ctx, inp.spec, solution_status=results[0].solution_status, artifacts=refs, performance=results[0].metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, results[0]))
+    out = succeeded_result(inp.ctx, inp.spec, solution_status=results[0].solution_status, artifacts=refs, performance=results[0].metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, results[0]), benchmark=benchmark_section(results, inp.market, primary=main))
     return _with_bias(out, section)
 
 

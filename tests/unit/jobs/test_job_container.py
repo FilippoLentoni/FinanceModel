@@ -261,3 +261,78 @@ def test_benchmark_with_real_controls():
     code, doc = _run(h, rid, req, artifacts=store)
     assert code == 0, doc
     assert store.get_json(doc["artifacts"][0])["strategies"] == ["mean_variance", "cash", "buy_and_hold", "equal_weight"]
+
+
+# ------------------------------------------------------------------ result comparison (payload.benchmark)
+def _check_benchmark(doc: dict, names: list[str]) -> dict:
+    bench = doc["payload"]["benchmark"]
+    assert bench["primary_strategy"] == names[0]
+    assert [r["strategy"] for r in bench["strategies"]] == names
+    assert bench["evaluation_window"]["start"] <= bench["evaluation_window"]["end"] and bench["evaluation_window"]["sessions"] >= 2
+    assert bench["risk_free"]["source"] == "configured_cash_rate" and bench["base_currency"] == "USD"
+    assert set(bench["units"]) >= {"turnover", "max_drawdown", "transaction_cost", "sharpe", "weights"}
+    for row in bench["strategies"]:
+        m = row["metrics"]
+        assert set(m) == {"total_return", "cagr", "ann_volatility", "sharpe", "max_drawdown", "turnover", "transaction_cost", "transaction_cost_fraction"}
+        assert m["max_drawdown"] >= 0 and m["turnover"] >= 0 and m["transaction_cost"] >= 0
+        assert m["transaction_cost_fraction"] == pytest.approx(m["transaction_cost"] / bench["initial_capital"], abs=2e-6)
+        for kind in ("final", "average"):
+            total = sum(row[f"{kind}_weights"].values()) + row[f"{kind}_cash_weight"]
+            assert total == pytest.approx(1.0, abs=1e-4), (row["strategy"], kind)
+    assert validate(doc, "job-result").valid
+    assert find_storage_location(doc) is None
+    assert len(json.dumps(bench)) < 64_000
+    return bench
+
+
+def test_benchmark_result_carries_the_strategy_comparison():
+    pytest.importorskip("finplan_model.strategies.registry")
+    h, rid, req = _started("run_benchmark", strategy="mean_variance")
+    code, doc = _run(h, rid, req)
+    assert code == 0, doc
+    bench = _check_benchmark(doc, ["mean_variance", "cash", "buy_and_hold", "equal_weight"])
+    rows = {r["strategy"]: r for r in bench["strategies"]}
+    assert rows["mean_variance"]["role"] == "optimizer" and rows["mean_variance"]["primary"] is True
+    assert rows["cash"]["role"] == "control" and rows["cash"]["final_weights"] == {} and rows["cash"]["final_cash_weight"] == pytest.approx(1.0)
+    assert rows["cash"]["metrics"]["turnover"] == 0 and rows["cash"]["metrics"]["transaction_cost"] == 0
+    assert rows["equal_weight"]["final_weights"] and rows["equal_weight"]["average_weights"]
+    # the contract performance section is unchanged (the optimizer's metrics)
+    assert doc["payload"]["performance"]["turnover"] == pytest.approx(rows["mean_variance"]["metrics"]["turnover"], abs=1e-6)
+    name = h.run(rid)["job_name"]
+    h.event(name, "InProgress")
+    h.event(name, "Completed")
+    result = h.service.get_job_result(Principal.from_arn(READER), rid)
+    assert result["payload"]["benchmark"] == bench
+    assert validate(result, "tools/get-experiment-result-response").valid
+
+
+def test_backtest_result_carries_a_single_strategy_comparison():
+    h, rid, req = _started()
+    code, doc = _run(h, rid, req)
+    assert code == 0, doc
+    _check_benchmark(doc, ["fixture_static"])
+
+
+def test_turnover_and_cost_units_match_the_simulator():
+    """Turnover is traded notional / initial capital; cost is in base currency (labels, not math)."""
+    pytest.importorskip("finplan_model.strategies.registry")
+    h, rid, req = _started("run_benchmark", strategy="equal_weight")
+    store = InMemoryArtifactStore()
+    code, doc = _run(h, rid, req, artifacts=store)
+    assert code == 0, doc
+    full = store.get_json(doc["artifacts"][0])["results"][0]["simulation"]["summary"]
+    row = doc["payload"]["benchmark"]["strategies"][0]["metrics"]
+    assert row["turnover"] == pytest.approx(full["traded_notional"] / full["initial_value"], abs=1e-6)
+    assert row["transaction_cost"] == pytest.approx(full["total_costs"], abs=1e-6)
+
+
+def test_weights_are_capped_for_large_universes(monkeypatch):
+    from finplan_model.jobs import comparison
+
+    monkeypatch.setattr(comparison, "MAX_WEIGHT_ENTRIES", 1)
+    pytest.importorskip("finplan_model.strategies.registry")
+    h, rid, req = _started("run_benchmark", strategy="equal_weight")
+    code, doc = _run(h, rid, req)
+    assert code == 0, doc
+    row = doc["payload"]["benchmark"]["strategies"][0]
+    assert len(row["final_weights"]) == 1 and row["weights_truncated_to"] == 1

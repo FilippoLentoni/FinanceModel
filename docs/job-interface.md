@@ -50,6 +50,24 @@ fixtures' `fixture_optimizer` is **not** a FinanceModel job type, so submitting 
 `DEPENDENCY_UNAVAILABLE` with `retryable` false until they are deployed. A configured job type
 whose job definition is not published in the environment gives the same error.
 
+### Strategy comparison in results (`payload.benchmark`)
+
+`run_backtest` and `run_benchmark` results carry `payload.benchmark`, so callers of
+`get_job_result` / `get_experiment_result` see the comparison without reading the research
+artifact: `primary_strategy`, `evaluation_window` (`start`, `end`, `sessions`), `periods_per_year`,
+`base_currency`, `initial_capital`, `risk_free` (`annual_rate`, `source`), a `units` legend, and one
+`strategies[]` row per evaluated strategy (configured strategy first, then `cash`, `buy_and_hold`,
+`equal_weight`) with `role` (`optimizer` or `control`), `solution_status`, `metrics`
+(`total_return`, `cagr`, `ann_volatility`, `sharpe`, `max_drawdown`, `turnover`,
+`transaction_cost`, `transaction_cost_fraction`), `final_weights`, `final_cash_weight`,
+`average_weights` and `average_cash_weight`. Units: returns, volatility and drawdown are fractions
+(`max_drawdown` positive, 0.12 = -12 %); `turnover` is cumulative traded notional (buys + sells)
+divided by the initial capital (19.6 = 19.6x the starting capital traded); `transaction_cost` is
+fees + spread + slippage in `base_currency` (USD 392 on USD 100,000 = 0.39 %); weights are
+fractions of NAV at the session close (final = last session, average = mean over the window).
+Weight maps are capped at 40 instruments (`weights_truncated_to`). The contract run-result payload
+is an open object, so this is contract-valid under 1.1.0; `payload.performance` is unchanged.
+
 ### Research universe and the daily recommendation (contracts 1.1.0)
 
 - `run_backtest` and `run_benchmark` accept approved `finance/equity-etf-daily/research-universe`
@@ -286,7 +304,7 @@ The same body with `"dry_run": false` returns `202`:
   "domain": "finance",
   "domain_schema_version": "1.0",
   "payload": {
-    "performance": {"net_cumulative_return": 0.0123, "gross_cumulative_return": 0.0131, "annualized_volatility": 0.081, "sharpe_ratio": 0.62, "max_drawdown": -0.021, "turnover": 1.02, "total_transaction_costs": 18.4},
+    "performance": {"net_cumulative_return": 0.0123, "gross_cumulative_return": 0.0131, "annualized_volatility": 0.081, "sharpe_ratio": 0.62, "max_drawdown": 0.021, "turnover": 1.02, "total_transaction_costs": 18.4},
     "accuracy": {},
     "compute_cost": {"estimated_usd": 0.0725, "instance_seconds": 312},
     "synthetic": true

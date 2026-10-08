@@ -23,6 +23,7 @@ Test IDs are defined in the mapping table at the end. CI never starts SageMaker.
 - [x] 4.1 Add `equity-etf-daily` dataset preparation (`adj_close` basis, cash assumption) for `backtest` and `benchmark`. Verify UNV-01 unit tests on synthetic fixtures.
 - [x] 4.2 Add the mandatory bias and cash sections to reports and result summaries, failing closed. Verify UNV-02 unit tests (deterministic report checksum; a missing disclosure fails the run).
 - [x] 4.3 Enforce the trigger-role kind restriction and the no-schedule template check. Verify UNV-03 unit tests and a negative template fixture.
+- [x] 4.4 (beta finding, design M5) Carry the compact strategy comparison (`payload.benchmark`: every evaluated strategy's metrics with units, final and average weights, evaluation window, risk-free assumption) in `run_backtest` and `run_benchmark` results. Verify `tests/unit/jobs/test_job_container.py` (comparison rows, weights summing to 1 with cash, turnover/cost units matching the simulator summary, weight cap, contract-valid `get_experiment_result` response).
 
 ## Implementation notes (2026-10-08, verified locally)
 

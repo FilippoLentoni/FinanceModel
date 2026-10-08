@@ -38,6 +38,12 @@ Only the selection Lambda's role holds `ssm:PutParameter`/`DeleteParameter` on t
 - The configured price is about USD 0.23 per hour for `ml.m5.xlarge` processing in us-east-2, so the 0.5 h cap gives at most about USD 0.12 per job. The build check allows USD 0.15.
 - The daily job must sit under the auto-approve threshold, because the user's gate for recommendations is publication, not compute.
 
+### M5. Strategy comparison in the job result (beta finding)
+- Beta showed that `get_experiment_result` for `run_benchmark` exposed only the configured strategy's metrics; the controls, the weights and the metric units lived only in the research-workspace artifact, which callers cannot read (by design).
+- The `run_backtest` and `run_benchmark` results now carry `payload.benchmark` (`finplan_model.jobs.comparison`): one row per evaluated strategy (configured strategy first, then each control) with `total_return`, `cagr`, `ann_volatility`, `sharpe`, `max_drawdown` (positive fraction), `turnover`, `transaction_cost` and `transaction_cost_fraction`, plus `final_weights`/`average_weights` per instrument with the cash weights, the evaluation window, `base_currency`, `initial_capital`, the risk-free assumption and a `units` legend. Weight maps are capped at 40 instruments (`weights_truncated_to`).
+- Placement: contract 1.1.0 `finance/v1/run-result-payload.json` is an open object (no `additionalProperties: false`), while its `performance` section admits numbers only, so the block is a new payload key; no contract gap and no contract change. `payload.performance` is unchanged.
+- Units (labels fixed, math unchanged): turnover is cumulative traded notional (buys + sells) divided by the initial capital, so the beta value 19.6 means 19.6x the USD 100,000 starting capital was traded; the reported 392 is USD of fees (1 bp) plus half spread (1 bp) on that notional (0.39 % of the starting capital).
+
 ## Risks / Trade-offs
 
 - [The daily job and a user benchmark contend for the single quota slot] → the existing lease queues one. The platform's 45 minute wait covers one queued 30 minute job.
