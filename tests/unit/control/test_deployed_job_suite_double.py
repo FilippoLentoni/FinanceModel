@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.integration.job_suite import IntegrationError, adapt, run_contract_checks, run_job_lifecycle
+from tests.integration.job_suite import IntegrationError, adapt, run_contract_checks, run_job_lifecycle, run_model_selection_dry_run
 
 from .support import SID, Harness, arn
 
@@ -72,3 +72,10 @@ def test_lifecycle_fails_loudly_on_a_wrong_answer():
         run_job_lifecycle(broken, snapshot_id=SID, run_key="rk0003", sleep=lambda s: None)
     # the suite's cleanup still cancelled the run it submitted
     assert [r["state"] for r in h.store.runs.values()] == ["cancelled"]
+
+
+def test_model_selection_dry_run_against_the_double():
+    h = Harness()
+    steps = run_model_selection_dry_run(_stage_call(h), snapshot_id=SID, run_key="rk0003")
+    assert len(steps) == 2 and "cpu_research" in steps[0]
+    assert h.store.runs == {} and h.sagemaker.calls == []

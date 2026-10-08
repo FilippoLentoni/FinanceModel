@@ -38,13 +38,13 @@ def test_entrypoint_matches_the_processing_request():
     ins = _instructions()
     (entry,) = [r for op, r in ins if op == "ENTRYPOINT"]
     assert json.loads(entry) == CONTAINER_ENTRYPOINT
-    assert sorted(HANDLERS) == ["daily_recommendation", "prepare_dataset", "report", "run_backtest", "run_benchmark"]
+    assert sorted(HANDLERS) == ["daily_recommendation", "model_selection", "prepare_dataset", "report", "run_backtest", "run_benchmark"]
 
 
 def test_runtime_stage_is_minimal_non_root_and_locked():
     ins = _instructions()
     runs = " ".join(r for op, r in ins if op == "RUN")
-    assert "uv sync --frozen --no-dev --no-install-project" in runs and "uv sync --frozen --no-dev --no-editable" in runs
+    assert "uv sync --frozen --no-dev --extra rl --no-install-project" in runs and "uv sync --frozen --no-dev --extra rl --no-editable" in runs
     users = [r for op, r in ins if op == "USER"]
     assert users and not users[-1].startswith("0") and users[-1] != "root"
     copies = " ".join(r for op, r in ins if op == "COPY")
@@ -69,7 +69,7 @@ def test_dependencies_are_installed_in_the_image_and_no_docker_hub_frontend():
     copies = [r for op, r in ins if op == "COPY"]
     assert "--from=build /opt/financemodel/venv /opt/financemodel/venv" in copies
     runs = [r for op, r in ins if op == "RUN"]
-    assert runs.index("uv sync --frozen --no-dev --no-install-project") < runs.index("uv sync --frozen --no-dev --no-editable")
+    assert runs.index("uv sync --frozen --no-dev --extra rl --no-install-project") < runs.index("uv sync --frozen --no-dev --extra rl --no-editable")
     (entry,) = [r for op, r in ins if op == "ENTRYPOINT"]
     assert json.loads(entry)[0] == "python"
 
@@ -99,3 +99,52 @@ def test_build_context_allow_list_excludes_everything_else():
 def test_docker_build_succeeds():  # pragma: no cover - runs only where docker exists
     out = subprocess.run(["docker", "build", "-f", str(DOCKERFILE), "-t", "financemodel-cpu:test", str(ROOT)], capture_output=True, text=True, timeout=1800)
     assert out.returncode == 0, out.stderr[-2000:]
+
+
+def test_rl_learners_are_locked_cpu_only_and_kept_out_of_the_lambda_bundle():
+    """The `rl` extra pins torch (CPU index), stable-baselines3 and gymnasium exactly, with hashes in
+    uv.lock; no CUDA package is resolved; the Lambda bundle export (no extras) carries none of them;
+    the image import check covers them."""
+    import tomllib
+
+    py = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    rl = py["project"]["optional-dependencies"]["rl"]
+    assert all("==" in d for d in rl) and {d.split("==")[0] for d in rl} == {"torch", "stable-baselines3", "gymnasium"}
+    assert py["tool"]["uv"]["sources"]["torch"] == [{"index": "pytorch-cpu"}]
+    (index,) = [i for i in py["tool"]["uv"]["index"] if i["name"] == "pytorch-cpu"]
+    assert index["url"] == "https://download.pytorch.org/whl/cpu" and index["explicit"] is True
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    names = {p["name"] for p in lock["package"]}
+    assert {"torch", "stable-baselines3", "gymnasium"} <= names
+    assert not [n for n in names if n.startswith(("nvidia-", "triton", "cuda"))]
+    for pkg in lock["package"]:
+        if pkg["name"] in ("torch", "stable-baselines3", "gymnasium"):
+            assert pkg.get("wheels") and all(w["hash"].startswith("sha256:") for w in pkg["wheels"])
+    linux_torch = [p for p in lock["package"] if p["name"] == "torch" and "+cpu" in p["version"]]
+    assert linux_torch and any("manylinux_2_28_x86_64" in w["url"] for w in linux_torch[0]["wheels"])
+    from scripts import container_image
+
+    assert {"torch", "gymnasium", "stable_baselines3", "finplan_model.selection.job"} <= set(container_image.IMAGE_IMPORTS)
+    assert "version.cuda" in container_image.IMAGE_IMPORT_CHECK
+
+
+def test_control_plane_modules_import_without_the_learners():
+    """The Lambda bundle has no torch: everything the control plane imports must not need it."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, builtins\n"
+        "real = builtins.__import__\n"
+        "def guard(name, *a, **k):\n"
+        "    if name.split('.')[0] in ('torch', 'stable_baselines3', 'gymnasium'):\n"
+        "        raise ImportError('learner imported: ' + name)\n"
+        "    return real(name, *a, **k)\n"
+        "builtins.__import__ = guard\n"
+        "import finplan_model.control.handlers, finplan_model.control.service, finplan_model.jobs.spec, finplan_model.jobs.handlers, finplan_model.jobs.comparison\n"
+        "import finplan_model.selection.protocol as p, finplan_model.core.config as c\n"
+        "p.validate_protocol(p.DEFAULT_PROTOCOL); c.load_config('beta')\n"
+        "print('ok')\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT, env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin"})
+    assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr[-2000:]

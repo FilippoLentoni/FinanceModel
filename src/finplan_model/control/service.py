@@ -3,7 +3,9 @@ SageMaker state-change handler (design D1 to D4; specs experiment-job-interface 
 job-execution-controls).
 
 The service only validates, records, estimates cost, takes leases and calls
-``CreateProcessingJob`` / ``StopProcessingJob`` / ``DescribeProcessingJob``. It never runs strategy
+``CreateProcessingJob`` / ``StopProcessingJob`` / ``DescribeProcessingJob`` (or the
+``*TrainingJob`` operations for job types configured with ``sagemaker_job: training``, such as
+``model_selection``). It never runs strategy
 code (spec job-deployment-pipeline, "Job API Lambda"). Every state change is a conditional write
 (revision check) plus an append-only event, so late or duplicate SageMaker events after a terminal
 state change nothing (JOB-05).
@@ -44,7 +46,7 @@ from . import costs
 from . import production_strategy as ps
 from .auth import Principal
 from .leases import LeaseManager
-from .sagemaker import SAGEMAKER_TERMINAL, build_processing_request, classify_start_error, run_id_from_job_name, terminal_outcome
+from .sagemaker import JOB_KINDS, SAGEMAKER_TERMINAL, build_job_request, classify_start_error, job_kind, job_status, run_id_from_job_name, terminal_outcome
 from .settings import SettingsProvider
 from .states import ACTIVE_STATES, STATES, WAITING_STATES, check_transition, is_terminal
 from .store import ConditionFailed, RunStore, idempotency_scope_key, iter_runs
@@ -246,6 +248,9 @@ class JobService:
                 raise FinplanError.validation("the universe snapshot carries no bias disclosures", pointer="/input_snapshot_id", reason="bias_disclosures_missing")
         payload = body["configuration"]["payload"]
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
+        selection: dict[str, Any] = {}
+        if sub.job_type.name == "model_selection":
+            selection = self._selection_fields(sub, dataset_id, all_runs)
         est = costs.estimate(self.cfg, sub.job_type, instance_type=sub.instance_type, instance_count=sub.instance_count, max_runtime_seconds=sub.max_runtime_seconds, prices=self.d.settings.instance_prices(), now=self.now())
         if all_runs is None:
             all_runs = list(iter_runs(self.store))
@@ -325,6 +330,8 @@ class JobService:
             "plan_id": body.get("plan_id"),
             "production_strategy": production,
             "bias_disclosures": disclosures,
+            "sagemaker_job": sub.job_type.sagemaker_job,
+            **selection,
         }
         message = "A human approver must approve this run before it starts." if needs_approval else "Queued; the run starts when a concurrency lease is free."
         resp = {"run_id": run_id, "configuration_id": sub.configuration_id, "state": state, "dry_run": False, "cost_estimate": block, "message": message}
@@ -345,6 +352,28 @@ class JobService:
         if state == "queued":
             self._kick(run_id)
         return 202, resp
+
+    def _selection_fields(self, sub: Any, dataset_id: str | None, runs: list[dict[str, Any]] | None) -> dict[str, Any]:
+        """``model_selection`` (decision 27): the protocol frozen from configuration (never from the
+        request), the incumbent for the promotion check (the production strategy when one is set,
+        else the protocol's fallback in the job) and how often this test period was already used."""
+        from finplan_model.selection.protocol import validate_protocol
+
+        protocol = validate_protocol(sub.job_type.protocol or {})
+        prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") == "model_selection" and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
+        incumbent = None
+        raw = self.d.settings.production_strategy()
+        if raw:
+            try:
+                import json
+
+                incumbent = str(json.loads(raw).get("strategy_id") or "") or None
+            except (ValueError, AttributeError):
+                incumbent = None
+        out: dict[str, Any] = {"selection_protocol": protocol, "test_period_prior_accesses": prior}
+        if incumbent:
+            out["incumbent_strategy"] = incumbent
+        return out
 
     def _production_strategy(self, body: Mapping[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         """M2: resolve the strategy from the SSM key at submission and re-validate it (nothing starts otherwise)."""
@@ -472,7 +501,8 @@ class JobService:
 
     def _stop_job(self, run: Mapping[str, Any]) -> None:
         try:
-            self.d.sagemaker.stop_processing_job(ProcessingJobName=run["job_name"])
+            kind = job_kind(run)
+            getattr(self.d.sagemaker, JOB_KINDS[kind]["stop"])(**{JOB_KINDS[kind]["name"]: run["job_name"]})
             self._log("stop_requested", run, job_name=run["job_name"])
         except Exception as exc:  # noqa: BLE001 - the job may already be terminal; reconcile
             self._log("stop_request_failed", run, error_code=getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else type(exc).__name__)
@@ -646,19 +676,20 @@ class JobService:
             image_uri = str(jd.get("image_uri") or "")
             digest = image_uri.rsplit("@", 1)[1] if "@" in image_uri else None
             spec = build_run_spec(run, simulation=run["simulation"], image_digest=digest)
-            request = build_processing_request(run, attempt=attempt, image_uri=image_uri, role_arn=str(self.d.settings.job_role_arn() or ""), run_spec_checksum="pending")
+            kind = job_kind(run)
+            kind, request = build_job_request(run, attempt=attempt, image_uri=image_uri, role_arn=str(self.d.settings.job_role_arn() or ""), run_spec_checksum="pending", output_bucket=self.d.settings.research_storage() if kind == "training" else None)
             checksum = self.d.run_io.put_spec(run["run_id"], spec)
             request["Environment"]["FINPLAN_RUN_SPEC_SHA256"] = checksum
         except FinplanError as err:
             self._fail(run, err, reason="start_precondition")
             return "failed"
         try:
-            self.d.sagemaker.create_processing_job(**request)
+            getattr(self.d.sagemaker, JOB_KINDS[kind]["create"])(**request)
         except Exception as exc:  # noqa: BLE001 - classified
             kind = classify_start_error(exc)
             if kind != "exists":
                 return self._start_refused(run, kind)
-        name = request["ProcessingJobName"]
+        name = request[JOB_KINDS[kind]["name"]]
         try:
             self._update(run, job_name=name, job_started=True, start_requested_at=self.ts())
         except ConditionFailed:
@@ -671,7 +702,7 @@ class JobService:
             if latest.get("cancel_requested") or is_terminal(latest["state"]):
                 self._stop_job(latest)
             return "started"
-        self._log("job_started", run, job_name=name, attempt=attempt, max_runtime_seconds=request["StoppingCondition"]["MaxRuntimeInSeconds"])
+        self._log("job_started", run, job_name=name, attempt=attempt, sagemaker_job=kind, max_runtime_seconds=request["StoppingCondition"]["MaxRuntimeInSeconds"])
         return "started"
 
     def _backoff(self, n: int) -> timedelta:
@@ -705,9 +736,9 @@ class JobService:
         return "failed"
 
     # ------------------------------------------------------------------ reconcile
-    def _describe(self, job_name: str) -> dict[str, Any] | None:
+    def _describe(self, job_name: str, kind: str = "processing") -> dict[str, Any] | None:
         try:
-            return dict(self.d.sagemaker.describe_processing_job(ProcessingJobName=job_name))
+            return dict(getattr(self.d.sagemaker, JOB_KINDS[kind]["describe"])(**{JOB_KINDS[kind]["name"]: job_name}))
         except Exception as exc:  # noqa: BLE001
             code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
             if code in ("ResourceNotFound", "ValidationException"):
@@ -725,8 +756,9 @@ class JobService:
                 except ConditionFailed:
                     pass
             return
+        kind = job_kind(run)
         try:
-            desc = self._describe(run["job_name"])
+            desc = self._describe(run["job_name"], kind)
         except Exception:  # noqa: BLE001 - transient; the next tick retries
             self._log("describe_failed", run)
             return
@@ -734,11 +766,12 @@ class JobService:
             requested = run.get("start_requested_at") or run["updated_at"]
             if self.now() - parse_utc(requested) < _START_STALE:
                 return  # not visible yet (eventual consistency)
-            desc = {"ProcessingJobStatus": "Failed", "FailureReason": "job not found"}
-        self._apply_status(run, str(desc.get("ProcessingJobStatus")), desc, source="dispatcher")
+            desc = {JOB_KINDS[kind]["status"]: "Failed", "FailureReason": "job not found"}
+        self._apply_status(run, str(job_status(desc, kind)), desc, source="dispatcher")
 
     def _limit_reached(self, run: Mapping[str, Any], desc: Mapping[str, Any]) -> bool:
-        start, end = desc.get("ProcessingStartTime"), desc.get("ProcessingEndTime")
+        fields = JOB_KINDS[job_kind(run)]
+        start, end = desc.get(fields["start"]), desc.get(fields["end"])
         if isinstance(start, datetime) and isinstance(end, datetime):
             elapsed = (end - start).total_seconds()
         else:
@@ -793,11 +826,11 @@ class JobService:
         desc: dict[str, Any] | None = None
         if run is not None and run.get("job_name"):
             try:
-                desc = self._describe(run["job_name"])
+                desc = self._describe(run["job_name"], job_kind(run))
             except Exception:  # noqa: BLE001 - cannot confirm: keep the lease
                 self._log("lease_stale_unconfirmed", run, slot=slot["slot"])
                 return False
-            terminal = desc is None or desc.get("ProcessingJobStatus") in SAGEMAKER_TERMINAL
+            terminal = desc is None or job_status(desc, job_kind(run)) in SAGEMAKER_TERMINAL
         else:
             terminal = run is None or run["state"] not in ACTIVE_STATES or (run["state"] == "starting" and self.now() - parse_utc(run["updated_at"]) > _START_STALE)
         if not terminal:
@@ -809,7 +842,7 @@ class JobService:
         self._log("lease_reclaimed", run, correlation_id="corr-lease-reclaim", slot=slot["slot"], holder=holder, instance_class=cls)
         if run is not None and not is_terminal(run["state"]):
             if desc is not None or run.get("job_name"):
-                status = str((desc or {}).get("ProcessingJobStatus") or "Failed")
+                status = str(job_status(desc, job_kind(run)) or "Failed")
                 self._apply_status(run, status, desc or {"FailureReason": "job not found"}, source="lease_reclaim")
             elif run["state"] == "starting":
                 try:
@@ -880,9 +913,11 @@ class JobService:
 
     # ================================================================== state-change events
     def handle_sagemaker_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
-        """EventBridge ``SageMaker Processing Job State Change`` -> run transition (late events ignored)."""
+        """EventBridge ``SageMaker Processing Job State Change`` or ``SageMaker Training Job State
+        Change`` -> run transition (late events ignored)."""
         detail = dict(event.get("detail") or {})
-        name = str(detail.get("ProcessingJobName") or "")
+        kind = "training" if "TrainingJobName" in detail else "processing"
+        name = str(detail.get(JOB_KINDS[kind]["name"]) or "")
         parsed = run_id_from_job_name(name)
         if parsed is None or parsed[0] != self.env:
             return {"ignored": "not_this_environment"}
@@ -900,7 +935,10 @@ class JobService:
                     run = self._update(run, job_name=name, job_started=True)
                 except ConditionFailed:
                     run = self._get(run_id)
-        status = str(detail.get("ProcessingJobStatus") or "")
+        if job_kind(run) != kind:
+            self._log("event_kind_mismatch_ignored", run, job_name=name, sagemaker_job=kind)
+            return {"ignored": "job_kind_mismatch"}
+        status = str(job_status(detail, kind) or "")
         new = self._apply_status(run, status, detail, source="event")
         # A run that is still active needs lease heartbeats: re-arm the tick (a deploy may have reset
         # the schedule to its deployed DISABLED state while the job was running).

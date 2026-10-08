@@ -7,6 +7,8 @@ Paper only: nothing here can place a live order.
 
 - Layout, contract pin, build gates and shared interfaces: [docs/foundation.md](docs/foundation.md)
 - Simulator conventions and configuration: [docs/simulator.md](docs/simulator.md)
+- Offline model selection (controls vs. traditional optimizers vs. PPO/SAC, decision 27):
+  [docs/model-selection.md](docs/model-selection.md); RL environment: [docs/rl-environment.md](docs/rl-environment.md)
 
 ```sh
 uv sync --locked                                  # Python 3.12, pinned finplan-contracts 1.0.0

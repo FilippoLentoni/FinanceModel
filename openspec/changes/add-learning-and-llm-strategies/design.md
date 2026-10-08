@@ -46,6 +46,35 @@ See proposal.md (Why) and `specs/` for requirements. This change depends on `add
 - DQN: rejected as a default. Allowed only with a declared finite action set (for example "hold" or "move k% from asset i to asset j").
 - Build-stage tests run the environment step, reward and action transform on fixtures with a stub policy and a fixed tiny step count. No learner runs in CodeBuild.
 
+### D1a. Offline model selection in one Training job (decision 27, 2026-10-08)
+
+- **One job for the whole experiment.** `model_selection` runs every family on one approved
+  research-universe snapshot: controls, the three traditional optimizers and PPO/SAC x 5 seeds. It
+  is **one** CPU SageMaker Training job (`ml.m5.xlarge`, 3000 s cap), not one job per
+  `(configuration_id, seed)`.
+  - The whole experiment then stays under the beta/gamma auto-approve threshold (USD 0.25,
+    decision 24): an upper bound of about USD 0.20, and an expected USD 0.06 to 0.10.
+  - It needs one CPU lease (the beta/gamma limit is 1) and avoids about 20 separate approvals and
+    queue waits.
+  - Policies still carry a `configuration_id` per reward configuration and a recorded seed.
+- **Image.** The job uses the same `financemodel-cpu` image, with the locked `rl` extra
+  (CPU-only torch, stable-baselines3, gymnasium). There is no separate `financemodel-rl` image.
+- **Data.** The protocol (splits, grids, seeds, hyperparameters, selection rule) is configuration
+  frozen into the run at submission. Only 2025-2026 data is visible:
+  - train: 2025;
+  - validation: 2026H1;
+  - untouched test: 2026-07-01 .. latest, evaluated once at the end of the run, only after the
+    validation selection record is frozen and checksummed (a test lock in the evaluator).
+- **Purposes and test reuse.** Runs use purpose `research` or `holdout_evaluation`. Repeated runs on
+  the same test period are reported as `test_reuse`.
+- **Environment.** The default environment uses the trailing 20-day log-return window and the
+  current weights. It does not use rolling volatility.
+  - Reward: the net log return minus a realized-variance penalty, a drawdown-increment penalty and
+    a turnover penalty (`docs/rl-environment.md`).
+  - Its accounting replicates the simulator's rules on aligned arrays, so training is fast. A parity
+    test checks the environment NAV against the common evaluator.
+  - Every reported metric comes from the common evaluator.
+
 ### D2. Weight staging: own copy, discovered pattern
 
 - A FinanceModel CPU Processing Job (`ml.m5.xlarge`, attached volume sized above the 51.8 GiB checkpoint plus headroom) downloads the pinned revision from Hugging Face into FinanceModel research storage, writes a per-file SHA-256 manifest after all files, then a staged-status record naming model ID, revision and license. It is idempotent: an existing complete manifest that matches the revision skips the download.

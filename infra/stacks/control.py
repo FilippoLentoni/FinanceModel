@@ -5,8 +5,9 @@ Matrix rows ``job-control-plane``, ``job-interface`` and ``sagemaker-job-definit
 * **Lambdas** (Python 3.12, ``arm64``, one shared code bundle, :mod:`infra.stacks.lambda_code`):
   ``job-api-handler`` (the job API), ``job-dispatcher`` (EventBridge Scheduler schedule deployed
   **DISABLED** and armed only while runs are queued, active or awaiting an approval deadline, design
-  D1, :mod:`finplan_model.control.wakeup`; also kicked asynchronously by the API), ``job-state-handler`` (EventBridge rule on
-  ``SageMaker Processing Job State Change`` for job names ``fm-<env>-*``) and
+  D1, :mod:`finplan_model.control.wakeup`; also kicked asynchronously by the API), ``job-state-handler`` (EventBridge rules on
+  ``SageMaker Processing Job State Change`` and ``SageMaker Training Job State Change`` for job names
+  ``fm-<env>-*``) and
   ``job-registry-lookup`` (the registry lineage route the platform calls) and ``strategy-selection``
   (``GET``/``PUT /v1/production-strategy``; its role is the only writer of
   ``/finplan/<env>/financemodel/config/production-strategy``, contracts 1.1.0). Each has its own role
@@ -150,6 +151,16 @@ class ControlStack(ModelStack):
             targets=[targets.LambdaFunction(state, retry_attempts=4, max_event_age=Duration.hours(2))],
         )
         tag_role(rule, "job-state-change-rule")
+        # SageMaker Training job state changes (model_selection runs as a Training job) -> same handler
+        training_rule = events.Rule(
+            self,
+            "TrainingJobStateChangeRule",
+            rule_name=n.env_name(env, n.TRAINING_STATE_CHANGE_RULE),
+            description="SageMaker Training job state changes of this environment's FinanceModel jobs",
+            event_pattern=events.EventPattern(source=["aws.sagemaker"], detail_type=["SageMaker Training Job State Change"], detail={"TrainingJobName": [{"prefix": n.processing_job_prefix(env)}]}),
+            targets=[targets.LambdaFunction(state, retry_attempts=4, max_event_age=Duration.hours(2))],
+        )
+        tag_role(training_rule, "job-state-change-rule")
 
         # dispatcher schedule (EventBridge Scheduler)
         sched_role = iam.Role(

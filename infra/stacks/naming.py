@@ -42,6 +42,7 @@ __all__ = [
     "SCHEDULE_ROLE",
     "STATE_CHANGE_RULE",
     "STATE_HANDLER",
+    "TRAINING_STATE_CHANGE_RULE",
     "bucket_name",
     "deploy_role_name",
     "ecr_repository_name",
@@ -86,7 +87,9 @@ JOB_EXECUTION_LOGICAL_ROLE = "job-execution-role"
 APPROVER = "approver"
 SCHEDULE_ROLE = "job-dispatcher-schedule"
 STATE_CHANGE_RULE = "job-state-change"
-#: SageMaker Processing job names start with ``fm-<env>-`` (control plane, docs/job-execution.md).
+#: SageMaker Training job state changes (job types with ``sagemaker_job: training``, e.g. model_selection).
+TRAINING_STATE_CHANGE_RULE = "training-job-state-change"
+#: SageMaker Processing and Training job names start with ``fm-<env>-`` (control plane, docs/job-execution.md).
 PROCESSING_JOB_PREFIX = "fm-{env}-"
 
 # ----------------------------------------------------------------- account-level (shared)

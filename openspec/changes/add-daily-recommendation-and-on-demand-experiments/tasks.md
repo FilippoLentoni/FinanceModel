@@ -31,6 +31,11 @@ Test IDs are defined in the mapping table at the end. CI never starts SageMaker.
 - 1.2: `daily_recommendation` in `config/<env>.json` (one `ml.m5.xlarge`, 1800 s, `cpu_research`, its own `auto_approve_usd` 0.15). The config check (`daily_cost_problems`, run by the `config` build gate) fails when the planning-bound estimate exceeds USD 0.15 or the kind's auto-approve ceiling (`tests/unit/control/test_daily_and_strategy.py::test_drj05_build_cost_check`).
 - 2.x: `PUT`/`GET /v1/production-strategy` served by the `strategy-selection` Lambda (`finplan_model.control.selection`, `production_strategy`). The document follows `core/v1/production-strategy.json` (`selected_by`/`selected_at`; the contract has no `configuration_id`). Confirmation travels as `confirmed_by_user` next to the contract request fields. Audit: append-only `AUDIT#production-strategy` items plus a log line.
 - 3.x: the trigger role is the only `daily_recommendation` submitter (handler plus resource policy); the strategy is resolved and re-validated at submission and frozen on the run (`production_strategy`), and `plan_id` becomes the run spec's staging target. A control strategy (for example `buy_and_hold`) stages its rule-based allocation as `feasible`.
+- 4.x (2026-10-08 follow-up): the user-initiated `model_selection` kind (decision 27; change
+  `add-learning-and-llm-strategies` task group 10) uses the same universe input and carries the
+  same mandatory `payload.bias_section`, failing closed. Verified by
+  `tests/unit/selection/test_model_selection_job.py::test_container_run_writes_a_contract_result_with_every_section`.
+  It is never scheduled, and the daily trigger role gets `FORBIDDEN` for it.
 - 4.x: `adj_close` basis for universe snapshots, the `zero_nominal` cash assumption, the "Hindsight and survivorship bias" section in results (`payload.bias_section`), run artifacts and `build_report` (checksummed), failing closed without disclosures.
 
 ## 5. Deployed verification

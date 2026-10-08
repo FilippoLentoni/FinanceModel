@@ -15,6 +15,10 @@ entry point         what it does (all through the common evaluator; nothing else
                     carries the snapshot's bias disclosures (staged by the entry point)
 ``report``          the benchmark report (delegates to ``finplan_model.reporting.report_job`` when
                     task group 5 provides it; otherwise ``DEPENDENCY_UNAVAILABLE``)
+``model_selection`` decision 27 offline model selection (controls, traditional optimizers, PPO and
+                    SAC): tuning and RL training on train/validation, one test evaluation
+                    (:mod:`finplan_model.selection.job`; runs as a SageMaker Training job; the RL
+                    learners are imported only when this entry point runs)
 ==================  ===========================================================================
 
 Every handler receives a :class:`JobInputs` (run context, run spec, verified market data, artifact
@@ -206,12 +210,19 @@ def report(inp: JobInputs) -> dict[str, Any]:
     return hook(inp)
 
 
+def model_selection(inp: JobInputs) -> dict[str, Any]:
+    from finplan_model.selection.job import run_model_selection
+
+    return run_model_selection(inp)
+
+
 HANDLERS: dict[str, Handler] = {
     "prepare_dataset": prepare_dataset,
     "run_backtest": run_backtest,
     "run_benchmark": run_benchmark,
     "daily_recommendation": run_daily_recommendation,
     "report": report,
+    "model_selection": model_selection,
 }
 
 

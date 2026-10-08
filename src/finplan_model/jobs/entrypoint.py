@@ -207,7 +207,7 @@ def _local(job_type: str, args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m finplan_model.jobs", description="FinanceModel CPU job entry point (prepare_dataset, run_backtest, run_benchmark, report, daily_recommendation).")
+    ap = argparse.ArgumentParser(prog="python -m finplan_model.jobs", description="FinanceModel CPU job entry point (prepare_dataset, run_backtest, run_benchmark, report, daily_recommendation, model_selection).")
     ap.add_argument("job_type", choices=sorted(HANDLERS))
     ap.add_argument("--local", metavar="DIR", help="offline mode: run spec, result and artifacts under DIR (no AWS)")
     ap.add_argument("--run-id", help="local mode: the run_id whose spec to run")

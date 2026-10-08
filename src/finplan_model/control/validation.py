@@ -32,11 +32,13 @@ from finplan_model.core.ids import configuration_id
 from finplan_model.core.outcome import require_valid
 from finplan_model.jobs.strategy_resolver import known_strategies
 
-__all__ = ["PLANNED_JOB_TYPES", "STRATEGY_JOB_TYPES", "Submission", "find_storage_location", "validate_submission"]
+__all__ = ["PLANNED_JOB_TYPES", "SELECTION_JOB_TYPE", "STRATEGY_JOB_TYPES", "Submission", "find_storage_location", "validate_submission"]
 
 #: Job types announced by later changes (add-learning-and-llm-strategies). Submitting one before it
 #: is deployed in an environment gives DEPENDENCY_UNAVAILABLE (JOB-09), not VALIDATION_FAILED.
 PLANNED_JOB_TYPES = ("rl_train", "rl_evaluate", "rl_weight_staging", "swarm_mode_a", "swarm_mode_b", "jev_backtest")
+#: Offline model selection (decision 27): every family on one snapshot, one SageMaker Training job.
+SELECTION_JOB_TYPE = "model_selection"
 #: Job types whose configuration names a strategy that must exist.
 STRATEGY_JOB_TYPES = ("run_backtest", "run_benchmark", "daily_recommendation")
 
@@ -111,6 +113,13 @@ def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: 
     payload = body["configuration"]["payload"]
     if name in STRATEGY_JOB_TYPES and str(payload.get("strategy")) not in known_strategies():
         raise FinplanError.validation("unknown strategy", pointer="/configuration/payload/strategy")
+    if name == SELECTION_JOB_TYPE:
+        # The protocol (splits, grids, seeds) is configuration frozen at submission; the request only
+        # names the experiment, the universe and the shared simulation settings.
+        if payload.get("strategy") != SELECTION_JOB_TYPE:
+            raise FinplanError.validation("model_selection configurations name strategy model_selection", pointer="/configuration/payload/strategy")
+        if body["purpose"] not in ("research", "holdout_evaluation"):
+            raise FinplanError.validation("model_selection runs with purpose research or holdout_evaluation", pointer="/purpose")
     if body.get("compute_class") not in (None, jt.compute_class):
         raise FinplanError.validation("compute_class does not match the job type", pointer="/compute_class")
     runtime = int(body.get("max_runtime_seconds") or jt.default_runtime_seconds)

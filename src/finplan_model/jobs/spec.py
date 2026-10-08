@@ -83,6 +83,13 @@ def build_run_spec(run: Mapping[str, Any], *, simulation: Mapping[str, Any], ima
         spec["production_strategy"] = dict(run["production_strategy"])  # frozen at submission (M2)
     if run.get("model_version"):
         spec["model_version"] = run["model_version"]
+    if run.get("selection_protocol"):
+        # model_selection: the protocol frozen at submission (config/<env>.json), never from the request
+        spec["selection_protocol"] = dict(run["selection_protocol"])
+        spec["test_period_prior_accesses"] = int(run.get("test_period_prior_accesses") or 0)
+        if run.get("incumbent_strategy"):
+            spec["incumbent_strategy"] = str(run["incumbent_strategy"])
+        spec["compute"] = {"instance_type": str(run.get("instance_type") or ""), "instance_count": int(run.get("instance_count") or 1), "sagemaker_job": str(run.get("sagemaker_job") or "processing")}
     if image_digest:
         spec["image_digest"] = image_digest
     return validate_run_spec(spec)

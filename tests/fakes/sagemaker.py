@@ -1,4 +1,4 @@
-"""In-memory fake of the SageMaker Processing API subset the control plane uses.
+"""In-memory fake of the SageMaker Processing and Training API subset the control plane uses.
 
 The offline harness blocks every real (and moto) SageMaker call, so control-plane tests inject this
 fake instead. Failures are scripted with :meth:`FakeSageMaker.fail_next` using botocore
@@ -53,6 +53,30 @@ class FakeSageMaker:
             raise ClientError({"Error": {"Code": "ResourceNotFound", "Message": "missing"}}, "DescribeProcessingJob")
         return copy.deepcopy(job)
 
+    def create_training_job(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("CreateTrainingJob", copy.deepcopy(kwargs)))
+        self._maybe_fail("CreateTrainingJob")
+        name = kwargs["TrainingJobName"]
+        if name in self.jobs:
+            raise ClientError({"Error": {"Code": "ResourceInUse", "Message": "exists"}}, "CreateTrainingJob")
+        self.jobs[name] = {**kwargs, "TrainingJobStatus": "InProgress", "SecondaryStatus": "Starting"}
+        return {"TrainingJobArn": f"arn:aws:sagemaker:us-east-2:<account-id>:training-job/{name}"}
+
+    def stop_training_job(self, TrainingJobName: str) -> dict[str, Any]:  # noqa: N803
+        self.calls.append(("StopTrainingJob", {"TrainingJobName": TrainingJobName}))
+        self._maybe_fail("StopTrainingJob")
+        self.jobs[TrainingJobName]["TrainingJobStatus"] = "Stopping"
+        return {}
+
+    def describe_training_job(self, TrainingJobName: str) -> dict[str, Any]:  # noqa: N803
+        self.calls.append(("DescribeTrainingJob", {"TrainingJobName": TrainingJobName}))
+        self._maybe_fail("DescribeTrainingJob")
+        job = self.jobs.get(TrainingJobName)
+        if job is None or "TrainingJobName" not in job:
+            raise ClientError({"Error": {"Code": "ValidationException", "Message": "Requested resource not found."}}, "DescribeTrainingJob")
+        return copy.deepcopy(job)
+
     def set_status(self, name: str, status: str, **extra: Any) -> None:
         """Move a job to ``Completed``, ``Failed``, ``Stopped`` ... (``ExitMessage``, ``FailureReason``)."""
-        self.jobs[name].update(ProcessingJobStatus=status, **extra)
+        key = "TrainingJobStatus" if "TrainingJobName" in self.jobs[name] else "ProcessingJobStatus"
+        self.jobs[name].update({key: status}, **extra)

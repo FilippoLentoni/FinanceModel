@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
+from finplan_model.rl import RL_ALGORITHMS
 from finplan_model.sim.market import MarketData
 
 from .strategy_resolver import CONTROLS
@@ -121,7 +122,7 @@ def _row(res: Any, market: MarketData, *, primary: str) -> dict[str, Any]:
     aw, a_trunc = _compact(avg_w)
     row: dict[str, Any] = {
         "strategy": res.strategy,
-        "role": "control" if res.strategy in CONTROLS else "optimizer",
+        "role": "control" if res.strategy in CONTROLS else "rl" if res.strategy in RL_ALGORITHMS else "optimizer",
         "primary": res.strategy == primary,
         "solution_status": res.solution_status,
         "metrics": {

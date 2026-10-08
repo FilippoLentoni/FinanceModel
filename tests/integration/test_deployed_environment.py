@@ -14,6 +14,8 @@ The stage fails when fewer than one test executes.
   refused with ``IDEMPOTENCY_KEY_REUSED``, polled, cancelled and read back
   (:mod:`tests.integration.job_suite`). With the default auto-approve threshold 0 the run never
   starts a SageMaker job, so the suite costs Lambda, API Gateway and DynamoDB requests only;
+* the ``model_selection`` kind (decision 27) through dry runs only: validated and estimated under
+  the USD 0.25 auto-approve threshold, nothing recorded, no SageMaker Training job;
 * gamma only: isolation denials towards prod.
 """
 
@@ -104,6 +106,16 @@ def test_job_api_fixture_job_lifecycle():
     payload = json.loads(resp["Payload"].read() or b"null")
     assert "FunctionError" not in resp and payload.get("schedule"), payload
     print("dispatcher schedule after the suite:", payload["schedule"])
+
+
+def test_model_selection_kind_is_deployed_and_estimated_under_the_auto_approve_threshold():
+    """Decision 27 kind: dry runs only (no run recorded, no SageMaker Training job started)."""
+    from tests.integration.job_suite import run_model_selection_dry_run
+
+    d = deployed()
+    run_key = (os.environ.get("FINPLAN_RELEASE_ID", "") or datetime.now(UTC).strftime("%Y%m%d%H%M%S"))[-12:]
+    steps = run_model_selection_dry_run(d.api_call(), snapshot_id=d.integration_snapshot_id(), run_key=f"{d.env}-{run_key}")
+    print("\n".join(steps))
 
 
 @pytest.mark.skipif(os.environ.get("FINPLAN_TARGET_ENV") != "gamma", reason="isolation suite runs in gamma")

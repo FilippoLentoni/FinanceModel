@@ -1,8 +1,10 @@
 # No `# syntax=` directive: the built-in BuildKit frontend suffices, and the directive would pull
 # docker/dockerfile from Docker Hub in every build (anonymous pull limits on shared CodeBuild IPs).
 #
-# financemodel-cpu: the one CPU image of FinanceModel phase 1 (design D5; task 6.1).
-# Entry points (ContainerArguments): prepare_dataset | run_backtest | run_benchmark | report
+# financemodel-cpu: the one CPU image of FinanceModel (design D5; task 6.1).
+# Entry points (ContainerArguments): prepare_dataset | run_backtest | run_benchmark | report |
+#   daily_recommendation (SageMaker Processing) | model_selection (SageMaker Training: PPO and SAC
+#   learners, stable-baselines3 on CPU-only torch from the locked `rl` extra; no CUDA libraries)
 #
 #   docker build -f container/Dockerfile -t financemodel-cpu .          # context = repository root
 #   docker run --rm -v "$PWD/.local-run:/work" financemodel-cpu run_backtest \
@@ -30,9 +32,9 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY pyproject.toml uv.lock README.md ./
 COPY vendor/finplan-contracts/ ./vendor/finplan-contracts/
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --extra rl --no-install-project
 COPY src/ ./src/
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --extra rl --no-editable
 
 FROM ${PYTHON_IMAGE} AS runtime
 RUN groupadd --system --gid 10001 financemodel \
@@ -42,7 +44,11 @@ COPY config/ /opt/financemodel/config/
 ENV PATH=/opt/financemodel/venv/bin:${PATH} \
     FINPLAN_CONFIG_DIR=/opt/financemodel/config \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    TORCH_HOME=/tmp/torch
 WORKDIR /opt/financemodel
 USER 10001:10001
 ENTRYPOINT ["python", "-m", "finplan_model.jobs"]

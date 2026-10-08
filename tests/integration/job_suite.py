@@ -117,6 +117,36 @@ def fixture_request(snapshot_id: str, idempotency_key: str, *, dry_run: bool = F
     }
 
 
+#: model_selection (decision 27) must stay under the beta/gamma CPU auto-approve threshold (decision 24).
+SELECTION_ESTIMATE_CEILING_USD = 0.25
+
+
+def model_selection_request(snapshot_id: str, idempotency_key: str, *, dry_run: bool = True, strategy: str = "model_selection") -> dict[str, Any]:
+    """A ``model_selection`` submission over the research universe (dry run by default: no run, no job)."""
+    body = fixture_request(snapshot_id, idempotency_key, dry_run=dry_run, strategy=strategy)
+    body["job_type"] = "model_selection"
+    body.pop("evaluation_window", None)
+    body["configuration"]["payload"]["universe"] = ["VOO", "GOOGL", "NFLX", "AAPL", "NVDA", "USD_CASH"]
+    return body
+
+
+def run_model_selection_dry_run(call: Call, *, snapshot_id: str, run_key: str) -> list[str]:
+    """The deployed ``model_selection`` kind: validated, estimated under USD 0.25 in ``cpu_research``,
+    a wrong strategy refused; nothing recorded and no SageMaker job (dry runs only)."""
+    steps: list[str] = []
+    dry = _expect(call("POST", "/v1/jobs", model_selection_request(snapshot_id, f"it-{run_key}-ms-dry")), (200,), "model_selection dry run")
+    _valid(dry, "tools/submit-experiment-response")
+    _check(dry.get("dry_run") is True and dry.get("run_id") is None, "a model_selection dry run records nothing")
+    est = dry["cost_estimate"]
+    _valid(est, "cost-estimate")
+    _check(est.get("budget_category") == "cpu_research", "model_selection draws on cpu_research")
+    _check(float(est["estimated_usd_upper_bound"]) <= SELECTION_ESTIMATE_CEILING_USD, f"model_selection estimate USD {est['estimated_usd_upper_bound']} is above USD {SELECTION_ESTIMATE_CEILING_USD}")
+    steps.append(f"model_selection dry run: estimate USD {est['estimated_usd_upper_bound']} ({est['budget_category']})")
+    _error(call("POST", "/v1/jobs", model_selection_request(snapshot_id, f"it-{run_key}-ms-bad", strategy="ppo")), 400, "VALIDATION_FAILED", "a model_selection request naming another strategy")
+    steps.append("model_selection with another strategy: VALIDATION_FAILED")
+    return steps
+
+
 def run_contract_checks(call: Call) -> list[str]:
     steps: list[str] = []
     listing = _expect(call("GET", "/v1/jobs"), (200,), "list_jobs")

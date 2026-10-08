@@ -74,6 +74,11 @@ class JobTypeConfig:
     #: Build cost check (DRJ-05): the upper-bound estimate at ``cost_check_usd_per_hour`` must not exceed it.
     cost_cap_usd: float | None = None
     cost_check_usd_per_hour: float | None = None
+    #: SageMaker job kind that runs the entry point: ``processing`` (default) or ``training``
+    #: (``model_selection``: RL learners run only in SageMaker Training jobs, spec rl-strategies).
+    sagemaker_job: str = "processing"
+    #: ``model_selection`` only: the selection protocol frozen into every run (decision 27).
+    protocol: Mapping[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, name: str, d: Mapping[str, Any]) -> "JobTypeConfig":
@@ -91,6 +96,8 @@ class JobTypeConfig:
             auto_approve_usd=None if d.get("auto_approve_usd") is None else float(d["auto_approve_usd"]),
             cost_cap_usd=None if d.get("cost_cap_usd") is None else float(d["cost_cap_usd"]),
             cost_check_usd_per_hour=None if d.get("cost_check_usd_per_hour") is None else float(d["cost_check_usd_per_hour"]),
+            sagemaker_job=str(d.get("sagemaker_job", "processing")),
+            protocol=d.get("protocol"),
         )
 
 
@@ -234,7 +241,10 @@ def validate_config(env: str, raw: Mapping[str, Any]) -> list[str]:
             problems.append(f"{p}: compute_class must be cpu or gpu")
         if j.max_instance_count < 1:
             problems.append(f"{p}: max_instance_count must be >= 1")
+        if j.sagemaker_job not in SAGEMAKER_JOB_KINDS:
+            problems.append(f"{p}: sagemaker_job must be one of {', '.join(SAGEMAKER_JOB_KINDS)}")
         problems += daily_cost_problems(j, prefix=p)
+        problems += selection_cost_problems(j, prefix=p)
     lease = raw["lease"]
     if not all(isinstance(v, int) and v >= 0 for v in lease.get("max_holders", {}).values()):
         problems.append(f"{env}: lease.max_holders values must be non-negative integers")
@@ -295,6 +305,10 @@ def load_shared_config(config_dir: Path | None = None) -> dict[str, Any]:
 
 #: Hard ceiling of the daily recommendation job's upper-bound estimate (design M4).
 DAILY_COST_CEILING_USD = 0.15
+#: ``model_selection`` (decision 27): one CPU Training job whose planning-bound estimate stays under
+#: the beta/gamma CPU auto-approve threshold (decision 24, USD 0.25); prod always asks the approver.
+SELECTION_COST_CEILING_USD = 0.25
+SAGEMAKER_JOB_KINDS = ("processing", "training")
 
 
 def daily_cost_problems(j: JobTypeConfig, *, prefix: str = "") -> list[str]:
@@ -314,4 +328,30 @@ def daily_cost_problems(j: JobTypeConfig, *, prefix: str = "") -> list[str]:
         out.append(f"{prefix}: daily_recommendation estimate USD {est:.4f} exceeds the USD {min(j.cost_cap_usd, DAILY_COST_CEILING_USD)} cap")
     if est > j.auto_approve_usd + 1e-12:
         out.append(f"{prefix}: daily_recommendation estimate USD {est:.4f} exceeds its auto-approve threshold USD {j.auto_approve_usd}")
+    return out
+
+
+def selection_cost_problems(j: JobTypeConfig, *, prefix: str = "") -> list[str]:
+    """Build check of the ``model_selection`` kind: a CPU SageMaker Training job (one instance), a
+    valid frozen protocol, and a planning-bound estimate (``cost_check_usd_per_hour`` x max runtime)
+    within ``cost_cap_usd`` <= USD 0.25 (the beta/gamma auto-approve threshold, decision 24)."""
+    if j.name != "model_selection":
+        return []
+    out: list[str] = []
+    if j.sagemaker_job != "training" or j.compute_class != "cpu" or j.max_instance_count != 1 or j.budget_category != "cpu_research":
+        out.append(f"{prefix}: model_selection must be one CPU instance, a SageMaker training job, budget category cpu_research")
+    if j.cost_check_usd_per_hour is None or j.cost_cap_usd is None:
+        return [*out, f"{prefix}: model_selection needs cost_check_usd_per_hour and cost_cap_usd"]
+    est = j.cost_check_usd_per_hour * j.max_runtime_seconds / 3600.0 * j.max_instance_count
+    if j.cost_cap_usd > SELECTION_COST_CEILING_USD + 1e-12:
+        out.append(f"{prefix}: cost_cap_usd {j.cost_cap_usd} exceeds the USD {SELECTION_COST_CEILING_USD} ceiling")
+    if est > min(j.cost_cap_usd, SELECTION_COST_CEILING_USD) + 1e-12:
+        out.append(f"{prefix}: model_selection estimate USD {est:.4f} exceeds the USD {min(j.cost_cap_usd, SELECTION_COST_CEILING_USD)} cap")
+    try:
+        from finplan_model.selection.protocol import validate_protocol
+
+        validate_protocol(j.protocol or {})
+    except Exception as exc:  # noqa: BLE001 - reported as a configuration problem
+        details = getattr(exc, "details", {}) or {}
+        out.append(f"{prefix}: protocol invalid: {exc} {details.get('pointer', '')}".rstrip())
     return out

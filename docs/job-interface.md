@@ -41,8 +41,10 @@ contract wins and the test fails.
 | `run_benchmark` | the strategy plus the `cash`, `buy_and_hold` and `equal_weight` controls, in one job | 1200 s / 1800 s | `cpu_research` |
 | `report` | benchmark report | 300 s / 900 s | `cpu_research` |
 | `daily_recommendation` | the production strategy (from `config/production-strategy`) on an approved `equity-etf-daily` snapshot; stages one recommendation | 1800 s / 1800 s | `cpu_research` |
+| `model_selection` | decision 27 offline model selection: controls, traditional optimizers and PPO/SAC (5 seeds) on one snapshot, tuned on train/validation, one test evaluation (a SageMaker **Training** job; [model-selection.md](model-selection.md)) | 3000 s / 3000 s | `cpu_research` |
 
-All phase 1 jobs are CPU jobs on `ml.m5.xlarge` (one instance). They run on whatever approved
+All jobs are CPU jobs on `ml.m5.xlarge` (one instance); all but `model_selection` run as SageMaker
+Processing jobs. They run on whatever approved
 platform snapshot is named: real phase 2 (yfinance) snapshots or synthetic ones, identically in
 beta, gamma and prod (data parity, user decision 26; prod may still serve synthetic snapshots
 during the transition). Synthetic fixtures remain for offline and unit tests. The contract
@@ -88,6 +90,26 @@ is an open object, so this is contract-valid under 1.1.0; `payload.performance` 
   idempotent by key, checked against the budget (`BUDGET_EXCEEDED`), uses one `ml.m5.xlarge` with a
   1800 s cap, and is auto-approved up to its own USD 0.15 ceiling. A succeeded run stages weights for
   every instrument plus cash, with the snapshot's `bias_disclosures` in the staged manifest.
+
+### Offline model selection (`model_selection`, decision 27)
+
+- Submitted on request only (agent or API; never scheduled; the daily trigger gets `FORBIDDEN`),
+  with `purpose` `research` or `holdout_evaluation` and `configuration.payload.strategy`
+  `model_selection` (anything else gives `VALIDATION_FAILED`). The payload names the universe and the
+  shared simulation settings (fees, constraints, monthly rebalance); the protocol (splits, grids,
+  seeds, RL hyperparameters, selection rule) is configuration (`config/<env>.json`
+  `job_types.model_selection.protocol`), frozen into the run at submission and never taken from the
+  request.
+- One CPU SageMaker Training job (`ml.m5.xlarge`, 3000 s cap). Its upper-bound estimate (about
+  USD 0.20 at the current price) is under the beta/gamma auto-approve threshold (USD 0.25); in prod a
+  human approves. The build check keeps the planning-bound estimate at or below USD 0.25.
+- The result carries `payload.benchmark` (the **test** comparison) and `payload.model_selection`:
+  per-split comparisons (`train`, `validation`, `test`) with `family`, `params`, `selected` and
+  `incumbent` per row, the traditional tuning tables, the RL grid with every seed's train, validation
+  and test metrics and their mean, standard deviation, minimum and maximum, a separate
+  `training_reward` section, the frozen selection record (`selection_checksum`), the promotion check
+  (criteria v1 against the incumbent), caveats and the compute record. Artifacts: the evidence JSON
+  and every trained policy (`rl_policy`, `application/zip`).
 
 ### Production strategy (`GET` / `PUT /v1/production-strategy`)
 

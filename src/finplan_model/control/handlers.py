@@ -7,9 +7,10 @@ handler                                                         trigger
 ``finplan_model.control.handlers.dispatcher_handler``           EventBridge Scheduler schedule (armed only
                                                                 while runs are pending, design D1) and
                                                                 asynchronous kicks ``{"run_id": ...}``
-``finplan_model.control.handlers.state_change_handler``         EventBridge rule ``aws.sagemaker`` /
+``finplan_model.control.handlers.state_change_handler``         EventBridge rules ``aws.sagemaker`` /
                                                                 ``SageMaker Processing Job State Change``
-                                                                for names starting ``fm-<env>-``
+                                                                and ``SageMaker Training Job State
+                                                                Change`` for names starting ``fm-<env>-``
 ==============================================================  ==========================================
 
 Environment variables (names only; values are set by the stack, never committed):

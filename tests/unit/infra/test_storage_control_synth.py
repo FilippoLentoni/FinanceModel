@@ -102,9 +102,14 @@ def test_control_plane_functions_rules_and_schedule(assembly):
         assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["Environment"]["Variables"]["FINPLAN_DISPATCHER_FUNCTION"] == n.function_name(env, n.DISPATCHER)
         groups = assembly.resources(name, "AWS::Logs::LogGroup")
         assert len(groups) == len(fns) and all(g["Properties"]["RetentionInDays"] == 30 for g in groups.values())
-        (rule,) = assembly.resources(name, "AWS::Events::Rule").values()
-        pattern = rule["Properties"]["EventPattern"]
+        rules = {r["Properties"]["Name"]: r for r in assembly.resources(name, "AWS::Events::Rule").values()}
+        assert set(rules) == {n.env_name(env, n.STATE_CHANGE_RULE), n.env_name(env, n.TRAINING_STATE_CHANGE_RULE)}
+        pattern = rules[n.env_name(env, n.STATE_CHANGE_RULE)]["Properties"]["EventPattern"]
         assert pattern["source"] == ["aws.sagemaker"] and pattern["detail"]["ProcessingJobName"] == [{"prefix": f"fm-{env}-"}]
+        # model_selection runs as a SageMaker Training job: its state changes reach the same handler
+        training = rules[n.env_name(env, n.TRAINING_STATE_CHANGE_RULE)]["Properties"]
+        assert training["EventPattern"] == {"source": ["aws.sagemaker"], "detail-type": ["SageMaker Training Job State Change"], "detail": {"TrainingJobName": [{"prefix": f"fm-{env}-"}]}}
+        assert training["Targets"][0]["RetryPolicy"]["MaximumRetryAttempts"] == 4
         (sched,) = assembly.resources(name, "AWS::Scheduler::Schedule").values()
         assert sched["Properties"]["ScheduleExpression"] == "rate(1 minute)" and sched["Properties"]["State"] == "DISABLED"
         assert sched["Metadata"]["logical-role"] == "job-dispatcher-schedule"

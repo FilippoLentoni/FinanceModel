@@ -11,7 +11,9 @@
 3. The image is tagged with the ``release_id`` (the repository's tags are immutable) and pushed to
    the account-level repository ``finplan-shared-financemodel-cpu-images``.
    Before the push, the built image must import the job entry point and its runtime
-   dependencies (``finplan_contracts``, ``numpy``, ``scipy``, ``boto3``) with its own interpreter
+   dependencies (``finplan_contracts``, ``numpy``, ``scipy``, ``boto3``, and for ``model_selection``
+   ``torch``, ``gymnasium``, ``stable_baselines3``) with its own interpreter, and its torch must be the
+   CPU build
    (:data:`IMAGE_IMPORT_CHECK`; platform lesson L3: code shipped without its dependencies failed at
    start). A failing check pushes nothing.
 4. The pushed digest is read back from ECR; every environment's job definitions reference
@@ -37,8 +39,31 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = Path("container/Dockerfile")
 BASE_ARGS = ("PYTHON_IMAGE", "UV_IMAGE")
 #: Modules the job image must import with only its own environment (dependencies installed).
-IMAGE_IMPORTS = ("finplan_model.jobs.entrypoint", "finplan_model.strategies.optimizers", "finplan_contracts", "numpy", "scipy", "boto3", "jsonschema")
-IMAGE_IMPORT_CHECK = "import importlib, sys; [importlib.import_module(m) for m in sys.argv[1:]]; print('image imports ok')"
+IMAGE_IMPORTS = (
+    "finplan_model.jobs.entrypoint",
+    "finplan_model.strategies.optimizers",
+    "finplan_model.selection.job",
+    "finplan_model.rl.env",
+    "finplan_model.rl.train",
+    "finplan_contracts",
+    "numpy",
+    "scipy",
+    "boto3",
+    "jsonschema",
+    # model_selection (RL): the locked `rl` extra, CPU-only torch
+    "torch",
+    "gymnasium",
+    "stable_baselines3",
+    "stable_baselines3.ppo",
+    "stable_baselines3.sac",
+)
+
+#: Imports every module and requires the CPU-only torch build (no CUDA: smaller image, no GPU on ml.m5).
+IMAGE_IMPORT_CHECK = (
+    "import importlib, sys; [importlib.import_module(m) for m in sys.argv[1:]]; "
+    "t = sys.modules.get('torch'); "
+    "sys.exit('torch in the image is not the CPU build') if t is not None and t.version.cuda is not None else print('image imports ok')"
+)
 _ARG_RE = re.compile(r"^ARG\s+(?P<name>[A-Z_]+)=(?P<value>\S+)\s*$", re.MULTILINE)
 _DIGEST_REF_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}\Z")
 

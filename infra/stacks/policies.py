@@ -211,9 +211,12 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
                 "Resource": [
                     _arn("logs", "log-group:/aws/sagemaker/ProcessingJobs", partition=partition, region=region, account=account),
                     _arn("logs", "log-group:/aws/sagemaker/ProcessingJobs:*", partition=partition, region=region, account=account),
+                    # model_selection runs as a SageMaker Training job (RL learners; spec rl-strategies)
+                    _arn("logs", "log-group:/aws/sagemaker/TrainingJobs", partition=partition, region=region, account=account),
+                    _arn("logs", "log-group:/aws/sagemaker/TrainingJobs:*", partition=partition, region=region, account=account),
                 ],
             },
-            {"Sid": "ProcessingJobMetrics", "Effect": "Allow", "Action": ["cloudwatch:PutMetricData"], "Resource": ["*"], "Condition": {"StringEquals": {"cloudwatch:namespace": "/aws/sagemaker/ProcessingJobs"}}},
+            {"Sid": "ProcessingJobMetrics", "Effect": "Allow", "Action": ["cloudwatch:PutMetricData"], "Resource": ["*"], "Condition": {"StringEquals": {"cloudwatch:namespace": ["/aws/sagemaker/ProcessingJobs", "/aws/sagemaker/TrainingJobs"]}}},
             # ---- explicit denies (they hold even if an allow above were widened)
             {"Sid": "DenyRawCuratedPlanReportStorage", "Effect": "Deny", "Action": ["s3:*"], "Resource": denied_platform},
             {"Sid": "DenySnapshotWrites", "Effect": "Deny", "Action": list(contract_boundaries.S3_WRITE_ACTIONS), "Resource": _platform_bucket("*", "snapshots", partition)},
@@ -244,6 +247,7 @@ def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, regi
     research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
     registry = _bucket_arn(n.bucket_name(env, n.REGISTRY_BUCKET, account), partition)
     jobs = _arn("sagemaker", f"processing-job/{n.processing_job_prefix(env)}*", partition=partition, region=region, account=account)
+    training_jobs = _arn("sagemaker", f"training-job/{n.processing_job_prefix(env)}*", partition=partition, region=region, account=account)
     job_role = role_arn(n.role_name(env, n.JOB_EXECUTION), partition=partition, account=account)
     param = lambda p: _ssm_param(p, partition=partition, region=region, account=account)  # noqa: E731
     st: list[dict[str, Any]] = [
@@ -252,11 +256,11 @@ def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, regi
         {
             "Sid": "StartTaggedJobs",
             "Effect": "Allow",
-            "Action": ["sagemaker:CreateProcessingJob", "sagemaker:AddTags"],
-            "Resource": [jobs],
+            "Action": ["sagemaker:CreateProcessingJob", "sagemaker:CreateTrainingJob", "sagemaker:AddTags"],
+            "Resource": [jobs, training_jobs],
             "Condition": {"StringEquals": {"aws:RequestTag/environment": env, "aws:RequestTag/owner-repo": "financemodel"}},
         },
-        {"Sid": "ManageOwnJobs", "Effect": "Allow", "Action": ["sagemaker:StopProcessingJob", "sagemaker:DescribeProcessingJob"], "Resource": [jobs]},
+        {"Sid": "ManageOwnJobs", "Effect": "Allow", "Action": ["sagemaker:StopProcessingJob", "sagemaker:DescribeProcessingJob", "sagemaker:StopTrainingJob", "sagemaker:DescribeTrainingJob"], "Resource": [jobs, training_jobs]},
         {"Sid": "PassJobRoleToSageMaker", "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": [job_role], "Condition": {"StringEquals": {"iam:PassedToService": "sagemaker.amazonaws.com"}}},
         {"Sid": "ReadSettings", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [param(f"/finplan/{env}/*"), param("/finplan/shared/*")]},
         {"Sid": "RunHandOff", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{research}/runs/*"]},

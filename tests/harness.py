@@ -16,6 +16,8 @@ While installed:
   real network stays blocked regardless.
 * **Fake credentials only**: ``AWS_*`` variables point at dummy values and empty config files, so
   no test can pick up the developer's or the build role's credentials.
+* **No learner run beyond the fixture step count**: ``FINPLAN_LEARNER_STEP_LIMIT`` (512 steps) makes
+  any PPO/SAC run asking for more steps fail with ``OPERATION_NOT_PERMITTED`` (RL-07).
 """
 
 from __future__ import annotations
@@ -84,6 +86,9 @@ _FAKE_ENV = {
     # offline synth packages the source tree: never release mode (CodeBuild sets CODEBUILD_BUILD_ID
     # for the unit gate too), as the platform's tests/offline_env.py does
     "FINPLAN_RELEASE_BUILD": "0",
+    # RL-07 build guard: a learner run asking for more steps than the fixture count fails
+    # (finplan_model.rl.train.check_step_limit); RL training runs only in SageMaker Training jobs
+    "FINPLAN_LEARNER_STEP_LIMIT": "512",
     OFFLINE_MARKER: "1",
 }
 

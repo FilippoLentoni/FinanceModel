@@ -4,10 +4,10 @@ Scope: FinanceModel phase 2 (contracts phase 3). Depends on `add-research-job-fo
 
 ## 1. RL environment and specification
 
-- [ ] 1.1 Implement the versioned environment specification schema (state features, action space and transform, reward terms and coefficients, episode, decision frequency) and include it in `configuration_id`; verify RL-01 unit tests (coefficient change gives a new `configuration_id`; undeclared feature fails)
-- [ ] 1.2 Implement the gym-style environment on top of the common simulator and dataset views, with rewards from simulator outputs; verify RL-02 by comparing a scripted policy's environment metrics with the evaluator's metrics for the same weights
+- [x] 1.1 Implement the versioned environment specification schema (state features, action space and transform, reward terms and coefficients, episode, decision frequency) and include it in `configuration_id`; verify RL-01 unit tests (coefficient change gives a new `configuration_id`; undeclared feature fails)
+- [x] 1.2 Implement the gym-style environment on top of the common simulator and dataset views, with rewards from simulator outputs; verify RL-02 by comparing a scripted policy's environment metrics with the evaluator's metrics for the same weights
 - [ ] 1.3 Implement the softmax action transform for PPO and SAC, and the discrete action-set schema for DQN; verify RL-03 (weights sum to 1 with cash) and RL-04 (continuous DQN rejected) unit tests
-- [ ] 1.4 Document the default environment specification in `docs/rl-environment.md`, labeled as configuration pending user review; verify that the documented specification validates
+- [x] 1.4 Document the default environment specification in `docs/rl-environment.md`, labeled as configuration pending user review; verify that the documented specification validates
 
 ## 2. RL training and evaluation
 
@@ -15,8 +15,48 @@ Scope: FinanceModel phase 2 (contracts phase 3). Depends on `add-research-job-fo
 - [ ] 2.2 Add the RL job types to the job interface (one Training Job per configuration and seed, CPU lease, time limits, budget check); verify JOB contract tests for the new job types and RL-07 unit tests on the generated `CreateTrainingJob` request (CPU instance, stopping condition, tags)
 - [ ] 2.3 Implement seed sweeps (default 5, minimum 3), validation-only selection, and registration of each trained policy with checksum, seed and `configuration_id`; verify RL-05 (test-metric selection rule refused) and RL-07 (registry entry per policy)
 - [ ] 2.4 Report shaped rewards only in the training-reward section, and flag out-of-configuration evaluations as ineligible for promotion; verify RL-06 and RL-08 unit tests
-- [ ] 2.5 Guard the build stage against learner runs beyond the fixture step count; verify the RL-07 build-guard test fails a planted long training test
+- [x] 2.5 Guard the build stage against learner runs beyond the fixture step count; verify the RL-07 build-guard test fails a planted long training test
 - [ ] 2.6 Run one approved PPO and SAC seed sweep on synthetic data in beta through the job interface; verify RL-02, RL-05 and RL-07 integration-beta (report shows all seeds and dispersion; cost records present in `cpu_research`)
+
+Implementation notes for groups 1 and 2 (2026-10-08, verified locally on synthetic data):
+
+- **1.1** `finplan_model.rl.spec.EnvSpec` (`finplan-rl-env/1`). The policy configuration covers the
+  specification, the algorithm hyperparameters, the simulation configuration id, the training range
+  and the instruments. Verified by:
+  - `tests/unit/rl/test_rl_env.py::test_rl01_reward_coefficient_change_gives_a_new_configuration_id`;
+  - `::test_rl01_undeclared_or_unknown_features_fail_validation`.
+- **1.2** `finplan_model.rl.env.PortfolioEnv` (gymnasium) replicates the simulator's accounting on
+  aligned arrays: execution timing, fees, spread, slippage, the liquidity cap, cash scaling and
+  `apply_constraints`. Rewards come from the simulated net values. Verified by:
+  - `::test_rl02_environment_nav_matches_the_common_evaluator_for_the_same_policy`;
+  - `::test_rl02_scripted_buy_and_hold_parity_with_costs_and_cash_interest` (NAV within 1e-6 of
+    the capital).
+- **1.3** Partly done. The softmax transform and RL-03 are verified
+  (`::test_rl03_softmax_transform_gives_long_only_weights_summing_to_one_with_cash`). The DQN
+  discrete action-set schema and RL-04 are **not implemented**: `dqn` is refused as an unknown
+  algorithm.
+- **1.4** `docs/rl-environment.md`, labeled configuration pending user review. Verified by
+  `::test_documented_default_specification_validates_and_is_the_configured_one`.
+- **2.1** Partly done. There is no separate `financemodel-rl` image: the `financemodel-cpu` image
+  installs the locked `rl` extra (task 10.3). The local run of the job entry point on fixtures
+  produces policy artifacts with checksums and makes no AWS call
+  (`tests/unit/selection/test_model_selection_job.py::test_local_container_run_produces_policy_artifacts_without_aws`).
+  The docker build itself is verified only in the pipeline build stage.
+- **2.2** Not done as written. RL trains inside the single `model_selection` Training job
+  (task 10.2, design D1a), not in one Training job per configuration and seed.
+- **2.3** Partly done:
+  - Done: seed sweeps (default 5, minimum 3), validation-only selection and RL-05
+    (`tests/unit/selection/test_model_selection.py::test_rl05_selection_rules_referencing_test_or_holdout_are_refused`).
+  - Done: each policy is recorded with its checksum, seed and `configuration_id` in the result and as
+    an `rl_policy` artifact.
+  - **Not done:** minting a registry `model_version` per policy. The job role may write only the
+    registry's `runs/*`.
+- **2.4** Partly done. RL-06 is verified
+  (`::test_rl06_training_rewards_are_a_separate_section`). The RL-08 out-of-configuration flag is
+  not implemented, because policies are evaluated only in the run that trained them.
+- **2.5** `FINPLAN_LEARNER_STEP_LIMIT` (512) is set by the offline harness, and learner runs above
+  it fail with `OPERATION_NOT_PERMITTED`. Verified by
+  `tests/unit/rl/test_rl_training.py::test_rl07_learner_runs_beyond_the_fixture_step_count_are_refused_in_the_build`.
 
 ## 3. Qwen3.6-27B weight staging
 
@@ -88,6 +128,57 @@ Scope: FinanceModel phase 2 (contracts phase 3). Depends on `add-research-job-fo
 - [ ] 9.2 Extend beta and gamma pipeline tests with CPU stub runs of every new job type (no GPU; Jev against the mock only); verify integration-beta and gamma pass, no GPU job appears in the stage's SageMaker calls, and no request reaches the TypeSafe API host
 - [ ] 9.3 In gamma, run isolation checks for the new roles (no prod storage, no external LLM egress from swarm roles, Jev role limited to the TypeSafe API and its one secret, no endpoint invoke by other principals); verify INF-01, INF-07, WST-02 and JEV-11 gamma
 - [ ] 9.4 Prod smoke: dry-run submissions for each new job type (validation and estimate only; Jev dry run returns the AWS and TypeSafe estimates without calling the API) and an orphan-sweeper dry run; verify the smoke passes with no SageMaker job or endpoint created
+
+## 10. Offline model selection (decision 27, 2026-10-08)
+
+- [x] 10.1 Implement the model-selection protocol (`finplan_model.selection.protocol`). It covers
+  2025-2026 data only, train 2025, validation 2026H1, test 2026-07-01..latest, the three
+  families, the traditional and RL grids, at least 3 seeds and validation-only selection. It is held
+  in `config/<env>.json`, validated by the config gate and frozen into each run at submission.
+  Verify the protocol unit tests: the decision 27 defaults; selection on test or holdout gives
+  `OPERATION_NOT_PERMITTED`; overlapping splits, fewer than 3 seeds and bad grids give
+  `VALIDATION_FAILED`; the same protocol is used in every environment.
+- [x] 10.2 Add the `model_selection` job kind as **one CPU SageMaker Training job** (design D1a):
+  - control-plane support for `sagemaker_job: training` (`CreateTrainingJob`, `Describe`, `Stop`,
+    the Training state-change rule, and IAM on `training-job/fm-<env>-*`);
+  - the 3000 s cap and the build cost check (USD 0.28/h planning bound x 3000 s <= USD 0.25);
+  - submission validation (strategy `model_selection`, purpose `research` or `holdout_evaluation`,
+    not the daily trigger).
+
+  Verify `tests/unit/selection/test_model_selection_job.py`: the request validates against the
+  SageMaker API model; it uses the CPU instance, stopping condition, cost tags and disabled
+  profiler; the estimate is under USD 0.25; cancel uses `StopTrainingJob`; `MaxRuntimeExceeded`
+  gives `timed_out`. Also verify the synth test of the Training state-change rule and the IAM unit
+  test.
+- [x] 10.3 Add CPU torch, stable-baselines3 and gymnasium as the locked `rl` extra:
+  - exact pins, the PyTorch CPU index and hashes in `uv.lock`;
+  - the job image installs `--extra rl`; the Lambda bundle does not;
+  - the image import check covers the learners and requires `torch.version.cuda is None`.
+
+  Verify `tests/unit/jobs/test_container_image.py`: the lock and hash test, the no-CUDA test, and
+  that the control plane imports without the learners. Also run the import check locally with the
+  locked environment.
+- [x] 10.4 Report the following:
+  - the test comparison as `payload.benchmark`;
+  - per-split comparisons with family, params, seed, selected and incumbent;
+  - the traditional tuning tables and the RL grid with checkpoints;
+  - every seed's train, validation and test metrics with their mean, standard deviation, minimum
+    and maximum;
+  - a separate training-reward section, the frozen selection record, and the criteria v1 promotion
+    check against the incumbent (`buy_and_hold` fallback);
+  - the test-reuse count, the compute and cost record and the policy artifacts;
+  - the mandatory bias section and caveats, including "about 250 training days is thin for RL" and
+    hindsight and survivorship.
+
+  Verify `tests/unit/selection/test_model_selection.py` and the job result contract validation
+  (`test_container_run_writes_a_contract_result_with_every_section`).
+- [ ] 10.5 Deployed: the beta and gamma suites dry-run `model_selection`, which is validated and
+  estimated at or below USD 0.25 with nothing recorded
+  (`tests/integration/test_deployed_environment.py::test_model_selection_kind_is_deployed_and_estimated_under_the_auto_approve_threshold`).
+- [ ] 10.6 Run one `model_selection` in beta on the approved research-universe snapshot, at the
+  user's request. Verify: the run succeeds within 3000 s; all 5 seeds per RL algorithm are reported;
+  the cost record is in `cpu_research`; the test is evaluated once; and the result is reviewed with
+  the user before any production-strategy selection.
 
 ## Requirement-to-test mapping
 
