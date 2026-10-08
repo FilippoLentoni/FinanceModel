@@ -46,6 +46,9 @@ def test_training_is_seeded_and_the_stored_policy_evaluates_deterministically(al
     tr = a.training_reward
     assert "not portfolio performance" in tr["note"] and tr["episodes"] >= 1
     assert not {"total_return", "sharpe", "max_drawdown"} & set(tr)  # RL-06: reward section only
+    if algo == "ppo":
+        assert tr["optimizer_updates"] and "explained_variance" in tr["optimizer_updates"][0]
+        assert tr["checkpoint_improved_over_initial"] == (a.best_step > 0)
 
 
 def test_different_seeds_give_different_policies():

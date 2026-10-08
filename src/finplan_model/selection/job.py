@@ -302,9 +302,9 @@ def select_models(
         for row, c in zip(section["strategies"], candidates):
             row["family"] = c.family
             row["params"] = dict(c.params)
-            if c.seed is not None:
-                row["seed"] = c.seed
+            if c.family == "rl":
                 row["configuration_id"] = c.configuration_id
+                row["seed"] = c.seed
             row["selected"] = c.name == selected.name
             row["incumbent"] = c.name == incumbent_name
         comparisons[split] = section
@@ -314,6 +314,8 @@ def select_models(
         block["seeds"] = [{**r, "selected": r["seed"] == block["chosen"]["seed"]} for r in rows]
         block["seed_statistics"] = {s: seed_statistics(rows, s) for s in ("train", "validation", "test")}
     gate = promotion_check(selected, inc, incumbent_source)
+    if prior_test_accesses:
+        gate.update(result="research_only", reason="test_period_reused_for_development")
     n_train = len([s for s in mkt.sessions if windows["train"][0] <= s <= windows["train"][1]])
     summary: dict[str, Any] = {
         "schema": SCHEMA,
@@ -342,7 +344,7 @@ def select_models(
         "training_reward": {"note": "shaped RL training rewards; reported separately and never as portfolio performance", "reward_formula": _reward_formula(), "runs": training_reward},
         "promotion_check": gate,
         "test_access": {"evaluated_once_in_this_run": True, "split_evaluations": dict(ev.calls), "prior_runs_on_this_test_period": int(prior_test_accesses), "test_reuse": int(prior_test_accesses) > 0},
-        "caveats": caveats(n_train, windows, mkt, rl_section),
+        "caveats": caveats(n_train, windows, mkt, rl_section, reused=bool(prior_test_accesses)),
         "compute": {"phase_seconds": phases, "wall_seconds": round(clock() - t_start, 3)},
     }
     evidence = {
@@ -380,7 +382,7 @@ def _run_rl(
 ) -> list[Candidate]:
     from finplan_model.core.ids import configuration_id
     from finplan_model.rl.arrays import PriceArrays
-    from finplan_model.rl.policy import RLPolicyStrategy
+    from finplan_model.rl.policy import EnsemblePolicyStrategy, RLPolicyStrategy
     from finplan_model.rl.spec import EnvSpec, policy_configuration
     from finplan_model.rl.train import load_predictor, train_policy
 
@@ -426,7 +428,9 @@ def _run_rl(
             mean_score = statistics.fmean(finite) if finite else -math.inf
             configs.append({"point": point, "configuration_id": cid, "configuration": conf, "seeds": seeds, "runs": runs, "mean": mean_score})
             training_reward.setdefault(algo, []).extend({"reward": dict(point), **{k: v for k, v in r.items() if k in ("seed", "status", "training_reward", "timesteps_trained", "best_step", "stopped_reason", "seconds")}} for r in runs)
-        trained = [c for c in configs if c["seeds"]]
+        # An incomplete seed grid cannot win by omitting its slower or unlucky seeds.
+        trained = [c for c in configs if len(c["seeds"]) == len(rl_proto["seeds"])
+                   and not any(r.get("stopped_reason") == "time_budget" for r in c["runs"])]
         if not trained:
             rl_section[algo] = {"status": "not_trained_time_budget", "grid": [{"reward": c["point"], "configuration_id": c["configuration_id"], "runs": c["runs"]} for c in configs]}
             continue
@@ -441,7 +445,16 @@ def _run_rl(
         for c in best_cfg["seeds"]:
             c.results["train"] = ev.run(c.factory(), "train")
         rl_seed_candidates[algo] = best_cfg["seeds"]
-        chosen.append(best_seed)
+        policy_selection = rl_proto.get("policy_selection", "best_seed")
+        candidate = best_seed
+        if policy_selection == "ensemble":
+            factories = [c.factory for c in best_cfg["seeds"]]
+            ensemble_id = configuration_id({"base_configuration_id": best_cfg["configuration_id"], "seeds": list(rl_proto["seeds"]), "aggregation": "mean_target_weights"})
+            candidate = Candidate(algo, "rl", {"reward": dict(best_cfg["point"]), "policy_selection": "ensemble", "seeds": list(rl_proto["seeds"])},
+                                  lambda a=algo, fs=factories: EnsemblePolicyStrategy(a, [f() for f in fs]), configuration_id=ensemble_id)
+            for split in ("train", "validation"):
+                candidate.results[split] = ev.run(candidate.factory(), split)
+        chosen.append(candidate)
         rl_section[algo] = {
             "status": "trained",
             "hyperparameters": hp,
@@ -458,7 +471,8 @@ def _run_rl(
                 }
                 for c in configs
             ],
-            "chosen": {"reward": best_cfg["point"], "configuration_id": best_cfg["configuration_id"], "seed": best_seed.seed, "rule": f"configuration: highest mean validation {metric} across seeds; seed: highest validation {metric} within it"},
+            "chosen": {"reward": best_cfg["point"], "configuration_id": candidate.configuration_id, "seed": candidate.seed, "policy_selection": policy_selection,
+                       "rule": f"configuration: highest mean validation {metric} across all requested seeds; policy: " + ("mean target weights of every seed" if policy_selection == "ensemble" else f"highest validation {metric} seed within it")},
             "deterministic_evaluation": True,
         }
     return chosen
@@ -476,15 +490,17 @@ def promotion_check(selected: Candidate, incumbent: Candidate | None, source: st
     return {**out, "candidate_test": {"total_return": a.get("total_return"), "max_drawdown": a.get("max_drawdown")}, "incumbent_test": {"total_return": b.get("total_return"), "max_drawdown": b.get("max_drawdown")}, "r1_net_return_beats_incumbent": bool(r1), "r2_drawdown_not_worse": bool(r2), "result": "pass" if r1 and r2 else "fail"}
 
 
-def caveats(n_train: int, windows: Mapping[str, tuple[date, date]], mkt: MarketData, rl_section: Mapping[str, Any]) -> list[dict[str, str]]:
+def caveats(n_train: int, windows: Mapping[str, tuple[date, date]], mkt: MarketData, rl_section: Mapping[str, Any], *, reused: bool = False) -> list[dict[str, str]]:
     n_test = len([s for s in mkt.sessions if windows["test"][0] <= s <= windows["test"][1]])
     out = [
         {"kind": "thin_rl_training_data", "text": f"The RL policies were trained on {n_train} daily sessions (one calendar year, one decision per trading day). About 250 training days is thin for reinforcement learning: expect large seed-to-seed variance and overfitting to the training year; treat RL results as exploratory, not as evidence of a durable edge."},
         {"kind": "hindsight_and_survivorship", "text": "The research universe was chosen in 2026 knowing that these instruments did well (hindsight selection), and it contains no failed or delisted companies (survivorship). Every family benefits from this choice, so absolute returns overstate what a forward-looking investor could expect; compare families with each other rather than with the market."},
-        {"kind": "short_single_test_period", "text": f"The untouched test period has {n_test} sessions and is a single market path; a test ranking is not statistically significant. Live paper trading afterwards is the forward test."},
-        {"kind": "validation_reuse", "text": "Grid points, RL checkpoints, RL reward configurations and RL seeds were all chosen on the same six-month validation period, so validation scores are optimistic; only the test numbers are out of sample."},
+        {"kind": "short_single_test_period", "text": f"The {'reused development' if reused else 'test'} period has {n_test} sessions and is a single market path; a ranking is not statistically significant. Live paper trading afterwards is the forward test."},
+        {"kind": "validation_reuse", "text": "Grid points, RL checkpoints and reward configurations were chosen on the same validation period, so validation scores are optimistic. A previously inspected test is also development evidence, not independent confirmation."},
         {"kind": "reward_is_not_performance", "text": "RL training rewards are shaped (risk, drawdown and turnover penalties, scaled) and appear only in the training-reward section; portfolio results come from the common evaluator."},
     ]
+    if reused:
+        out.append({"kind": "test_reuse", "text": "This market path has already been inspected in prior research runs. It cannot establish an out-of-sample edge or qualify this run for promotion."})
     if any(isinstance(v, Mapping) and v.get("status") != "trained" for v in rl_section.values()):
         out.append({"kind": "rl_time_budget", "text": "At least one RL algorithm or seed was skipped because the job's runtime budget ran out; see the rl section."})
     return out
@@ -513,10 +529,6 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
         ref = inp.artifacts.put(data, kind="rl_policy", content_type="application/zip", synthetic=synthetic, domain="finance")
         refs.append(ref)
         policy_rows.append({**meta, "artifact_id": ref.artifact_id, "size_bytes": len(data)})
-    evidence = {**out.evidence, "policies": policy_rows}
-    if section is not None:
-        evidence["bias_section"] = section
-    refs.insert(0, inp.artifacts.put_json(evidence, kind="run_artifact", synthetic=synthetic, domain="finance"))
     summary = out.summary
     summary["policies"] = policy_rows
     est = (spec.get("cost_estimate") or {}).get("estimated_usd_upper_bound")
@@ -535,17 +547,36 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
             "budget_category": "cpu_research",
         }
     )
+    # Serialize the full diagnostics before compacting the API response. Previously the evidence
+    # artifact omitted the summary, so removing checkpoint curves lost them permanently.
+    evidence = {**out.evidence, "policies": policy_rows, "summary": summary}
+    if section is not None:
+        evidence["bias_section"] = section
+    full = inp.artifacts.put_json(evidence, kind="run_artifact", synthetic=synthetic, domain="finance")
+    refs.insert(0, full)
+    summary["full_diagnostics_artifact_id"] = full.artifact_id
     doc = succeeded_result(inp.ctx, spec, solution_status=out.selected.results["test"].solution_status, artifacts=refs, performance=out.performance, dataset_checksum=inp.market.dataset_checksum, instance_seconds=wall, benchmark=out.test_section)
     doc["payload"]["model_selection"] = summary
     doc = _with_bias(doc, section)
     size = len(canonical_json_bytes(doc))
     if size > MAX_RESULT_BYTES:
-        # keep the decision-relevant parts; the full detail is in the evidence artifact
-        for block in summary.get("rl", {}).values():
-            for g in block.get("grid", []) if isinstance(block, Mapping) else []:
-                for ck in g.get("checkpoints", []):
-                    ck.pop("curve", None)
+        # Keep every validation curve and sample only the verbose optimizer history. Preserve the
+        # initial, selected-checkpoint and final update alongside uniformly spaced points.
+        for runs in summary.get("training_reward", {}).get("runs", {}).values():
+            for run in runs:
+                tr = run.get("training_reward", {})
+                updates = tr.get("optimizer_updates", [])
+                if len(updates) <= 16:
+                    continue
+                indices = {round(i * (len(updates) - 1) / 11) for i in range(12)}
+                before = [i for i, row in enumerate(updates) if row["step"] < run.get("best_step", 0)]
+                if before:
+                    indices.add(before[-1])
+                tr["optimizer_update_count"] = len(updates)
+                tr["optimizer_updates"] = [updates[i] for i in sorted(indices)]
+                tr["optimizer_updates_compacted"] = True
         summary["result_trimmed"] = True
+        summary["result_trimmed_sections"] = ["training_reward.optimizer_updates"]
     from finplan_model.control.validation import find_storage_location
     from finplan_model.core.outcome import require_valid
 

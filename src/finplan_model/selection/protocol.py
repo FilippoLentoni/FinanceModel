@@ -159,6 +159,8 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         for point in grid_points(block["grid"]):
             build_strategy(name, {**dict(block.get("fixed") or {}), **point}, pointer=f"/traditional/{name}")
     rl = p["rl"]
+    if rl.get("policy_selection", "best_seed") not in ("best_seed", "ensemble"):
+        raise FinplanError.validation("policy_selection must be best_seed or ensemble", pointer="/rl/policy_selection")
     algos = list(rl.get("algorithms") or [])
     if not algos or not set(algos) <= set(RL_NAMES) or len(set(algos)) != len(algos):
         raise FinplanError.validation("rl.algorithms lists ppo and/or sac", pointer="/rl/algorithms")
