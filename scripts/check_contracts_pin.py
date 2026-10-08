@@ -13,9 +13,13 @@ Fails ("Digest mismatch" or a named problem) unless ALL of these agree:
 
 ``--env gamma|prod`` fails for a 0.x pin: 0.x is beta-only (contracts ``docs/consumer-pinning.md``).
 There is no ``--rebuild``: FinanceModel never holds the contract sources (CS-01). The vendored wheel
-is the platform's reproducible build of 1.0.0, byte for byte: the same artifact the platform build
+is the platform's reproducible build of the pinned version, byte for byte: the same artifact the platform build
 publishes to CodeArtifact (it refuses to publish different bytes under the same version), so the
-pinned digest also identifies the registry artifact. 1.0.0 passes ``--env`` in every environment.
+pinned digest also identifies the registry artifact. 1.x passes ``--env`` in every environment.
+
+``--repin --from <wheel>`` re-pins to another platform wheel: it copies the wheel into
+``vendor/finplan-contracts/``, rewrites ``contracts-pin.json`` (version, artifact, sha256) and the
+``pyproject.toml`` dependency and source; run ``uv sync`` afterwards to refresh ``uv.lock``.
 
 Exit codes: 0 ok, 1 mismatch, 2 usage/config error. Runs offline.
 """
@@ -32,7 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-__all__ = ["check", "load_pin", "main"]
+__all__ = ["check", "load_pin", "main", "repin"]
 
 
 def _sha256(path: Path) -> str:
@@ -118,12 +122,52 @@ def check(root: Path = ROOT, *, env: str | None = None, pin_path: Path | None = 
     return problems
 
 
+def repin(wheel: Path, root: Path = ROOT, pin_path: Path | None = None) -> dict:
+    """Re-pin to ``wheel`` (a platform-built ``finplan_contracts-<ver>-py3-none-any.whl``)."""
+    import shutil
+
+    m = re.fullmatch(r"finplan_contracts-([0-9]+\.[0-9]+\.[0-9]+)-py3-none-any\.whl", wheel.name)
+    if not m or not wheel.is_file():
+        raise ValueError(f"{wheel} is not a finplan_contracts wheel")
+    version = m.group(1)
+    dest_rel = f"vendor/finplan-contracts/{wheel.name}"
+    dest = root / dest_rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if wheel.resolve() != dest.resolve():
+        shutil.copyfile(wheel, dest)
+    pin_file = pin_path or root / "contracts-pin.json"
+    pin = load_pin(root, pin_path)
+    old_artifact = pin["artifact"]
+    old_version = pin["version"]
+    pin.update(version=version, artifact=dest_rel, sha256=_sha256(dest))
+    pin_file.write_text(json.dumps(pin, indent=2) + "\n", encoding="utf-8")
+    pyproject = root / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    text = text.replace(f'"{pin["package"]}=={old_version}"', f'"{pin["package"]}=={version}"')
+    text = text.replace(f'path = "{old_artifact}"', f'path = "{dest_rel}"')
+    pyproject.write_text(text, encoding="utf-8")
+    return pin
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--pin", type=Path, help="pin file (default: <root>/contracts-pin.json)")
     ap.add_argument("--env", choices=["beta", "gamma", "prod"], help="deployment target (0.x pins are beta-only)")
+    ap.add_argument("--repin", action="store_true", help="re-pin to the wheel given by --from, then run `uv sync`")
+    ap.add_argument("--from", dest="from_wheel", type=Path, help="platform-built wheel to re-pin to (with --repin)")
     args = ap.parse_args(argv)
+    if args.repin:
+        if not args.from_wheel:
+            print("ERROR: --repin requires --from <wheel>", file=sys.stderr)
+            return 2
+        try:
+            pin = repin(args.from_wheel, args.root, args.pin)
+        except (OSError, KeyError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"REPINNED: {pin['package']} {pin['version']} sha256 {pin['sha256']}; now run `uv sync`")
+        return 0
     try:
         problems = check(args.root, env=args.env, pin_path=args.pin)
     except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:

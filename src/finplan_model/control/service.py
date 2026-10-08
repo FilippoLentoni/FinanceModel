@@ -41,6 +41,7 @@ from finplan_model.jobs.runio import RunIO
 from finplan_model.jobs.spec import build_run_spec, simulation_config_for
 
 from . import costs
+from . import production_strategy as ps
 from .auth import Principal
 from .leases import LeaseManager
 from .sagemaker import SAGEMAKER_TERMINAL, build_processing_request, classify_start_error, run_id_from_job_name, terminal_outcome
@@ -213,16 +214,41 @@ class JobService:
             if replay is not None:
                 return replay
         sub = validate_submission(body, self.cfg, job_definition_published=lambda jt: self.d.settings.job_definition(jt) is not None)
-        if sub.purpose == "production_candidate":
+        daily = sub.job_type.name == ps.DAILY_JOB_TYPE
+        trigger = principal.role_name == ps.daily_trigger_role_name(self.env)
+        if daily and not trigger:
+            raise FinplanError(ErrorCode.FORBIDDEN, "only the platform daily trigger submits daily_recommendation", details={"job_type": ps.DAILY_JOB_TYPE})
+        if trigger and not daily:
+            raise FinplanError(ErrorCode.FORBIDDEN, "the platform daily trigger submits daily_recommendation only; experiments are user-initiated", details={"job_type": sub.job_type.name})
+        all_runs: list[dict[str, Any]] | None = None
+        production: dict[str, Any] | None = None
+        if daily:
+            if sub.purpose != "production_candidate":
+                raise FinplanError.validation("daily_recommendation runs with purpose production_candidate only", pointer="/purpose")
+            if not body.get("plan_id"):
+                raise FinplanError.validation("daily_recommendation needs the plan_id it stages against", pointer="/plan_id")
+            all_runs = list(iter_runs(self.store))
+            production = self._production_strategy(body, all_runs)
+        elif sub.purpose == "production_candidate":
             principal.require_production_candidate_grant(self.d.settings.production_candidate_principals())
         synthetic = sub.synthetic
+        dataset_id: str | None = None
+        disclosures: list[dict[str, Any]] | None = None
         if self.d.platform is not None:
             snap = SnapshotReader(self.d.platform).resolve(str(body["input_snapshot_id"]))
             synthetic = synthetic or snap.synthetic
+            dataset_id = snap.dataset_id or None
+            disclosures = list(snap.record.get("bias_disclosures") or []) or None
+            universe = ps.is_universe_dataset(dataset_id)
+            if daily and not universe:
+                raise FinplanError.validation("daily_recommendation needs an approved equity-etf-daily snapshot", pointer="/input_snapshot_id")
+            if universe and not disclosures:
+                raise FinplanError.validation("the universe snapshot carries no bias disclosures", pointer="/input_snapshot_id", reason="bias_disclosures_missing")
         payload = body["configuration"]["payload"]
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
         est = costs.estimate(self.cfg, sub.job_type, instance_type=sub.instance_type, instance_count=sub.instance_count, max_runtime_seconds=sub.max_runtime_seconds, prices=self.d.settings.instance_prices(), now=self.now())
-        all_runs = list(iter_runs(self.store))
+        if all_runs is None:
+            all_runs = list(iter_runs(self.store))
         remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id)
         block = est.block(remaining, synthetic=synthetic)
         require_valid(block, "cost-estimate")
@@ -236,7 +262,8 @@ class JobService:
         if waiting >= int(self.cfg.queue["max_depth"]):
             raise FinplanError(ErrorCode.RATE_LIMITED, "the job queue is full; retry later", details={"max_depth": int(self.cfg.queue["max_depth"])})
         gpu = sub.job_type.compute_class == "gpu" or est.budget_category == "gpu"
-        needs_approval = gpu or est.estimated_usd_upper_bound > self.d.settings.auto_approve_usd() + 1e-12
+        threshold = sub.job_type.auto_approve_usd if sub.job_type.auto_approve_usd is not None else self.d.settings.auto_approve_usd()
+        needs_approval = gpu or est.estimated_usd_upper_bound > threshold + 1e-12
         state = "awaiting_approval" if needs_approval else "queued"
         now = self.ts()
         run_id = self.d.ids.run_id()
@@ -245,6 +272,9 @@ class JobService:
             jd = self.d.settings.job_definition(sub.job_type.name) or {}
             uri = str(jd.get("image_uri") or "")
             model_version = self.d.model_version_resolver(payload.get("strategy"), uri.rsplit("@", 1)[1] if "@" in uri else None)
+        if production is not None:
+            production = {**production, "configuration_id": sub.configuration_id, "model_version": model_version or production.get("model_version")}
+            production = {k: v for k, v in production.items() if v is not None}
         run: dict[str, Any] = {
             "run_id": run_id,
             "environment": self.env,
@@ -291,6 +321,10 @@ class JobService:
             "cancel_reason": None,
             "estimated_cost_usd": est.estimated_usd_upper_bound,
             "actual_cost_usd": None,
+            "dataset_id": dataset_id,
+            "plan_id": body.get("plan_id"),
+            "production_strategy": production,
+            "bias_disclosures": disclosures,
         }
         message = "A human approver must approve this run before it starts." if needs_approval else "Queued; the run starts when a concurrency lease is free."
         resp = {"run_id": run_id, "configuration_id": sub.configuration_id, "state": state, "dry_run": False, "cost_estimate": block, "message": message}
@@ -311,6 +345,23 @@ class JobService:
         if state == "queued":
             self._kick(run_id)
         return 202, resp
+
+    def _production_strategy(self, body: Mapping[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
+        """M2: resolve the strategy from the SSM key at submission and re-validate it (nothing starts otherwise)."""
+        getter = getattr(self.d.settings, "production_strategy", None)
+        doc = ps.parse_document(getter() if callable(getter) else None)
+        if doc is None:
+            raise FinplanError.precondition("no production strategy is selected in this environment", reason="no_production_strategy")
+        strategy_id = str(doc["strategy_id"])
+        verdict = ps.eligibility(strategy_id, cfg=self.cfg, runs=runs, model_version=doc.get("model_version"))
+        if not verdict.ok:
+            raise FinplanError.precondition("the selected production strategy is no longer eligible", reason="strategy_not_eligible", rule=verdict.rule)
+        requested = body["configuration"]["payload"].get("strategy")
+        if requested not in (None, strategy_id):
+            raise FinplanError.validation("the request names a different strategy than the production strategy", pointer="/configuration/payload/strategy", field="strategy_id")
+        if requested is None:
+            raise FinplanError.validation("the configuration must name the production strategy", pointer="/configuration/payload/strategy", field="strategy_id")
+        return {"strategy_id": strategy_id, "model_version": doc.get("model_version"), "evidence_run_id": verdict.evidence_run_id}
 
     def _idem_record(self, scope_key: str, principal: Principal, operation: str, key: str, body: Mapping[str, Any], resp: Mapping[str, Any], status: int) -> dict[str, Any]:
         now = self.now()

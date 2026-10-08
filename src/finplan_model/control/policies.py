@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["DENIED_APPROVER_ROLE_PATTERNS", "approver_identity_policy", "approver_role_name", "gateway_responses", "job_api_resource_policy"]
+__all__ = ["DENIED_APPROVER_ROLE_PATTERNS", "approver_identity_policy", "approver_role_name", "daily_trigger_role_name", "gateway_responses", "job_api_resource_policy", "strategy_writer_role_patterns"]
 
 #: Role-name patterns explicitly denied ``approve_run`` (agents, tool wrappers, pipelines, service roles).
 DENIED_APPROVER_ROLE_PATTERNS = (
@@ -57,9 +57,8 @@ def job_api_resource_policy(
     approver_arn = _role_arn(approver, partition, account)
     invokers = sorted({_role_arn(p, partition, account) for p in invoker_role_patterns} | {approver_arn})
     approve = f"{api_resource}/POST/v1/jobs/*/approve"
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
+    trigger_arn = _role_arn(daily_trigger_role_name(env), partition, account)
+    statements: list[dict[str, Any]] = [
             {
                 "Sid": "AllowGrantedInvokers",
                 "Effect": "Allow",
@@ -67,6 +66,31 @@ def job_api_resource_policy(
                 "Action": "execute-api:Invoke",
                 "Resource": f"{api_resource}/*",
                 "Condition": {"ArnLike": {"aws:PrincipalArn": invokers}},
+            },
+            {
+                # contracts 1.1.0: the platform daily trigger submits daily_recommendation and polls it
+                "Sid": "AllowDailyTriggerSubmitAndStatus",
+                "Effect": "Allow",
+                "Principal": {"AWS": "*"},
+                "Action": "execute-api:Invoke",
+                "Resource": [f"{api_resource}/POST/v1/jobs", f"{api_resource}/GET/v1/jobs/*"],
+                "Condition": {"ArnEquals": {"aws:PrincipalArn": trigger_arn}},
+            },
+            {
+                "Sid": "DenyDailyTriggerOtherRoutes",
+                "Effect": "Deny",
+                "Principal": {"AWS": "*"},
+                "Action": "execute-api:Invoke",
+                "Resource": [f"{api_resource}/GET/v1/jobs", f"{api_resource}/POST/v1/jobs/*", f"{api_resource}/GET/v1/production-strategy", f"{api_resource}/PUT/v1/production-strategy", f"{api_resource}/GET/v1/registry/*"],
+                "Condition": {"ArnEquals": {"aws:PrincipalArn": trigger_arn}},
+            },
+            {
+                "Sid": "DenyStrategyChangeExceptPlanWriterAndOperator",
+                "Effect": "Deny",
+                "Principal": {"AWS": "*"},
+                "Action": "execute-api:Invoke",
+                "Resource": f"{api_resource}/PUT/v1/production-strategy",
+                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [_role_arn(p, partition, account) for p in strategy_writer_role_patterns(env)]}},
             },
             {
                 "Sid": "DenyApproveExceptApproverRole",
@@ -84,8 +108,19 @@ def job_api_resource_policy(
                 "Resource": approve,
                 "Condition": {"ArnLike": {"aws:PrincipalArn": [_role_arn(p, partition, account) for p in DENIED_APPROVER_ROLE_PATTERNS]}},
             },
-        ],
-    }
+    ]
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def daily_trigger_role_name(env: str) -> str:
+    """``finplan-<env>-financialplanning-daily-trigger-step-role`` (POST /v1/jobs, GET /v1/jobs/* only)."""
+    return f"finplan-{env}-financialplanning-daily-trigger-step-role"
+
+
+def strategy_writer_role_patterns(env: str) -> list[str]:
+    """Callers allowed ``PUT /v1/production-strategy``: the tool plan-writer role and the platform
+    operator roles (``operator-pipeline-stage`` runs FinancialPlanning DLY-08)."""
+    return [f"finplan-{env}-financelambdastool-*plan-writer*", f"finplan-{env}-financialplanning-operator*"]
 
 
 def approver_identity_policy(api_resource: str) -> dict[str, Any]:

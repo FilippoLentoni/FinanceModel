@@ -35,6 +35,17 @@ def test_valid_contract_submissions_are_accepted(name, doc):
     if doc.get("compute_class") == "gpu":
         pytest.skip("no GPU job type is deployed in phase 1")
     h = Harness()
+    if doc.get("job_type") == "daily_recommendation":  # contracts 1.1.0: the platform trigger's kind
+        from tests.unit.control.test_daily_and_strategy import TRIGGER, _selected
+
+        _selected(h, "equal_weight")
+        body = json.loads(json.dumps(doc))
+        body.pop("configuration_id", None)
+        body.update(contract_version=contract_version(), compute_class="cpu", dry_run=True)
+        body["configuration"]["payload"].update(strategy="equal_weight", universe=["VOO"])
+        code, resp = h.service.submit_job(Principal.from_arn(TRIGGER), body, correlation_id="corr-contract-0001")
+        assert code == 200 and validate(resp, "tools/submit-experiment-response").valid
+        return
     code, resp = h.service.submit_job(Principal.from_arn(SUBMITTER), {**_as_ours(doc), "dry_run": True}, correlation_id="corr-contract-0001")
     assert code == 200 and validate(resp, "tools/submit-experiment-response").valid
 

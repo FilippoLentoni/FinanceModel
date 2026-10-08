@@ -69,6 +69,11 @@ class JobTypeConfig:
     compute_class: str
     deployed: bool
     entry_point: str
+    #: Per-kind approval ceiling (USD): runs estimated at or below it need no human approval.
+    auto_approve_usd: float | None = None
+    #: Build cost check (DRJ-05): the upper-bound estimate at ``cost_check_usd_per_hour`` must not exceed it.
+    cost_cap_usd: float | None = None
+    cost_check_usd_per_hour: float | None = None
 
     @classmethod
     def from_dict(cls, name: str, d: Mapping[str, Any]) -> "JobTypeConfig":
@@ -83,6 +88,9 @@ class JobTypeConfig:
             compute_class=str(d.get("compute_class", "cpu")),
             deployed=bool(d.get("deployed", True)),
             entry_point=str(d.get("entry_point", name)),
+            auto_approve_usd=None if d.get("auto_approve_usd") is None else float(d["auto_approve_usd"]),
+            cost_cap_usd=None if d.get("cost_cap_usd") is None else float(d["cost_cap_usd"]),
+            cost_check_usd_per_hour=None if d.get("cost_check_usd_per_hour") is None else float(d["cost_check_usd_per_hour"]),
         )
 
 
@@ -174,6 +182,7 @@ _OWN_PARAMS = {
     "research_storage_ref": ("config", "research-storage-ref"),
     "approver_role_ref": ("config", "approver-role-ref"),
     "production_candidate_principals": ("config", "production-candidate-principals"),
+    "production_strategy": ("config", "production-strategy"),
 }
 _PLATFORM_PARAMS = {
     "plan_endpoint": ("api", "plan-endpoint"),
@@ -225,6 +234,7 @@ def validate_config(env: str, raw: Mapping[str, Any]) -> list[str]:
             problems.append(f"{p}: compute_class must be cpu or gpu")
         if j.max_instance_count < 1:
             problems.append(f"{p}: max_instance_count must be >= 1")
+        problems += daily_cost_problems(j, prefix=p)
     lease = raw["lease"]
     if not all(isinstance(v, int) and v >= 0 for v in lease.get("max_holders", {}).values()):
         problems.append(f"{env}: lease.max_holders values must be non-negative integers")
@@ -281,3 +291,27 @@ def load_shared_config(config_dir: Path | None = None) -> dict[str, Any]:
     if problems:
         raise ConfigError(problems)
     return raw
+
+
+#: Hard ceiling of the daily recommendation job's upper-bound estimate (design M4).
+DAILY_COST_CEILING_USD = 0.15
+
+
+def daily_cost_problems(j: JobTypeConfig, *, prefix: str = "") -> list[str]:
+    """DRJ-05 build check: the ``daily_recommendation`` estimate (one instance, max runtime, the
+    configured planning price) must stay within USD 0.15 and within its auto-approve ceiling."""
+    if j.name != "daily_recommendation":
+        return []
+    out: list[str] = []
+    if j.max_runtime_seconds > 1800 or j.default_instance_type != "ml.m5.xlarge" or j.max_instance_count != 1 or j.budget_category != "cpu_research":
+        out.append(f"{prefix}: daily_recommendation must be one ml.m5.xlarge, cpu_research, at most 1800 s")
+    if j.cost_check_usd_per_hour is None or j.cost_cap_usd is None or j.auto_approve_usd is None:
+        return [*out, f"{prefix}: daily_recommendation needs cost_check_usd_per_hour, cost_cap_usd and auto_approve_usd"]
+    est = j.cost_check_usd_per_hour * j.max_runtime_seconds / 3600.0 * j.max_instance_count
+    if j.cost_cap_usd > DAILY_COST_CEILING_USD + 1e-12:
+        out.append(f"{prefix}: cost_cap_usd {j.cost_cap_usd} exceeds the USD {DAILY_COST_CEILING_USD} ceiling")
+    if est > min(j.cost_cap_usd, DAILY_COST_CEILING_USD) + 1e-12:
+        out.append(f"{prefix}: daily_recommendation estimate USD {est:.4f} exceeds the USD {min(j.cost_cap_usd, DAILY_COST_CEILING_USD)} cap")
+    if est > j.auto_approve_usd + 1e-12:
+        out.append(f"{prefix}: daily_recommendation estimate USD {est:.4f} exceeds its auto-approve threshold USD {j.auto_approve_usd}")
+    return out

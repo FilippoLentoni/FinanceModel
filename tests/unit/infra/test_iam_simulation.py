@@ -210,3 +210,30 @@ def test_control_roles_arm_only_their_own_dispatcher_schedule(kind):
     assert allowed(role, "iam:PassRole", sched_role, **{"iam:PassedToService": "scheduler.amazonaws.com"})
     assert not allowed(role, "iam:PassRole", sched_role, **{"iam:PassedToService": "lambda.amazonaws.com"})
     assert not allowed(role, "iam:PassRole", _role_arn(n.role_name("prod", n.SCHEDULE_ROLE)), **{"iam:PassedToService": "scheduler.amazonaws.com"})
+
+
+# ----------------------------------------------------------------- PSS-03: single writer of the production-strategy key
+def test_pss03_only_the_selection_role_writes_the_production_strategy_key(api):
+    from finplan_contracts import ssm as contract_ssm
+
+    key = f"arn:aws:ssm:us-east-2:{ACCT}:parameter{contract_ssm.production_strategy_parameter(ENV)}"
+    sel = {"identity": [pol.strategy_selection_policy(ENV, **C)], "boundary": cb.env_permission_boundary(ENV, **C)}
+    for action in ("ssm:PutParameter", "ssm:DeleteParameter", "ssm:GetParameter"):
+        assert allowed(sel, action, key), action
+    assert not allowed(sel, "ssm:PutParameter", f"arn:aws:ssm:us-east-2:{ACCT}:parameter/finplan/{ENV}/financemodel/config/auto-approve-usd")
+    assert not allowed(sel, "ssm:PutParameter", f"arn:aws:ssm:us-east-2:{ACCT}:parameter/finplan/prod/financemodel/config/production-strategy")
+    assert not allowed(sel, "sagemaker:CreateProcessingJob", "*")
+    # the job API, dispatcher, state handler and job roles only read it
+    for kind in ("api", "dispatcher", "state"):
+        role = {"identity": [pol.control_role_policy(ENV, kind, **C)], "boundary": cb.env_permission_boundary(ENV, **C)}
+        assert not allowed(role, "ssm:PutParameter", key) and not allowed(role, "ssm:DeleteParameter", key)
+    assert allowed(api, "ssm:GetParameter", key)
+    job = {"identity": [pol.job_execution_policy(ENV, **C)], "boundary": cb.research_permission_boundary(ENV, **C)}
+    assert not allowed(job, "ssm:PutParameter", key)
+    # the contract registers exactly this writer (tool, agent and platform roles are refused)
+    from finplan_contracts.ssm import Writer, check_write
+
+    path = contract_ssm.production_strategy_parameter(ENV)
+    assert check_write(path, Writer("financemodel", "runtime", principal="strategy-selection")).allowed
+    for repo in ("financelambdastool", "financeagent", "financialplanning"):
+        assert not check_write(path, Writer(repo, "runtime", principal="strategy-selection")).allowed

@@ -4,25 +4,33 @@ Test IDs are defined in the mapping table at the end. CI never starts SageMaker.
 
 ## 1. Contract pin and configuration
 
-- [ ] 1.1 Pin `finplan-contracts` 1.1.0 by version and digest once published. Verify that the pin check passes and that the conformance suite (job kind, production-strategy document, `bias_disclosures`) runs in consumer mode.
-- [ ] 1.2 Add the `daily_recommendation` kind configuration (`ml.m5.xlarge`, 1 instance, 1800 s, `cpu_research`) and the build cost check. Verify DRJ-05 unit tests (a threshold below the estimate fails the build; the estimate is at most USD 0.15).
+- [x] 1.1 Pin `finplan-contracts` 1.1.0 by version and digest once published. Verify that the pin check passes and that the conformance suite (job kind, production-strategy document, `bias_disclosures`) runs in consumer mode.
+- [x] 1.2 Add the `daily_recommendation` kind configuration (`ml.m5.xlarge`, 1 instance, 1800 s, `cpu_research`) and the build cost check. Verify DRJ-05 unit tests (a threshold below the estimate fails the build; the estimate is at most USD 0.15).
 
 ## 2. Production-strategy setting
 
-- [ ] 2.1 Implement get/set/clear with the caller allow-list, confirmation and idempotency. Verify PSS-01 unit tests.
-- [ ] 2.2 Implement registry validation (M3). Verify PSS-02 unit tests: one per failing rule, plus a valid selection citing the evidence `run_id`.
-- [ ] 2.3 Add the selection role as the only SSM writer, with audit events. Verify the PSS-03 IAM policy simulation (tool, agent and platform roles denied) and an audit unit test.
+- [x] 2.1 Implement get/set/clear with the caller allow-list, confirmation and idempotency. Verify PSS-01 unit tests.
+- [x] 2.2 Implement registry validation (M3). Verify PSS-02 unit tests: one per failing rule, plus a valid selection citing the evidence `run_id`.
+- [x] 2.3 Add the selection role as the only SSM writer, with audit events. Verify the PSS-03 IAM policy simulation (tool, agent and platform roles denied) and an audit unit test.
 
 ## 3. Daily recommendation job
 
-- [ ] 3.1 Add the kind to `submit_job` with the caller restriction, server-side strategy resolution, no-strategy refusal and dataset check. Verify DRJ-01 to DRJ-03 unit tests.
-- [ ] 3.2 Implement `run_daily_recommendation` (dataset from the snapshot, common evaluator, staging with six weights and disclosures). Verify DRJ-04 container unit tests on synthetic universe fixtures and staged-manifest contract validation.
+- [x] 3.1 Add the kind to `submit_job` with the caller restriction, server-side strategy resolution, no-strategy refusal and dataset check. Verify DRJ-01 to DRJ-03 unit tests.
+- [x] 3.2 Implement `run_daily_recommendation` (dataset from the snapshot, common evaluator, staging with six weights and disclosures). Verify DRJ-04 container unit tests on synthetic universe fixtures and staged-manifest contract validation.
 
 ## 4. Universe input for existing experiments
 
-- [ ] 4.1 Add `equity-etf-daily` dataset preparation (`adj_close` basis, cash assumption) for `backtest` and `benchmark`. Verify UNV-01 unit tests on synthetic fixtures.
-- [ ] 4.2 Add the mandatory bias and cash sections to reports and result summaries, failing closed. Verify UNV-02 unit tests (deterministic report checksum; a missing disclosure fails the run).
-- [ ] 4.3 Enforce the trigger-role kind restriction and the no-schedule template check. Verify UNV-03 unit tests and a negative template fixture.
+- [x] 4.1 Add `equity-etf-daily` dataset preparation (`adj_close` basis, cash assumption) for `backtest` and `benchmark`. Verify UNV-01 unit tests on synthetic fixtures.
+- [x] 4.2 Add the mandatory bias and cash sections to reports and result summaries, failing closed. Verify UNV-02 unit tests (deterministic report checksum; a missing disclosure fails the run).
+- [x] 4.3 Enforce the trigger-role kind restriction and the no-schedule template check. Verify UNV-03 unit tests and a negative template fixture.
+
+## Implementation notes (2026-10-08, verified locally)
+
+- 1.1: pinned 1.1.0 by version and wheel SHA-256 (`scripts/check_contracts_pin.py --repin --from <wheel>`, then `uv sync`); the release manifest declares the pinned `contract_version` (1.1.0). The contract `daily-recommendation` submission fixture runs in the consumer conformance suite (`tests/contract/test_job_interface_contract.py`).
+- 1.2: `daily_recommendation` in `config/<env>.json` (one `ml.m5.xlarge`, 1800 s, `cpu_research`, its own `auto_approve_usd` 0.15). The config check (`daily_cost_problems`, run by the `config` build gate) fails when the planning-bound estimate exceeds USD 0.15 or the kind's auto-approve ceiling (`tests/unit/control/test_daily_and_strategy.py::test_drj05_build_cost_check`).
+- 2.x: `PUT`/`GET /v1/production-strategy` served by the `strategy-selection` Lambda (`finplan_model.control.selection`, `production_strategy`). The document follows `core/v1/production-strategy.json` (`selected_by`/`selected_at`; the contract has no `configuration_id`). Confirmation travels as `confirmed_by_user` next to the contract request fields. Audit: append-only `AUDIT#production-strategy` items plus a log line.
+- 3.x: the trigger role is the only `daily_recommendation` submitter (handler plus resource policy); the strategy is resolved and re-validated at submission and frozen on the run (`production_strategy`), and `plan_id` becomes the run spec's staging target. A control strategy (for example `buy_and_hold`) stages its rule-based allocation as `feasible`.
+- 4.x: `adj_close` basis for universe snapshots, the `zero_nominal` cash assumption, the "Hindsight and survivorship bias" section in results (`payload.bias_section`), run artifacts and `build_report` (checksummed), failing closed without disclosures.
 
 ## 5. Deployed verification
 

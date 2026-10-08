@@ -117,7 +117,7 @@ AWS_REGION=us-east-2 uv run python scripts/bootstrap.py --assembly cdk.out   # i
   The platform's budget action reads the published names **only when the FinancialPlanning
   bootstrap runs**. **Rerun the FinancialPlanning bootstrap after the first FinanceModel beta
   deploy**, so the 100% deny also covers FinanceModel. FinanceModel never creates a second budget.
-- **Contracts.** The pin is `finplan-contracts` 1.0.0, allowed in every environment, and its
+- **Contracts.** The pin is `finplan-contracts` 1.1.0, allowed in every environment, and its
   ownership matrix carries every FinanceModel row: the job API, the job-execution role, the
   registry bucket policy and the CodeBuild log groups all deploy.
 - **Pipeline changes** (the tooling stack itself) deploy only by rerunning the bootstrap. The

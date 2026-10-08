@@ -10,6 +10,9 @@ entry point         what it does (all through the common evaluator; nothing else
 ``run_benchmark``   the configured strategy plus the three controls on the same dataset and
                     simulation configuration, sequentially in one job (one processing slot); the
                     comparison guard refuses mixed settings
+``run_daily_recommendation``  the production strategy frozen on the run (M2) on the approved
+                    research-universe snapshot; proposes weights for every instrument plus cash and
+                    carries the snapshot's bias disclosures (staged by the entry point)
 ``report``          the benchmark report (delegates to ``finplan_model.reporting.report_job`` when
                     task group 5 provides it; otherwise ``DEPENDENCY_UNAVAILABLE``)
 ==================  ===========================================================================
@@ -94,26 +97,86 @@ def _proposal(inp: JobInputs, res: Any) -> dict[str, Any] | None:
     return proposed_allocation(res)
 
 
+def _bias(inp: JobInputs) -> dict[str, Any] | None:
+    """The mandatory bias section of a universe run (fails closed without disclosures), else None."""
+    from .universe import bias_section, is_universe_content
+
+    return bias_section(inp.snapshot) if is_universe_content(inp.snapshot) else None
+
+
+def _with_bias(doc: dict[str, Any], section: Mapping[str, Any] | None) -> dict[str, Any]:
+    if section is not None:
+        doc["payload"]["bias_section"] = dict(section)
+    return doc
+
+
 def run_backtest(inp: JobInputs) -> dict[str, Any]:
+    section = _bias(inp)
     name = str(inp.spec["strategy"])
     res = _evaluate(inp, name)
-    ref = inp.artifacts.put_json(res.to_dict(), kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
-    return succeeded_result(inp.ctx, inp.spec, solution_status=res.solution_status, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, res))
+    body = res.to_dict()
+    if section is not None:
+        body = {**body, "bias_section": section}
+    ref = inp.artifacts.put_json(body, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
+    doc = succeeded_result(inp.ctx, inp.spec, solution_status=res.solution_status, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, res))
+    return _with_bias(doc, section)
+
+
+def _last_targets(res: Any) -> tuple[dict[str, float], float] | None:
+    for rec in reversed(list(getattr(res.simulation, "decisions", []) or [])):
+        cons = rec.get("constraints") or {}
+        if rec.get("action") in ("executed", "projected") and cons.get("final_weights") is not None:
+            return {k: float(v) for k, v in cons["final_weights"].items()}, float(cons.get("final_cash") or 0.0)
+    return None
+
+
+def run_daily_recommendation(inp: JobInputs) -> dict[str, Any]:
+    """The production strategy frozen at submission, on the universe snapshot (daily-recommendation-job)."""
+    from .universe import full_allocation, universe_block
+
+    frozen = inp.spec.get("production_strategy") or {}
+    name = str(inp.spec["strategy"])
+    if not frozen.get("strategy_id") or frozen["strategy_id"] != name:
+        raise FinplanError.validation("the run does not carry the production strategy frozen at submission", pointer="/production_strategy", field="strategy_id")
+    if inp.spec.get("purpose") != "production_candidate":
+        raise FinplanError.validation("daily_recommendation runs are production candidates", pointer="/purpose")
+    block = universe_block(inp.snapshot.payload)
+    if block is None:
+        raise FinplanError.validation("daily_recommendation needs an equity-etf-daily research-universe snapshot", pointer="/input_snapshot_id")
+    section = _bias(inp)
+    res = _evaluate(inp, name)
+    instruments = [str(i["instrument_id"]) for i in block.get("instruments", []) if i.get("kind") != "cash"]
+    targets = _last_targets(res)
+    allocation = full_allocation(targets[0], targets[1], instruments) if targets else None
+    body = {"strategy": name, "production_strategy": dict(frozen), "evaluation": res.to_dict(), "proposed_allocation": allocation, "bias_section": section}
+    ref = inp.artifacts.put_json(body, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
+    # Controls (cash, buy_and_hold, equal_weight) solve nothing (``not_applicable``); their rule-based
+    # allocation, projected through the constraint set, is a feasible recommendation to stage.
+    solution = "feasible" if res.solution_status == "not_applicable" and allocation else res.solution_status
+    doc = succeeded_result(inp.ctx, inp.spec, solution_status=solution, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=allocation)
+    return _with_bias(doc, section)
 
 
 def run_benchmark(inp: JobInputs) -> dict[str, Any]:
+    section = _bias(inp)
     main = str(inp.spec["strategy"])
     names = [main, *[c for c in CONTROLS if c != main]]
     results = [_evaluate(inp, n) for n in names]
     assert_comparable(results)
     doc = {"strategies": names, "results": [r.to_dict() for r in results]}
+    if section is not None:
+        doc["bias_section"] = section
     ref = inp.artifacts.put_json(doc, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
     reporter = _hook("finplan_model.reporting", "benchmark_report")
     refs = [ref]
     if reporter is not None:
         report = reporter(results, ctx=inp.ctx)
-        refs.append(inp.artifacts.put_json(report if isinstance(report, Mapping) else report.to_dict(), kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance"))
-    return succeeded_result(inp.ctx, inp.spec, solution_status=results[0].solution_status, artifacts=refs, performance=results[0].metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, results[0]))
+        report_doc = dict(report) if isinstance(report, Mapping) else report.to_dict()
+        if section is not None:
+            report_doc["bias_section"] = section  # mandatory "Hindsight and survivorship bias" section
+        refs.append(inp.artifacts.put_json(report_doc, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance"))
+    out = succeeded_result(inp.ctx, inp.spec, solution_status=results[0].solution_status, artifacts=refs, performance=results[0].metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, results[0]))
+    return _with_bias(out, section)
 
 
 def prepare_dataset(inp: JobInputs) -> dict[str, Any]:
@@ -146,6 +209,7 @@ HANDLERS: dict[str, Handler] = {
     "prepare_dataset": prepare_dataset,
     "run_backtest": run_backtest,
     "run_benchmark": run_benchmark,
+    "daily_recommendation": run_daily_recommendation,
     "report": report,
 }
 

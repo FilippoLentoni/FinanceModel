@@ -250,8 +250,10 @@ def build_synthetic_snapshot(
     }
     if quality_details:
         record["quality_details"] = dict(quality_details)
+    if payload.get("bias_disclosures"):
+        record["bias_disclosures"] = [dict(d) for d in payload["bias_disclosures"]]  # contracts 1.1.0
     if status == "approved":
-        record["approval_rule_version"] = "approval-v1"
+        record["approval_rule_version"] = "approval-v2-universe" if payload.get("universe") else "approval-v1"
     if synthetic:
         record["synthetic"] = True
     return record, {manifest_id: manifest_bytes, payload_id: payload_bytes}

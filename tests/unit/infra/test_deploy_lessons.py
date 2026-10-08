@@ -114,7 +114,7 @@ def test_every_function_with_an_explicit_role_can_write_its_own_log_streams(asse
             assert f"log-group:/aws/lambda/{fn}:*" in text, f"{fn} may write only its own log group"
             groups = [r for r in tpl["Resources"].values() if r["Type"] == "AWS::Logs::LogGroup" and "/aws/lambda/" in json.dumps(r["Properties"]["LogGroupName"])]
             assert any(fn in json.dumps(g["Properties"]["LogGroupName"]) or "Ref" in json.dumps(g["Properties"]["LogGroupName"]) for g in groups), fn
-    assert seen == 4 * len(ENVS)
+    assert seen == len(n.FUNCTIONS) * len(ENVS)
 
 
 @pytest.mark.parametrize("env", ENVS)

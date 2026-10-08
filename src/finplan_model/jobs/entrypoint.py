@@ -102,6 +102,11 @@ def run_job(
         ctx.log("job_started", job_type=job_type)
         # Integrity first: approved snapshot only, every checksum verified before strategy code runs.
         market, content = load_market(platform, spec["input_snapshot_id"])
+        from .universe import bias_disclosures_of, cash_assumption, is_universe_content
+
+        if is_universe_content(content):
+            # the snapshot's declared cash assumption replaces the configured cash rate
+            spec = {**spec, "simulation": {**dict(spec["simulation"]), "cash_rate_annual": cash_assumption(content)["annual_rate"]}}
         ctx = replace(ctx, synthetic=bool(market.synthetic or spec.get("synthetic")))
         doc = handler(JobInputs(ctx=ctx, spec=spec, market=market, snapshot=content, artifacts=artifacts))
         if spec["purpose"] == "production_candidate":
@@ -110,7 +115,7 @@ def run_job(
             if staging_store is None:
                 doc["staging"] = {"status": "not_staged", "reason": "staging_unavailable"}
             else:
-                doc["staging"] = stage_run_output(staging_store, doc, purpose=spec["purpose"], target=StagingTarget.from_spec(spec), clock=clock, registry=registry, spec=spec, actor=f"finplan-{environment}-financemodel-job-execution-role")
+                doc["staging"] = stage_run_output(staging_store, doc, purpose=spec["purpose"], target=StagingTarget.from_spec(spec), clock=clock, registry=registry, spec=spec, actor=f"finplan-{environment}-financemodel-job-execution-role", bias_disclosures=bias_disclosures_of(content) or None)
                 ctx.log("run_output_staged" if doc["staging"]["status"] == "staged" else "run_output_not_staged", reason=doc["staging"].get("reason"))
         run_io.put_result(run_id, doc)  # written last: the completion record of the job
         ctx.log("job_succeeded", solution_status=doc.get("solution_status"), artifacts=len(doc.get("artifacts", [])))
@@ -202,7 +207,7 @@ def _local(job_type: str, args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m finplan_model.jobs", description="FinanceModel CPU job entry point (prepare_dataset, run_backtest, run_benchmark, report).")
+    ap = argparse.ArgumentParser(prog="python -m finplan_model.jobs", description="FinanceModel CPU job entry point (prepare_dataset, run_backtest, run_benchmark, report, daily_recommendation).")
     ap.add_argument("job_type", choices=sorted(HANDLERS))
     ap.add_argument("--local", metavar="DIR", help="offline mode: run spec, result and artifacts under DIR (no AWS)")
     ap.add_argument("--run-id", help="local mode: the run_id whose spec to run")

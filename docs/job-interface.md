@@ -40,6 +40,7 @@ contract wins and the test fails.
 | `run_backtest` | one strategy over the evaluation window | 900 s / 1800 s | `cpu_research` |
 | `run_benchmark` | the strategy plus the `cash`, `buy_and_hold` and `equal_weight` controls, in one job | 1200 s / 1800 s | `cpu_research` |
 | `report` | benchmark report | 300 s / 900 s | `cpu_research` |
+| `daily_recommendation` | the production strategy (from `config/production-strategy`) on an approved `equity-etf-daily` snapshot; stages one recommendation | 1800 s / 1800 s | `cpu_research` |
 
 All phase 1 jobs are CPU jobs on `ml.m5.xlarge` (one instance). They run on synthetic fixture
 snapshots in every environment until the platform approves real SPY snapshots. The contract
@@ -48,6 +49,37 @@ fixtures' `fixture_optimizer` is **not** a FinanceModel job type, so submitting 
 `rl_evaluate`, `rl_weight_staging`, `swarm_mode_a`, `swarm_mode_b`, `jev_backtest`) give
 `DEPENDENCY_UNAVAILABLE` with `retryable` false until they are deployed. A configured job type
 whose job definition is not published in the environment gives the same error.
+
+### Research universe and the daily recommendation (contracts 1.1.0)
+
+- `run_backtest` and `run_benchmark` accept approved `finance/equity-etf-daily/research-universe`
+  snapshots (VOO, GOOGL, NFLX, AAPL, NVDA plus cash). Returns use `adj_close`; cash follows the
+  snapshot's declared assumption (`zero_nominal`). Results and reports carry a "Hindsight and
+  survivorship bias" section (`payload.bias_section`) that reproduces the snapshot's
+  `bias_disclosures` unchanged and states the cash assumption. A universe snapshot without
+  disclosures gives `VALIDATION_FAILED`. These runs are user-initiated only; FinanceModel defines no
+  schedule.
+- `daily_recommendation` is accepted only from `finplan-<env>-financialplanning-daily-trigger-step-role`,
+  with `purpose: production_candidate` and `plan_id`. Other callers get `FORBIDDEN`, and the trigger
+  role gets `FORBIDDEN` for any other kind. The strategy comes from
+  `/finplan/<env>/financemodel/config/production-strategy`. With no strategy selected the call fails
+  with `PRECONDITION_FAILED` (`no_production_strategy`, or `strategy_not_eligible`) before anything
+  is recorded or started. A request naming another strategy gets `VALIDATION_FAILED`. The run is
+  idempotent by key, checked against the budget (`BUDGET_EXCEEDED`), uses one `ml.m5.xlarge` with a
+  1800 s cap, and is auto-approved up to its own USD 0.15 ceiling. A succeeded run stages weights for
+  every instrument plus cash, with the snapshot's `bias_disclosures` in the staged manifest.
+
+### Production strategy (`GET` / `PUT /v1/production-strategy`)
+
+`PUT` takes `core/v1/tools/production-strategy-request.json` (`action` `get`, `set` or `clear`)
+plus `confirmed_by_user` (required, `true`, for `set` and `clear`) and an optional `on_behalf_of`.
+It answers with `core/v1/tools/production-strategy-response.json`. Only the tool plan-writer role and the
+platform operator roles may `set` or `clear`. `set` checks that the strategy is registered,
+deployed, not retired, supports `equity-etf-daily`, has a succeeded research backtest or benchmark
+on that dataset in the environment and, for learning families, is `promoted`. A failure gives
+`VALIDATION_FAILED` with `details.rule` (for example `no_evaluation_evidence`). A missing
+confirmation gives `PRECONDITION_FAILED` `confirmation_required`. The stored document follows
+`core/v1/production-strategy.json`. Every change is audited (old value, new value, user, channel).
 
 Strategies accepted in `configuration.payload.strategy` for `run_backtest` and `run_benchmark` are
 `cash`, `buy_and_hold`, `equal_weight`, `min_variance`, `mean_variance` and `scenario_cvar`,

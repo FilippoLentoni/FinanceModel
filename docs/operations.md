@@ -122,7 +122,7 @@ The rules:
 
 ## Contracts pin
 
-`finplan-contracts` **1.0.0** (the first stable release) is pinned by version and wheel digest
+`finplan-contracts` **1.1.0** (a stable 1.x release; 1.0.0 was the first) is pinned by version and wheel digest
 (`contracts-pin.json`, `pyproject.toml`, `uv.lock`) and allowed in beta, gamma and prod, so
 `PromotionCheck` no longer stops gamma and prod (it still refuses a 0.x pin outside beta, per the
 contract rule). The wheel is the FinancialPlanning platform's reproducible build, vendored byte for

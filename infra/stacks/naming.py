@@ -36,6 +36,7 @@ __all__ = [
     "PROCESSING_JOB_PREFIX",
     "REGISTRY_BUCKET",
     "REGISTRY_LOOKUP",
+    "STRATEGY_SELECTION",
     "REPO",
     "RESEARCH_BUCKET",
     "SCHEDULE_ROLE",
@@ -69,11 +70,15 @@ JOB_API_HANDLER = "job-api-handler"
 DISPATCHER = "job-dispatcher"
 STATE_HANDLER = "job-state-handler"
 REGISTRY_LOOKUP = "job-registry-lookup"
+#: The strategy-selection operation (contracts 1.1.0 ``ssm.PRODUCTION_STRATEGY_WRITER``): the only
+#: writer of ``/finplan/<env>/financemodel/config/production-strategy``.
+STRATEGY_SELECTION = "strategy-selection"
 FUNCTIONS: dict[str, str] = {
     JOB_API_HANDLER: "finplan_model.control.handlers.api_handler",
     DISPATCHER: "finplan_model.control.handlers.dispatcher_handler",
     STATE_HANDLER: "finplan_model.control.handlers.state_change_handler",
     REGISTRY_LOOKUP: "finplan_model.registry.handlers.lookup_handler",
+    STRATEGY_SELECTION: "finplan_model.control.selection.selection_handler",
 }
 JOB_EXECUTION = "job-execution"
 #: ``logical-role`` tag of the job-execution role (matrix row ``sagemaker-job-definitions``, contracts 1.0.0 D16).

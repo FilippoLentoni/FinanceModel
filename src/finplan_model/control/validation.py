@@ -38,7 +38,7 @@ __all__ = ["PLANNED_JOB_TYPES", "STRATEGY_JOB_TYPES", "Submission", "find_storag
 #: is deployed in an environment gives DEPENDENCY_UNAVAILABLE (JOB-09), not VALIDATION_FAILED.
 PLANNED_JOB_TYPES = ("rl_train", "rl_evaluate", "rl_weight_staging", "swarm_mode_a", "swarm_mode_b", "jev_backtest")
 #: Job types whose configuration names a strategy that must exist.
-STRATEGY_JOB_TYPES = ("run_backtest", "run_benchmark")
+STRATEGY_JOB_TYPES = ("run_backtest", "run_benchmark", "daily_recommendation")
 
 _STORAGE_RE = re.compile(r"(?i)^\s*(s3|s3a|s3n|gs|file|hdfs|ftp)://|arn:aws[a-z-]*:s3:|\.s3[.-][a-z0-9-]*\.amazonaws\.com|^\s*/(tmp|opt|home|var|mnt)/")
 _SEMVER_MAJOR = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")

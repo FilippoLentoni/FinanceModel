@@ -75,6 +75,12 @@ def build_run_spec(run: Mapping[str, Any], *, simulation: Mapping[str, Any], ima
     }
     if run.get("evaluation_window"):
         spec["evaluation_window"] = dict(run["evaluation_window"])
+    if run.get("purpose") == "production_candidate" and run.get("plan_id"):
+        spec["staging"] = {"plan_id": run["plan_id"]}  # contracts 1.1.0 job-submission plan_id
+    if run.get("dataset_id"):
+        spec["dataset_id"] = run["dataset_id"]
+    if run.get("production_strategy"):
+        spec["production_strategy"] = dict(run["production_strategy"])  # frozen at submission (M2)
     if run.get("model_version"):
         spec["model_version"] = run["model_version"]
     if image_digest:

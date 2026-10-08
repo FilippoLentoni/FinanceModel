@@ -7,7 +7,9 @@ Matrix rows ``job-control-plane``, ``job-interface`` and ``sagemaker-job-definit
   **DISABLED** and armed only while runs are queued, active or awaiting an approval deadline, design
   D1, :mod:`finplan_model.control.wakeup`; also kicked asynchronously by the API), ``job-state-handler`` (EventBridge rule on
   ``SageMaker Processing Job State Change`` for job names ``fm-<env>-*``) and
-  ``job-registry-lookup`` (the registry lineage route the platform calls). Each has its own role
+  ``job-registry-lookup`` (the registry lineage route the platform calls) and ``strategy-selection``
+  (``GET``/``PUT /v1/production-strategy``; its role is the only writer of
+  ``/finplan/<env>/financemodel/config/production-strategy``, contracts 1.1.0). Each has its own role
   (:mod:`infra.stacks.policies`) and an explicit 30-day log group (``/aws/lambda/<function>``; it
   references its function, so the ownership check attributes it to the function's row). None of
   them runs strategy code (spec job-deployment-pipeline).
@@ -48,7 +50,7 @@ from finplan_model.control.wakeup import TICK
 from . import naming as n
 from .common import ModelStack, StageContext, research_boundary, stack_name, tag_role
 from .lambda_code import function_code
-from .policies import control_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy
+from .policies import control_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy, strategy_selection_policy
 
 __all__ = ["API_STAGE", "DISPATCH_SCHEDULE_DESCRIPTION", "LAMBDA_ARCHITECTURE", "LOG_RETENTION_DAYS", "OPENAPI_ROUTES", "ControlStack", "add_to_stage", "openapi_body"]
 
@@ -63,6 +65,8 @@ OPENAPI_ROUTES: tuple[tuple[str, str, str], ...] = (
     ("GET", "/v1/jobs/{run_id}/result", n.JOB_API_HANDLER),
     ("POST", "/v1/jobs/{run_id}/cancel", n.JOB_API_HANDLER),
     ("POST", "/v1/jobs/{run_id}/approve", n.JOB_API_HANDLER),
+    ("GET", "/v1/production-strategy", n.STRATEGY_SELECTION),
+    ("PUT", "/v1/production-strategy", n.STRATEGY_SELECTION),
     ("GET", "/v1/registry/model-versions/{model_version}", n.REGISTRY_LOOKUP),
     ("GET", "/v1/registry/lineage/{run_id}", n.REGISTRY_LOOKUP),
 )
@@ -97,7 +101,7 @@ def openapi_body(env: str, invoke_arns: dict[str, str], contract_version: str) -
         responses[_GATEWAY_TYPES[gtype]] = {"statusCode": spec["status_code"], "responseTemplates": {"application/json": spec["template"]}}
     return {
         "openapi": "3.0.1",
-        "info": {"title": n.env_name(env, n.JOB_API), "version": "1.0", "description": "FinanceModel job interface (submit_job, get_job_status, get_job_result, cancel_job, list_jobs, approve_run) and the model registry lineage lookup"},
+        "info": {"title": n.env_name(env, n.JOB_API), "version": "1.0", "description": "FinanceModel job interface (submit_job, get_job_status, get_job_result, cancel_job, list_jobs, approve_run), the production-strategy selection and the model registry lineage lookup"},
         "paths": paths,
         "components": {"securitySchemes": {"sigv4": {"type": "apiKey", "name": "Authorization", "in": "header", "x-amazon-apigateway-authtype": "awsSigv4"}}},
         "x-amazon-apigateway-gateway-responses": responses,
@@ -174,7 +178,9 @@ class ControlStack(ModelStack):
 
         # ---------------------------------------------------------------- job API
         lookup = self._function("RegistryLookup", n.REGISTRY_LOOKUP, "job-api-handler", registry_lookup_policy(env, partition=p, region=r, account=a), code, {"FINPLAN_ENVIRONMENT": env, "FINPLAN_REGISTRY_BUCKET": n.bucket_name(env, n.REGISTRY_BUCKET, a), "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=10, memory=256)
-        self._api(env, {n.JOB_API_HANDLER: api_fn, n.REGISTRY_LOOKUP: lookup})
+        # strategy selection (contracts 1.1.0): the only writer of config/production-strategy (M3)
+        selection = self._function("StrategySelection", n.STRATEGY_SELECTION, "job-api-handler", strategy_selection_policy(env, partition=p, region=r, account=a), code, {"FINPLAN_ENVIRONMENT": env, "FINPLAN_RUNS_TABLE": n.env_name(env, n.CONTROL_TABLE), "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=29, memory=512)
+        self._api(env, {n.JOB_API_HANDLER: api_fn, n.REGISTRY_LOOKUP: lookup, n.STRATEGY_SELECTION: selection})
 
     # ------------------------------------------------------------------ helpers
     def _function(self, cid: str, logical: str, logical_role: str, policy: dict[str, Any], code: lambda_.Code, environment: dict[str, str], *, timeout: int, memory: int) -> lambda_.Function:

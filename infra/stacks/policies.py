@@ -295,6 +295,30 @@ def schedule_role_policy(env: str, *, partition: str = PARTITION, region: str = 
     return {"Version": "2012-10-17", "Statement": [{"Sid": "InvokeDispatcher", "Effect": "Allow", "Action": ["lambda:InvokeFunction"], "Resource": [fn, f"{fn}:*"]}]}
 
 
+def strategy_selection_policy(env: str, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
+    """The ``strategy-selection`` role (design M3): the ONLY principal with ``ssm:PutParameter`` /
+    ``ssm:DeleteParameter`` on the production-strategy key; reads the run store (evaluation
+    evidence) and appends idempotency and audit items; nothing else."""
+    from finplan_contracts import ssm as contract_ssm
+
+    table = _arn("dynamodb", f"table/{n.env_name(env, n.CONTROL_TABLE)}", partition=partition, region=region, account=account)
+    key = _ssm_param(contract_ssm.production_strategy_parameter(env), partition=partition, region=region, account=account)
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Sid": "ProductionStrategyKey", "Effect": "Allow", "Action": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"], "Resource": [key]},
+            {"Sid": "ReadRunStore", "Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:Query"], "Resource": [table, f"{table}/index/*"]},
+            {"Sid": "AppendIdempotencyAndAudit", "Effect": "Allow", "Action": ["dynamodb:PutItem"], "Resource": [table], "Condition": {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["IDEM#*", "AUDIT#*"]}}},
+            _log_statement(env, n.STRATEGY_SELECTION, partition=partition, region=region, account=account),
+        ],
+    }
+
+
+def daily_trigger_role_pattern(env: str) -> str:
+    """The FinancialPlanning daily trigger step role (submits ``daily_recommendation`` only)."""
+    return f"finplan-{env}-financialplanning-daily-trigger-step-role"
+
+
 def job_api_invoker_patterns(env: str) -> list[str]:
     """Role-name patterns the job API admits (JOB-01; FinanceLambdasTool tool roles, platform
     production-candidate callers and the lineage lookup, FinanceModel's own pipeline stage role)."""

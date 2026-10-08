@@ -123,6 +123,12 @@ class InMemoryRunStore:
         self.events: dict[str, dict[int, dict[str, Any]]] = {}
         self.idempotency: dict[str, dict[str, Any]] = {}
         self.leases: dict[str, dict[int, dict[str, Any]]] = {}
+        self.audit: list[dict[str, Any]] = []
+
+    def append_audit(self, record: Mapping[str, Any]) -> None:
+        """Append-only audit trail (production-strategy changes)."""
+        with self._lock:
+            self.audit.append(copy.deepcopy(dict(record)))
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -342,6 +348,11 @@ class DynamoRunStore:
         resp = self.client.get_item(TableName=self.table, Key={"pk": _s(f"IDEM#{scope_key}"), "sk": _s("IDEM")}, ConsistentRead=True)
         item = resp.get("Item")
         return json.loads(item["doc"]["S"]) if item else None
+
+    def append_audit(self, record: Mapping[str, Any]) -> None:
+        """Append-only audit item ``AUDIT#production-strategy`` / ``<at>#<audit_id>`` (never overwritten)."""
+        item = {"pk": _s("AUDIT#production-strategy"), "sk": _s(f"{record['at']}#{record['audit_id']}"), "doc": _s(json.dumps(dict(record), sort_keys=True, separators=(",", ":")))}
+        self.client.put_item(TableName=self.table, Item=item, ConditionExpression="attribute_not_exists(pk)")
 
     def put_idempotency(self, scope_key: str, record: Mapping[str, Any], ttl_epoch: int) -> None:
         try:

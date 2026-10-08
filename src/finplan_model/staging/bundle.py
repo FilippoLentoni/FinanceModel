@@ -27,11 +27,10 @@ Protocol (contracts D10, platform ``core/staging.py``):
   ``staging``), never claims a ``plan_version_id`` and never calls the accept route
   (:mod:`finplan_model.staging.outcome` links the platform's outcome later).
 
-CONTRACT GAP (reported, not invented): the pinned ``core/v1/job-submission.json`` has no
-``plan_id`` / ``parent_plan_version_id`` (``additionalProperties: false``), but the staged-output
-manifest requires ``plan_id``. A production-candidate run therefore takes its target from the run
-spec's ``staging`` block (``{"plan_id", "parent_plan_version_id"}``) when the control plane provides
-one, and otherwise stages nothing (``not_staged``, reason ``no_plan_target``).
+Contracts 1.1.0 added ``plan_id`` to ``core/v1/job-submission.json``: the control plane records it
+on the run and the run spec carries it as the ``staging`` block (``{"plan_id"}``). A
+production-candidate run without one stages nothing (``not_staged``, reason ``no_plan_target``).
+A bundle derived from a snapshot with ``bias_disclosures`` carries them unchanged in the manifest.
 """
 
 from __future__ import annotations
@@ -220,7 +219,7 @@ class StagedBundle:
         return sha256_checksum(self.manifest_bytes)
 
 
-def build_bundle(result: Mapping[str, Any], *, target: StagingTarget, plan_content: Mapping[str, Any], written_at: str, metrics: Mapping[str, Any] | None = None) -> StagedBundle:
+def build_bundle(result: Mapping[str, Any], *, target: StagingTarget, plan_content: Mapping[str, Any], written_at: str, metrics: Mapping[str, Any] | None = None, bias_disclosures: list[Mapping[str, Any]] | None = None) -> StagedBundle:
     """Build and validate the bundle; raises ``VALIDATION_FAILED`` before anything is written (RST-02)."""
     require_valid(dict(plan_content), "plan-content")
     perf = metrics if metrics is not None else ((result.get("payload") or {}).get("performance") or {})
@@ -249,6 +248,8 @@ def build_bundle(result: Mapping[str, Any], *, target: StagingTarget, plan_conte
     if result.get("synthetic"):
         manifest["synthetic"] = True
         manifest["payload"]["synthetic"] = True
+    if bias_disclosures:
+        manifest["bias_disclosures"] = [dict(d) for d in bias_disclosures]  # the snapshot's, unchanged (1.1.0)
     manifest = {k: v for k, v in manifest.items() if v is not None or k == "parent_plan_version_id"}
     require_valid(manifest, "staged-output-manifest")
     return StagedBundle(files, manifest, canonical_json_bytes(manifest))
@@ -265,6 +266,7 @@ def stage_run_output(
     registry: Any = None,
     spec: Mapping[str, Any] | None = None,
     actor: str = "financemodel-job",
+    bias_disclosures: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Stage one run's output (or not) and return the result's ``staging`` block.
 
@@ -278,7 +280,7 @@ def stage_run_output(
         return {"status": "not_staged", "reason": "no_plan_target"}
     clock = clock or SystemClock()
     content = dict(plan_content) if plan_content is not None else plan_content_from_result(result)
-    bundle = build_bundle(result, target=target, plan_content=content, written_at=utc_iso(clock.now()))
+    bundle = build_bundle(result, target=target, plan_content=content, written_at=utc_iso(clock.now()), bias_disclosures=bias_disclosures)
     if registry is not None and spec is not None:
         from finplan_model.registry.resolver import record_spec_lineage
 

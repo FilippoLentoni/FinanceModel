@@ -34,6 +34,11 @@ def market_from_content(content: SnapshotContent) -> MarketData:
     if callable(hook):
         return hook(content)
     obs = list(content.payload.get("observations", []))
+    from .universe import adjusted_observation, universe_block
+
+    block = universe_block(content.payload)
+    if block is not None and block.get("return_basis", "adj_close") == "adj_close":
+        obs = [adjusted_observation(o) for o in obs]  # universe snapshots: adj_close return basis
     bars = []
     sessions: set[date] = set()
     for o in obs:

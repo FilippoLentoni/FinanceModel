@@ -28,9 +28,9 @@ shared core interfaces every other task group builds on.
 
 `finplan-contracts` is pinned by exact version **and** by the SHA-256 of the exact wheel:
 
-- `contracts-pin.json`: package, version `1.0.0`, artifact path, `sha256`,
+- `contracts-pin.json`: package, version `1.1.0`, artifact path, `sha256`,
   `served_environments: ["beta", "gamma", "prod"]`;
-- `pyproject.toml`: `finplan-contracts==1.0.0` with `[tool.uv.sources]` pointing at the vendored
+- `pyproject.toml`: `finplan-contracts==1.1.0` with `[tool.uv.sources]` pointing at the vendored
   wheel; `uv.lock` records the same hash and uv refuses a wheel whose hash differs;
 - `scripts/check_contracts_pin.py` verifies all of them ("Digest mismatch" on any difference) and,
   with `--env gamma|prod`, refuses a 0.x pin.

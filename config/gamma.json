@@ -67,6 +67,23 @@
       "max_instance_count": 1,
       "budget_category": "cpu_research",
       "deployed": true
+    },
+    "daily_recommendation": {
+      "$comment": "Platform-triggered production candidate (change add-daily-recommendation-and-on-demand-experiments): only the FinancialPlanning daily trigger role submits it, it runs exactly the strategy in config/production-strategy, one ml.m5.xlarge with a 30 minute hard cap. auto_approve_usd is this kind's own approval ceiling (the user's gate is publication, not compute); cost_cap_usd and cost_check_usd_per_hour feed the build cost check (DRJ-05): cost_check_usd_per_hour is a deliberately high planning bound, not a live price (live prices come only from config/instance-prices).",
+      "entry_point": "daily_recommendation",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 1800,
+      "max_runtime_seconds": 1800,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true,
+      "auto_approve_usd": 0.15,
+      "cost_cap_usd": 0.15,
+      "cost_check_usd_per_hour": 0.28
     }
   },
   "lease": {

@@ -171,8 +171,15 @@ def build_report(
     accuracy: Mapping[str, Mapping[str, Any]] | None = None,
     training_rewards: Mapping[str, Mapping[str, Any]] | None = None,
     narrative: Sequence[str] = (),
+    bias_section: Mapping[str, Any] | None = None,
 ) -> BenchmarkReport:
+    """``bias_section`` (:func:`finplan_model.jobs.universe.bias_section`) is mandatory for an
+    ``equity-etf-daily`` dataset: the report then carries "Hindsight and survivorship bias" with the
+    snapshot's disclosures unchanged and the cash assumption (part of the checksummed content)."""
     doc = run.to_dict() if isinstance(run, BenchmarkRun) else dict(run)
+    dataset_id = str((doc.get("dataset") or {}).get("dataset_id") or "")
+    if "/equity-etf-daily/" in f"{dataset_id}/" and not (bias_section and bias_section.get("bias_disclosures")):
+        raise FinplanError.validation("a universe report must carry the snapshot's bias disclosures", pointer="/bias_disclosures", reason="bias_disclosures_missing")
     cfg = config if isinstance(config, ReportConfig) else ReportConfig.from_dict(config)
     entries = [ResultEntry.from_dict(e) for e in doc["entries"]]
     if not entries:
@@ -342,6 +349,8 @@ def build_report(
         "holdout": holdout_block,
         "period_labels": [p for p in PERIOD_TYPES if periods[p]],
     }
+    if bias_section:
+        content["bias"] = {"title": "Hindsight and survivorship bias", **{k: v for k, v in dict(bias_section).items() if k != "title"}}
     content = _normalized(content)
     assert_aggregate_only(content)
     _validate_sections(content)

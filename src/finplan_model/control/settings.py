@@ -12,6 +12,7 @@ lease limits (JSON ``{"cpu": 1, "gpu": 0}``)    ``/finplan/<env>/financemodel/co
 production-candidate principals (JSON list)     ``/finplan/<env>/financemodel/config/production-candidate-principals``
 approver role reference (role name or ARN)      ``/finplan/<env>/financemodel/config/approver-role-ref``
 research storage reference (bucket)             ``/finplan/<env>/financemodel/config/research-storage-ref``
+production strategy (JSON, read uncached)       ``/finplan/<env>/financemodel/config/production-strategy``
 job role reference (role ARN)                   ``/finplan/<env>/financemodel/job/job-role-ref``
 job definition per job type (JSON)              ``/finplan/<env>/financemodel/job/<job-type-kebab>``
 budget allocation (JSON, FinancialPlanning)     ``/finplan/shared/financialplanning/config/budget-allocation``
@@ -74,6 +75,8 @@ class SettingsProvider(Protocol):
 
     def research_storage(self) -> str | None: ...
 
+    def production_strategy(self) -> str | None: ...
+
 
 RuntimeSettings = SettingsProvider
 
@@ -102,6 +105,7 @@ class StaticSettings:
     job_definitions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     job_role: str | None = None
     storage: str | None = None
+    strategy_raw: str | None = None
 
     def instance_prices(self) -> Mapping[str, Any] | None:
         return self.prices
@@ -134,6 +138,9 @@ class StaticSettings:
 
     def research_storage(self) -> str | None:
         return self.storage
+
+    def production_strategy(self) -> str | None:
+        return self.strategy_raw
 
 
 class SsmSettings:
@@ -225,3 +232,9 @@ class SsmSettings:
             except json.JSONDecodeError:
                 return None
         return raw.strip()
+
+    def production_strategy(self) -> str | None:
+        """Raw production-strategy value, read without the cache (a cleared key stops the next job)."""
+        from .production_strategy import SsmStrategyParameter
+
+        return SsmStrategyParameter(self.ssm, self.cfg.ssm["production_strategy"]).read()
