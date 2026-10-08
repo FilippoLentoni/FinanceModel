@@ -1,0 +1,140 @@
+{
+  "$comment": "FinanceModel configuration for gamma. Settings, defaults and SSM parameter NAMES only; never account IDs, ARNs, bucket, role or endpoint values, prices or secrets. Live values (instance prices, auto-approve threshold, lease limits, research storage reference) are read at run time from /finplan/gamma/financemodel/config/*. Defaults are configuration pending user review (design D3, D4, D7; FM-OQ-3, FM-OQ-5).",
+  "environment": "gamma",
+  "region": "us-east-2",
+  "phase": 1,
+  "served_contract_majors": [
+    1
+  ],
+  "instrument": {
+    "$comment": "Initial instrument (design D6): S&P 500 exposure through a tracking ETF daily series; distinct from the index level and the constituent universe. data_source 'fixture' = synthetic snapshots through the mock provider until the platform approves real SPY snapshots in this environment.",
+    "ticker": "SPY",
+    "dataset_kind": "etf-daily",
+    "granularity": "daily",
+    "calendar": "XNYS",
+    "currency": "USD",
+    "data_source": "fixture"
+  },
+  "job_types": {
+    "prepare_dataset": {
+      "entry_point": "prepare_dataset",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 600,
+      "max_runtime_seconds": 1800,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true
+    },
+    "run_backtest": {
+      "entry_point": "run_backtest",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 900,
+      "max_runtime_seconds": 1800,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true
+    },
+    "run_benchmark": {
+      "entry_point": "run_benchmark",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 1200,
+      "max_runtime_seconds": 1800,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true
+    },
+    "report": {
+      "entry_point": "report",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 300,
+      "max_runtime_seconds": 900,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true
+    }
+  },
+  "lease": {
+    "max_holders": {
+      "cpu": 1,
+      "gpu": 0
+    },
+    "ttl_seconds": 900,
+    "heartbeat_seconds": 120
+  },
+  "queue": {
+    "max_depth": 10,
+    "quota_backoff_initial_seconds": 60,
+    "quota_backoff_max_seconds": 900,
+    "quota_max_wait_seconds": 3600,
+    "start_retry_limit": 2
+  },
+  "approval": {
+    "auto_approve_usd_default": 0,
+    "approval_window_hours": 72
+  },
+  "cost": {
+    "price_max_age_days": 30,
+    "storage_estimate_usd": 0.01
+  },
+  "idempotency": {
+    "retention_days": 8
+  },
+  "retention": {
+    "scratch_days": 30,
+    "noncurrent_version_days": 7,
+    "incomplete_multipart_days": 1
+  },
+  "simulation_defaults": {
+    "$comment": "Simulator conventions (design D7). Every value is configuration pending user review (FM-OQ-5), not a market fact. Documented in docs/simulator.md.",
+    "venue": "paper",
+    "execution_timing": "next_open",
+    "rebalance_frequency": "monthly",
+    "initial_cash": 100000.0,
+    "base_currency": "USD",
+    "cash_rate_annual": 0.0,
+    "periods_per_year": 252,
+    "fees": {
+      "proportional_bps": 1.0,
+      "fixed_per_trade": 0.0
+    },
+    "spread": {
+      "half_spread_bps": 1.0
+    },
+    "slippage": {
+      "model": "linear_participation",
+      "coefficient_bps": 10.0
+    },
+    "liquidity": {
+      "participation_cap": 0.05,
+      "unfilled": "cancel"
+    },
+    "constraints": {
+      "long_only": true,
+      "min_weight": 0.0,
+      "max_weight": 1.0,
+      "min_cash": 0.0,
+      "max_cash": 1.0,
+      "max_turnover": null
+    },
+    "constraint_policy": "project",
+    "infeasible_fallback": "hold_current",
+    "reconciliation_tolerance": 1e-06,
+    "weight_tolerance": 1e-09
+  }
+}

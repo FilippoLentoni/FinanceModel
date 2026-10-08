@@ -1,0 +1,47 @@
+[project]
+name = "finplan-model"
+version = "0.1.0"
+description = "FinanceModel research compute: common evaluator and paper execution simulator, research datasets, baseline strategies, the experiment job interface and its control plane (OpenSpec change add-research-job-foundation)."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Contract package, pinned by exact version AND by the SHA-256 digest of the exact wheel
+    # (contracts-pin.json, verified by scripts/check_contracts_pin.py and by uv.lock).
+    # 1.0.0 is the first stable contract release (allowed in beta, gamma and prod). The exact
+    # platform-built wheel is vendored under vendor/ (the same bytes the FinancialPlanning build
+    # publishes to its CodeArtifact registry once its bootstrap is re-run).
+    "finplan-contracts==1.0.0",
+    "numpy>=2.1,<3",
+    "scipy>=1.14,<2",
+    "boto3>=1.40",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "moto[s3,dynamodb,ssm,sts]>=5.1",
+    "aws-cdk-lib>=2.220.0,<3",
+    "constructs>=10.4,<11",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.sources]
+finplan-contracts = { path = "vendor/finplan-contracts/finplan_contracts-1.0.0-py3-none-any.whl" }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finplan_model"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+addopts = "-q -p no:cacheprovider"
+markers = [
+    "synth: tests that synthesize CDK stacks (offline)",
+    "allow_sagemaker_moto: the test may call SageMaker through moto's in-process mock (real network stays blocked)",
+]

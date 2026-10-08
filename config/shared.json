@@ -1,0 +1,13 @@
+{
+  "$comment": "Account-level FinanceModel settings (environment 'shared'). Names and settings only. The budget allocation and state are FinancialPlanning-owned (/finplan/shared/financialplanning/config/budget-allocation, budget-state); FinanceModel reads them and never writes them.",
+  "region": "us-east-2",
+  "repo": "financemodel",
+  "source": {
+    "repository": "FilippoLentoni/FinanceModel",
+    "branch": "main"
+  },
+  "budget_categories": [
+    "cpu_research",
+    "gpu"
+  ]
+}

@@ -2,5 +2,10 @@
 __pycache__/
 node_modules/
 cdk.out/
+cdk.out.bootstrap/
+.pytest_cache/
+.ruff_cache/
 .env
 *.local.json
+.build/
+build-output/

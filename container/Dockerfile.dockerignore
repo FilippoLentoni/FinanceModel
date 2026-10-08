@@ -1,0 +1,10 @@
+# Build context allow-list for container/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!vendor/finplan-contracts/*.whl
+!src/finplan_model/**
+!config/*.json
+**/__pycache__
+**/*.pyc

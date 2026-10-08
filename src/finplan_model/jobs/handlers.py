@@ -1,0 +1,155 @@
+"""Job-type handlers of the ``financemodel-cpu`` image (design D5; task 6.1).
+
+==================  ===========================================================================
+entry point         what it does (all through the common evaluator; nothing else produces results)
+==================  ===========================================================================
+``prepare_dataset`` resolve and verify the snapshot, build the point-in-time market data and store
+                    a dataset descriptor (delegates to ``finplan_model.datasets.prepare_dataset_job``
+                    when task group 3 provides it); ``solution_status`` ``not_applicable``
+``run_backtest``    one strategy over the evaluation window
+``run_benchmark``   the configured strategy plus the three controls on the same dataset and
+                    simulation configuration, sequentially in one job (one processing slot); the
+                    comparison guard refuses mixed settings
+``report``          the benchmark report (delegates to ``finplan_model.reporting.report_job`` when
+                    task group 5 provides it; otherwise ``DEPENDENCY_UNAVAILABLE``)
+==================  ===========================================================================
+
+Every handler receives a :class:`JobInputs` (run context, run spec, verified market data, artifact
+store) and returns a contract job-result document. Integrity failures stop the job **before**
+strategy code runs (the snapshot is verified in :func:`finplan_model.jobs.market_loader.load_market`).
+"""
+
+from __future__ import annotations
+
+import importlib
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import date
+from typing import Any
+
+from finplan_model.core.artifacts import ArtifactStore
+from finplan_model.core.context import RunContext
+from finplan_model.core.errors import FinplanError
+from finplan_model.core.platform import SnapshotContent
+from finplan_model.evaluate import assert_comparable, evaluate
+from finplan_model.sim.config import SimulationConfig
+from finplan_model.sim.market import MarketData
+
+from .results import succeeded_result
+from .strategy_resolver import CONTROLS, resolve_strategy
+
+__all__ = ["HANDLERS", "JobInputs", "register_handler"]
+
+
+@dataclass
+class JobInputs:
+    ctx: RunContext
+    spec: Mapping[str, Any]
+    market: MarketData
+    snapshot: SnapshotContent
+    artifacts: ArtifactStore
+
+    @property
+    def sim_config(self) -> SimulationConfig:
+        return SimulationConfig.from_dict(self.spec["simulation"])
+
+    @property
+    def window(self) -> tuple[date | None, date | None]:
+        w = self.spec.get("evaluation_window") or {}
+        return (date.fromisoformat(w["start"]) if w.get("start") else None, date.fromisoformat(w["end"]) if w.get("end") else None)
+
+    @property
+    def universe(self) -> list[str] | None:
+        u = [i for i in self.spec.get("universe") or [] if i in self.market.instruments]
+        missing = sorted(set(self.spec.get("universe") or []) - set(self.market.instruments))
+        if missing:
+            raise FinplanError.precondition("the snapshot does not cover every instrument of the configuration", reason="universe_not_covered", instruments=missing[:10])
+        return u or None
+
+
+Handler = Callable[[JobInputs], dict[str, Any]]
+
+
+def _hook(module: str, name: str) -> Callable[..., Any] | None:
+    try:
+        fn = getattr(importlib.import_module(module), name, None)
+    except ImportError:  # pragma: no cover
+        return None
+    return fn if callable(fn) else None
+
+
+def _evaluate(inp: JobInputs, strategy_name: str) -> Any:
+    params = (inp.spec.get("strategy_params") or {}) if strategy_name == inp.spec.get("strategy") else {}
+    strategy = resolve_strategy(strategy_name, params, constraints=inp.sim_config.constraints)
+    start, end = inp.window
+    return evaluate(strategy, inp.market, inp.sim_config, ctx=inp.ctx, start=start, end=end, universe=inp.universe)
+
+
+def _proposal(inp: JobInputs, res: Any) -> dict[str, Any] | None:
+    """Production candidates propose an allocation (staged by task 9.1); other runs do not."""
+    if inp.spec.get("purpose") != "production_candidate":
+        return None
+    from finplan_model.staging import proposed_allocation
+
+    return proposed_allocation(res)
+
+
+def run_backtest(inp: JobInputs) -> dict[str, Any]:
+    name = str(inp.spec["strategy"])
+    res = _evaluate(inp, name)
+    ref = inp.artifacts.put_json(res.to_dict(), kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
+    return succeeded_result(inp.ctx, inp.spec, solution_status=res.solution_status, artifacts=[ref], performance=res.metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, res))
+
+
+def run_benchmark(inp: JobInputs) -> dict[str, Any]:
+    main = str(inp.spec["strategy"])
+    names = [main, *[c for c in CONTROLS if c != main]]
+    results = [_evaluate(inp, n) for n in names]
+    assert_comparable(results)
+    doc = {"strategies": names, "results": [r.to_dict() for r in results]}
+    ref = inp.artifacts.put_json(doc, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
+    reporter = _hook("finplan_model.reporting", "benchmark_report")
+    refs = [ref]
+    if reporter is not None:
+        report = reporter(results, ctx=inp.ctx)
+        refs.append(inp.artifacts.put_json(report if isinstance(report, Mapping) else report.to_dict(), kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance"))
+    return succeeded_result(inp.ctx, inp.spec, solution_status=results[0].solution_status, artifacts=refs, performance=results[0].metrics, dataset_checksum=inp.market.dataset_checksum, proposed_allocation=_proposal(inp, results[0]))
+
+
+def prepare_dataset(inp: JobInputs) -> dict[str, Any]:
+    hook = _hook("finplan_model.datasets", "prepare_dataset_job")
+    if hook is not None:
+        return hook(inp)
+    descriptor = {
+        "dataset_id": inp.market.dataset_id,
+        "dataset_checksum": inp.market.dataset_checksum,
+        "input_snapshot_id": inp.spec["input_snapshot_id"],
+        "configuration_id": inp.spec["configuration_id"],
+        "sessions": [inp.market.sessions[0].isoformat(), inp.market.sessions[-1].isoformat()],
+        "n_sessions": len(inp.market.sessions),
+        "instruments": list(inp.market.instruments),
+        "lineage": inp.snapshot.snapshot.lineage,
+        "synthetic": bool(inp.market.synthetic),
+    }
+    ref = inp.artifacts.put_json(descriptor, kind="research_dataset", synthetic=True if inp.ctx.synthetic else None, domain="finance")
+    return succeeded_result(inp.ctx, inp.spec, solution_status="not_applicable", artifacts=[ref], performance={}, dataset_checksum=inp.market.dataset_checksum)
+
+
+def report(inp: JobInputs) -> dict[str, Any]:
+    hook = _hook("finplan_model.reporting", "report_job")
+    if hook is None:
+        raise FinplanError.dependency_unavailable("the report job is not available in this image", retryable=False, job_type="report")
+    return hook(inp)
+
+
+HANDLERS: dict[str, Handler] = {
+    "prepare_dataset": prepare_dataset,
+    "run_backtest": run_backtest,
+    "run_benchmark": run_benchmark,
+    "report": report,
+}
+
+
+def register_handler(job_type: str, handler: Handler) -> None:
+    """Later task groups or changes register additional job types here."""
+    HANDLERS[job_type] = handler
