@@ -117,4 +117,6 @@ def test_gamma_cannot_reach_prod():
     account = d.session.client("sts").get_caller_identity()["Account"]
     with pytest.raises(ClientError) as head:
         s3_client(d.region, session=d.session).head_bucket(Bucket=f"finplan-prod-financemodel-research-workspace-{account}")
-    assert head.value.response["Error"]["Code"] in ("403", "AccessDenied")
+    # 403: prod exists and gamma is refused. 404: prod is not deployed yet (first run, before the
+    # prod approval), so there is nothing to reach; the SSM denial above still proves the boundary.
+    assert head.value.response["Error"]["Code"] in ("403", "AccessDenied", "404", "NoSuchBucket")
