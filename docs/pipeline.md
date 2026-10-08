@@ -161,8 +161,9 @@ disrupted, but its bundle could never be silently changed.
   - one synchronous dispatcher tick (the Lambda bundle imports; SSM, the table and the schedule
     answer);
   - through the job API (always deployed; a missing endpoint fails the suite): `list_jobs`, `VALIDATION_FAILED` and
-    `NOT_FOUND` envelopes, and one tiny fixture `run_backtest` on the snapshot named in
-    `/finplan/<env>/financemodel/config/integration-snapshot-id` (dry run, submit, idempotent
+    `NOT_FOUND` envelopes, and one tiny synthetic-labeled `run_backtest` on the approved snapshot
+    named in `/finplan/<env>/financemodel/config/integration-snapshot-id` or, without that
+    override, the platform-published one (real in phase 2, user decision 26) (dry run, submit, idempotent
     replay, `IDEMPOTENCY_KEY_REUSED`, status, cancel, result; `tests/integration/job_suite.py`,
     proven offline by `tests/unit/control/test_deployed_job_suite_double.py`). With the default
     auto-approve threshold 0 the run is cancelled in `awaiting_approval`, so no SageMaker job runs;

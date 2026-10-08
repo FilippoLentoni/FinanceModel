@@ -7,13 +7,13 @@
     1
   ],
   "instrument": {
-    "$comment": "Initial instrument (design D6): S&P 500 exposure through a tracking ETF daily series; distinct from the index level and the constituent universe. data_source 'fixture' = synthetic snapshots through the mock provider until the platform approves real SPY snapshots in this environment.",
+    "$comment": "Initial instrument (design D6): S&P 500 exposure through a tracking ETF daily series; distinct from the index level and the constituent universe. data_source 'platform_snapshots' = this environment's platform serves approved real (phase 2, yfinance) snapshots; identical in beta, gamma and prod (data parity, user decision 26). Fixture-mode preparation still accepts synthetic snapshots, so prod also runs on still-synthetic snapshots during the phase 2 transition.",
     "ticker": "SPY",
     "dataset_kind": "etf-daily",
     "granularity": "daily",
     "calendar": "XNYS",
     "currency": "USD",
-    "data_source": "fixture"
+    "data_source": "platform_snapshots"
   },
   "job_types": {
     "prepare_dataset": {

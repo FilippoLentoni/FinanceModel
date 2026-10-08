@@ -14,8 +14,10 @@ before it reaches a deployed API.
 * a caller-supplied ``run_id`` is ``VALIDATION_FAILED`` (JOB-03) and an unknown run is
   ``NOT_FOUND``; both are contract error envelopes.
 
-:func:`run_job_lifecycle` submits ONE tiny fixture-backed CPU ``run_backtest`` on a synthetic
-platform snapshot and cancels it before it can cost anything material:
+:func:`run_job_lifecycle` submits ONE tiny synthetic-labeled CPU ``run_backtest`` on the approved
+integration snapshot and cancels it before it can cost anything material. The snapshot may be real
+(phase 2: a yfinance SPY snapshot, no ``synthetic`` flag) or synthetic (prod during the phase 2
+transition); the suite behaves the same in beta and gamma (data parity, user decision 26):
 
 * dry run (JOB-08): 200, no ``run_id``, a contract cost-estimate block, nothing recorded;
 * submission (JOB-02): 202 with a FinanceModel-minted ``run_id``; with the default auto-approve
@@ -85,7 +87,7 @@ def _error(resp: tuple[int, Any], status: int, code: str, what: str) -> dict[str
 
 
 def fixture_request(snapshot_id: str, idempotency_key: str, *, dry_run: bool = False, strategy: str = "equal_weight") -> dict[str, Any]:
-    """A tiny synthetic, CPU-only ``run_backtest`` submission (default runtime, one instance)."""
+    """A tiny CPU-only ``run_backtest`` submission labeled synthetic (a test record; the snapshot may be real)."""
     from finplan_contracts import __version__ as contract_version
 
     return {
@@ -153,7 +155,7 @@ def run_job_lifecycle(call: Call, *, snapshot_id: str, run_key: str, sleep: Call
     _valid(sub, "tools/submit-experiment-response")
     run_id = str(sub.get("run_id") or "")
     _check(run_id.startswith("run_"), "FinanceModel mints the run_id")
-    _check(sub.get("synthetic") is True, "a fixture-backed run is labeled synthetic")
+    _check(sub.get("synthetic") is True, "a test submission labeled synthetic stays synthetic")
     r.run_id = run_id
     r.states.append(str(sub["state"]))
     r.steps.append(f"submitted {run_id} ({sub['state']})")

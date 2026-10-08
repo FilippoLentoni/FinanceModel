@@ -42,8 +42,10 @@ contract wins and the test fails.
 | `report` | benchmark report | 300 s / 900 s | `cpu_research` |
 | `daily_recommendation` | the production strategy (from `config/production-strategy`) on an approved `equity-etf-daily` snapshot; stages one recommendation | 1800 s / 1800 s | `cpu_research` |
 
-All phase 1 jobs are CPU jobs on `ml.m5.xlarge` (one instance). They run on synthetic fixture
-snapshots in every environment until the platform approves real SPY snapshots. The contract
+All phase 1 jobs are CPU jobs on `ml.m5.xlarge` (one instance). They run on whatever approved
+platform snapshot is named: real phase 2 (yfinance) snapshots or synthetic ones, identically in
+beta, gamma and prod (data parity, user decision 26; prod may still serve synthetic snapshots
+during the transition). Synthetic fixtures remain for offline and unit tests. The contract
 fixtures' `fixture_optimizer` is **not** a FinanceModel job type, so submitting it gives
 `VALIDATION_FAILED` (`/job_type`). Job types announced for later changes (`rl_train`,
 `rl_evaluate`, `rl_weight_staging`, `swarm_mode_a`, `swarm_mode_b`, `jev_backtest`) give

@@ -48,7 +48,8 @@ Credentials come from the default boto3 chain only: the DevDesktop instance role
      at run time (``scripts/instance_prices.py``; no price is ever in this repository);
 
    and reports, read-only, whether the operator has set ``config/integration-snapshot-id`` in beta and
-   gamma (never written: only the operator knows which approved synthetic platform snapshot to use).
+   gamma (never written: optional override; without it the suite uses the snapshot the platform's
+   own suite publishes, a real SPY snapshot in phase 2, user decision 26).
 7. **Source-stage dry run** (contract): an execution must fetch ``main`` of
    ``FilippoLentoni/FinanceModel`` before the stages after Source are enabled; otherwise it stops
    with the extend-the-GitHub-App-installation message.
@@ -314,7 +315,8 @@ def report_operator_parameters(ssm: Any, *, out: Callable[[str], None] = print) 
         if present:
             out(f"[OK] {name} is set")
         else:
-            out(f"[ACTION] {name} is not set: the {env} deployed suite fails until the operator writes an approved synthetic platform snapshot ID there (docs/operations.md)")
+            platform_key = contract_ssm.build(env, "financialplanning", "config", "integration-snapshot-id")
+            out(f"[ACTION] {name} is not set: the {env} deployed suite uses {platform_key} (published by the platform's suite; real or synthetic) and fails if neither is set (docs/operations.md)")
     return status
 
 

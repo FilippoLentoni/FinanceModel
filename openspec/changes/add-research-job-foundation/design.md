@@ -111,7 +111,7 @@ SageMaker Completed → succeeded (+ solution_status from result) | Failed → f
 
 ### D10. Pipeline
 
-- Follows contracts D6: build stage builds the image once, runs unit and contract tests with fixtures and a SageMaker-blocking test harness, synthesizes the stacks and records digests. Beta and gamma run fixture integration tests through the job API (one short CPU job each, covered by the pre-approved test allowance). Prod smoke uses `list_jobs` and a dry-run submission only.
+- Follows contracts D6: build stage builds the image once, runs unit and contract tests with fixtures and a SageMaker-blocking test harness, synthesizes the stacks and records digests. Beta and gamma run fixture integration tests through the job API (one short CPU job each, covered by the pre-approved test allowance). Note (user decision 26, data parity, 2026-10-07): the test request stays synthetic, but the approved snapshot it runs on may be real (phase 2 yfinance SPY, published by the platform's suite) in beta, gamma and prod alike; prod also accepts still-synthetic snapshots during the transition, and every `config/<env>.json` declares `instrument.data_source` `platform_snapshots`. Synthetic fixtures remain for offline and unit tests. Prod smoke uses `list_jobs` and a dry-run submission only.
 
 ## Risks / Trade-offs
 

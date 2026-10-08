@@ -100,10 +100,11 @@ AWS_REGION=us-east-2 uv run python scripts/bootstrap.py --assembly cdk.out   # i
 ## After the bootstrap
 
 - **Operator parameters** ([operations.md](operations.md#configuration-an-operator-writes-per-environment)).
-  Before the first pipeline run reaches `IntegrationBetaTests`, write
-  `/finplan/beta/financemodel/config/integration-snapshot-id` (and the gamma one before
-  `GammaTests`): an approved **synthetic** platform snapshot of that environment. The bootstrap
-  prints `[ACTION]` lines for any that are missing. Instance prices expire after 30 days: refresh
+  `/finplan/<env>/financemodel/config/integration-snapshot-id` (beta, gamma) is an optional
+  override: without it the deployed suite uses the approved snapshot the platform's own suite
+  publishes at `/finplan/<env>/financialplanning/config/integration-snapshot-id` (a real SPY
+  snapshot in phase 2; real and synthetic are both accepted, user decision 26). The bootstrap
+  prints `[ACTION]` lines for any override that is missing. Instance prices expire after 30 days: refresh
   them with `uv run python scripts/instance_prices.py --write`.
 - **Budget enforcement.** FinanceModel publishes two kinds of role-name lists for the platform's
   budget action (contracts D4, D16):

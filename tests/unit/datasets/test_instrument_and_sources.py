@@ -200,3 +200,17 @@ def test_revisions_keep_the_first_seen_values_or_fail():
     assert bar.close == obs[2]["close"] and bar.source_snapshot_id == first
     with pytest.raises(FinplanError):
         env.prepare([first, second], _cfg(revisions="fail"))
+
+
+@pytest.mark.parametrize("stage", ["beta", "gamma", "prod"])
+def test_every_stage_prepares_real_snapshots_and_prod_transition_keeps_synthetic(stage):
+    """Data parity (user decision 26): each stage's configured data source admits real snapshots;
+    fixture-mode preparation of still-synthetic snapshots stays available (prod transition)."""
+    from finplan_model.core.config import load_config
+
+    env_source = load_config(stage).instrument["data_source"]
+    env = Env()
+    real = env.prepare([_real(env, _obs(env))], _cfg(data_source="platform_snapshots"), environment_data_source=env_source)
+    assert real.record["synthetic"] is False and real.record["real_data"] is True
+    fixture = env.prepare([env.provider.publish(_obs(env), retrieved_at=utc(2026, 1, 31, 14))], _cfg(), environment_data_source=env_source)
+    assert fixture.record["synthetic"] is True

@@ -4,14 +4,18 @@
   (:class:`~finplan_model.core.platform.SnapshotReader`: approved-only, every checksum verified)
   and enforces the data-source rules:
 
-  - ``data_source: fixture`` (phase 1): every snapshot must be synthetic; a real snapshot is
-    ``VALIDATION_FAILED``;
+  - ``data_source: fixture``: every snapshot must be synthetic; a real snapshot is
+    ``VALIDATION_FAILED`` (request ``platform_snapshots`` for it);
   - ``data_source: platform_snapshots`` (real ETF data): the environment must have approved real
     ETF snapshots (``config/<env>.json`` ``instrument.data_source``); otherwise, and whenever the
     requested snapshot is missing or not approved, the request fails with
     ``DEPENDENCY_UNAVAILABLE`` (``no_approved_real_snapshot``) while fixture-backed preparation
     stays available (DS-11). A synthetic snapshot offered for a real-data request is
     ``VALIDATION_FAILED``.
+
+  Since user decision 26 (data parity) beta, gamma and prod all declare ``platform_snapshots``:
+  the same request is accepted in every stage, and prod, which may still serve synthetic
+  snapshots during the phase 2 transition, keeps accepting them in fixture mode.
 
 * :func:`check_instrument` refuses a snapshot whose dataset or instrument is not the configured ETF
   daily series - for example the S&P 500 index level or the constituent universe - with
@@ -76,7 +80,7 @@ def load_input_snapshots(reader: SnapshotReader, input_snapshot_ids: Sequence[st
         if real and synthetic:
             raise FinplanError.validation("a real-data preparation was given a synthetic snapshot", pointer=f"/input_snapshot_ids/{n}", input_snapshot_id=sid)
         if not real and not synthetic:
-            raise FinplanError.validation("phase 1 datasets are prepared only from synthetic fixture snapshots (data_source fixture)", pointer=f"/input_snapshot_ids/{n}", input_snapshot_id=sid)
+            raise FinplanError.validation("fixture-mode preparation (data_source fixture) accepts only synthetic snapshots; request data_source platform_snapshots for a real snapshot", pointer=f"/input_snapshot_ids/{n}", input_snapshot_id=sid)
         if not real and str(content.snapshot.lineage.get("provider")) not in SYNTHETIC_PROVIDERS:
             raise FinplanError.validation("fixture preparation accepts only the fixture or mock provider", pointer=f"/input_snapshot_ids/{n}", input_snapshot_id=sid)
         out.append(content)

@@ -3,9 +3,11 @@
 Task group 3 of `add-research-job-foundation`. Spec: `research-datasets` (DS-01 to DS-14). Design:
 D6. Code: `src/finplan_model/datasets/`.
 
-> **Defaults on this page are configuration, not market facts.** Phase 1 prepares datasets only from
-> **synthetic** snapshots served by the mock provider. Real SPY snapshots come only from the
-> platform's yfinance ingestion, read as approved platform snapshots. FinanceModel never calls a
+> **Defaults on this page are configuration, not market facts.** Offline tests and CI prepare
+> datasets only from **synthetic** snapshots served by the mock provider. Real SPY snapshots come
+> only from the platform's yfinance ingestion (phase 2), read as approved platform snapshots; beta,
+> gamma and prod all accept them (data parity, user decision 26), and prod also keeps accepting
+> still-synthetic snapshots during the transition. FinanceModel never calls a
 > market-data provider.
 
 ## Flow
@@ -140,8 +142,8 @@ Feature kinds are `trailing_return`, `trailing_volatility` and `close`.
 
 | `data_source` | Accepted snapshots | Otherwise |
 |---|---|---|
-| `fixture` (phase 1) | Synthetic, provider `fixture` or `mock` | `VALIDATION_FAILED` |
-| `platform_snapshots` (real) | Approved, non-synthetic | `DEPENDENCY_UNAVAILABLE` (`no_approved_real_snapshot`) when the environment serves fixtures only (`config/<env>.json` `instrument.data_source`), or the snapshot is missing or not approved. Fixture preparation stays available |
+| `fixture` | Synthetic, provider `fixture` or `mock` | `VALIDATION_FAILED` |
+| `platform_snapshots` (real) | Approved, non-synthetic | `DEPENDENCY_UNAVAILABLE` (`no_approved_real_snapshot`) when the environment serves fixtures only (`config/<env>.json` `instrument.data_source` `fixture`; beta, gamma and prod all declare `platform_snapshots`), or the snapshot is missing or not approved. Fixture preparation stays available |
 
 `MockSnapshotProvider` publishes synthetic ETF-shaped snapshots to the in-process
 `FixturePlatformClient`. They are built from the shared contract fixtures

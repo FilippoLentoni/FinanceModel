@@ -17,7 +17,7 @@ file. FinanceModel's deploy (the pipeline) writes none of these. The bootstrap w
 | `auto-approve-usd` | Estimates at or below it start without approval (FM-OQ-3) | No | Operator | `0`: every paid job waits for approval |
 | `lease-limits` | `{"cpu": 1, "gpu": 0}` | No | Operator | Configuration defaults (one CPU slot; the `ml.m5.xlarge` processing quota is 1 for the whole account) |
 | `production-candidate-principals` | JSON list of role names allowed to submit `production_candidate` runs (platform-side principals only, never tool roles) | No | Operator | Empty |
-| `integration-snapshot-id` | (beta, gamma) An approved **synthetic** platform snapshot ID (`snap_...`, for example one from the platform's fixture ingestion) that the deployed suite's fixture job runs on. The suite cancels its run before it starts while `auto-approve-usd` is 0 | **Yes, before the first pipeline run reaches `IntegrationBetaTests`** (and `GammaTests`) | Operator only: the bootstrap reports whether it is set but never writes it, because only the operator knows which approved snapshot of that environment to use | **None.** The beta/gamma suite fails and names the parameter |
+| `integration-snapshot-id` | (beta, gamma) An approved platform snapshot ID (`snap_...`), real or synthetic, that the deployed suite's synthetic-labeled test job runs on. The suite cancels its run before it starts while `auto-approve-usd` is 0 | No: an override. Without it the suite uses `/finplan/<env>/financialplanning/config/integration-snapshot-id`, which the platform's own beta/gamma suite publishes (a real SPY snapshot in phase 2; data parity, user decision 26) | Operator only: the bootstrap reports whether it is set but never writes it | The platform-published snapshot; the beta/gamma suite fails and names both parameters when neither is set |
 
 Instance prices (no price is ever written in this repository):
 
@@ -31,8 +31,8 @@ The script asks the AWS Price List API (`AmazonSageMaker`, `component` `Processi
 deployment region, every instance type of a deployed job type) and refuses to write when a price is
 missing. It writes as the `bootstrap` writer of the contract SSM rules.
 
-Integration snapshot (beta and gamma; pick an **approved, synthetic** snapshot of that environment
-from the platform, for example with its `GET /v1/snapshots` operation):
+Integration snapshot override (beta and gamma; pick an **approved** snapshot of that environment,
+real or synthetic, from the platform, for example with its `GET /v1/snapshots` operation):
 
 ```sh
 aws ssm put-parameter --name /finplan/beta/financemodel/config/integration-snapshot-id \

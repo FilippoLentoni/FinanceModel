@@ -66,9 +66,14 @@ class DeployedEnv:
         return lambda method, path, body=None: self.call(method, path, body)
 
     def integration_snapshot_id(self) -> str:
-        """The approved synthetic platform snapshot the lifecycle runs on (operator-set, docs/operations.md)."""
-        # An operator override wins; otherwise use the approved synthetic snapshot the platform's
-        # own beta/gamma suite publishes after it passes (FinancialPlanning pipeline).
+        """The approved platform snapshot the lifecycle runs on (operator override or platform-published).
+
+        Real or synthetic: in phase 2 the platform's beta/gamma suite publishes a real SPY snapshot
+        (no ``synthetic`` flag, lineage provider ``yfinance``); the same suite accepts either in
+        every stage (data parity, user decision 26). The submitted request itself stays synthetic.
+        """
+        # An operator override wins; otherwise use the approved snapshot the platform's own
+        # beta/gamma suite publishes after it passes (FinancialPlanning pipeline).
         platform_key = f"/finplan/{self.env}/financialplanning/config/integration-snapshot-id"
         sid = self.param(self.own("config", "integration-snapshot-id")) or self.param(platform_key)
         assert sid, f"no integration snapshot: set {self.own('config', 'integration-snapshot-id')} or let the platform pipeline publish {platform_key}"
