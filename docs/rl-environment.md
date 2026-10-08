@@ -2,24 +2,29 @@
 
 Task 1.4 of `add-learning-and-llm-strategies`; spec `rl-strategies`. **The values below are
 configuration pending user review**, not findings. The specification is versioned
-(`finplan-rl-env/1`, `finplan_model.rl.spec.EnvSpec`). The whole document, including the reward
+(`finplan-rl-env/2`, `finplan_model.rl.spec.EnvSpec`; version 1 remains readable). The whole document, including the reward
 formula, enters every trained policy's `configuration_id`, together with the algorithm
 hyperparameters, the simulation configuration id, the training range and the instrument list. So a
 changed coefficient means a new configuration and a new training run (RL-01, RL-08).
 
 ## Default specification
 
-Used by `model_selection` (`config/<env>.json` `job_types.model_selection.protocol.rl.env`):
+Beta stability experiment (`config/beta.json` `job_types.model_selection.protocol.rl.env`).
+Gamma/prod retain the original 20-return-window configuration, full episodes and full rebalances.
 
 ```json
 {
-  "window": 20,
+  "version": "finplan-rl-env/2",
+  "window": 60,
+  "features": ["market_summary", "current_weights", "portfolio_drawdown"],
   "return_scale": 50.0,
   "obs_clip": 5.0,
-  "action_scale": 5.0,
+  "action_scale": 1.0,
   "step_sessions": 1,
   "decision_frequency": "daily",
-  "reward": {"risk_penalty": 1.0, "drawdown_penalty": 0.5, "turnover_penalty": 0.0, "reward_scale": 100.0}
+  "episode_sessions": 64,
+  "rebalance_fraction": 0.25,
+  "reward": {"risk_penalty": 1.0, "drawdown_penalty": 0.5, "turnover_penalty": 0.001, "reward_scale": 100.0}
 }
 ```
 
@@ -30,14 +35,19 @@ other terms fixed.
 
 The state uses point-in-time data only, observed at the close of the decision session `d`:
 
-- `log_return_window`: the trailing 20 daily log close-to-close returns of each of the `n`
+- Optional legacy `log_return_window`: the trailing `window` daily log close-to-close returns of each of the `n`
   instruments, oldest first. They are multiplied by `return_scale` and clipped to
-  `[-obs_clip, obs_clip]`, giving `20 x n` values.
+  `[-obs_clip, obs_clip]`, giving `window x n` values.
+- Beta `market_summary`: mean daily log return and population standard deviation over 5, 20
+  and 60 sessions, multiplied by `return_scale`, clipped to `obs_clip`: `6 x n` values. A window
+  shorter than a summary horizon uses all available window returns. No fitted future normalizer.
 - `current_weights`: the current weight of each instrument plus the cash weight, marked at the
   decision close, giving `n + 1` values.
+- Beta `portfolio_drawdown`: current drawdown from observed episode NAV high water mark, one value.
+  Daily decisions are required so policy and training observe the same portfolio peak.
 
 For the research universe (VOO, GOOGL, NFLX, AAPL, NVDA plus cash) the observation has
-`20 x 5 + 6 = 106` values. A feature that the specification does not declare cannot be read: reading
+`6 x 5 + 6 + 1 = 37` beta values (106 in the original configuration). A feature that the specification does not declare cannot be read: reading
 one fails with `VALIDATION_FAILED`. A policy without `window + 1` visible closes holds (`no_effect`),
 as the optimizers do while they lack history.
 
@@ -45,7 +55,10 @@ as the optimizers do while they lack history.
 
 The action is a vector `a` in `[-1, 1]^(n+1)`. It maps to target weights by
 `w = softmax(action_scale * a)` over the instruments plus cash. The result is long-only, every
-weight is at most 1, and the weights sum to 1 with cash (RL-03). The simulator's constraint policy
+weight is at most 1, and the weights sum to 1 with cash (RL-03). The action transform
+receives `rebalance_fraction * proposed + (1 - rebalance_fraction) * current` weights, including cash.
+Beta uses 0.25 to reduce sudden allocation changes; the legacy value is 1.0. This changes the action
+semantics and is recorded in the configuration. The simulator's constraint policy
 then applies the same projection and record as for every other strategy. Evaluation is
 deterministic (`deterministic=True`).
 
@@ -68,11 +81,14 @@ reward_t = reward_scale * ( ln(V[d_t+1] / V[d_t])
 
 ## Episode and decisions
 
-- **Training.** One episode is one pass over the training window, starting all in cash. The first
-  decision falls at a seeded random offset in `[window, window + step_sessions)` sessions into the
-  window. After that there is one decision every `step_sessions` (21) sessions, about one month.
-- **Validation checkpoints.** These use the calendar rebalance sessions of the window (first
-  session of each month), which is the common evaluator's own rule.
+- **Beta training.** Each episode starts all in cash at a seeded random session within the training
+  split, with 60 preceding sessions from that split. It runs for 64 sessions with daily decisions.
+  An artificial episode boundary is truncated with a real final observation for TD bootstrapping;
+  the end of the training split is terminal. No episode crosses into validation.
+- **Legacy training.** `episode_sessions=0` means one full training-window pass. Daily frequency
+  previously meant every reset started on exactly the same session.
+- **Validation checkpoints.** These run the complete validation split with daily decisions,
+  matching the common evaluator. Randomized windows are used only for training.
 
 ## Accounting (RL-02)
 

@@ -35,7 +35,7 @@ from finplan_model.sim.config import SimulationConfig
 from finplan_model.sim.constraints import apply_constraints
 
 from .arrays import PriceArrays, calendar_schedule
-from .spec import EnvSpec, build_observation, softmax_weights
+from .spec import EnvSpec, allocation_action, build_observation
 
 __all__ = ["Book", "PortfolioEnv", "run_schedule", "schedule_metrics"]
 
@@ -149,8 +149,11 @@ class Accounting:
 
     def observation(self, spec: EnvSpec, book: Book, k: int) -> np.ndarray:
         w, c = self.weights(book, k)
-        closes = self.a.close[k - spec.window : k + 1] if "log_return_window" in spec.features else None
-        return build_observation(spec, closes if closes is not None else np.zeros((spec.window + 1, self.n)), w, c)
+        closes = self.a.close[k - spec.window : k + 1]
+        value = book.value(self.a.close[k])
+        peak = max(book.log, default=value)
+        drawdown = max(0.0, min(1.0, 1 - value / peak)) if peak > 0 else 0.0
+        return build_observation(spec, closes, w, c, drawdown=drawdown)
 
 
 Predict = Callable[[np.ndarray], Any]
@@ -228,6 +231,7 @@ class PortfolioEnv(gym.Env):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(self.n + 1,), dtype=np.float32)
         self._schedule: list[int] = []
         self._t = 0
+        self._episode_end = i1
         self.book = Book(np.zeros(self.n), float(config.initial_cash))
         self._peak = float(config.initial_cash)
         self._dd = 0.0
@@ -238,11 +242,21 @@ class PortfolioEnv(gym.Env):
         super().reset(seed=seed)
         if self.mode == "train":
             first = self.i0 + self.env_spec.window
-            offset = int(self.np_random.integers(0, self.env_spec.step_sessions)) if self.env_spec.step_sessions > 1 else 0
-            start = min(first + offset, self.i1 - 1)
-            self._schedule = list(range(start, self.i1, self.env_spec.step_sessions))
+            length = self.env_spec.episode_sessions
+            if length:
+                if self.i1 - first < length:
+                    from finplan_model.core.errors import FinplanError
+                    raise FinplanError.validation("training range cannot fit the requested episode and history", pointer="/rl/env/episode_sessions")
+                start = int(self.np_random.integers(first, self.i1 - length + 1))
+                self._episode_end = start + length
+            else:
+                offset = int(self.np_random.integers(0, self.env_spec.step_sessions)) if self.env_spec.step_sessions > 1 else 0
+                start = min(first + offset, self.i1 - 1)
+                self._episode_end = self.i1
+            self._schedule = list(range(start, self._episode_end, self.env_spec.step_sessions))
         else:
             self._schedule = list(self._eval_schedule)
+            self._episode_end = self.i1
         self._t = 0
         self.book = Book(np.zeros(self.n), float(self.cfg.initial_cash))
         v0 = self.book.value(self.arrays.close[self._schedule[0]]) if self._schedule else float(self.cfg.initial_cash)
@@ -254,8 +268,9 @@ class PortfolioEnv(gym.Env):
 
     def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         d = self._schedule[self._t]
-        nxt = self._schedule[self._t + 1] if self._t + 1 < len(self._schedule) else self.i1
-        w, c = softmax_weights(action, self.n, self.env_spec.action_scale)
+        nxt = self._schedule[self._t + 1] if self._t + 1 < len(self._schedule) else self._episode_end
+        current, current_cash = self.acc.weights(self.book, d)
+        w, c = allocation_action(self.env_spec, action, current, current_cash)
         tgt = self.acc.target(self.book, d, w, c)
         v_d = self.book.value(self.arrays.close[d])
         traded_before = self.book.traded
@@ -265,15 +280,17 @@ class PortfolioEnv(gym.Env):
         reward, terms = self._reward(v_d, values, turnover)
         self.episode_reward += reward
         self._t += 1
-        terminated = self._t >= len(self._schedule)
+        finished = self._t >= len(self._schedule)
+        truncated = finished and self._episode_end < self.i1
+        terminated = finished and not truncated
         info: dict[str, Any] = {"value": values[-1], "turnover": turnover, "reward_terms": terms}
-        if terminated:
+        if finished:
             info["episode_reward"] = self.episode_reward
             info["episode_net_return"] = values[-1] / float(self.cfg.initial_cash) - 1.0
-            obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+            obs = self.acc.observation(self.env_spec, self.book, nxt) if truncated else np.zeros(self.observation_space.shape, dtype=np.float32)
         else:
             obs = self.acc.observation(self.env_spec, self.book, self._schedule[self._t])
-        return obs, float(reward), terminated, False, info
+        return obs, float(reward), terminated, truncated, info
 
     def _reward(self, v_d: float, values: list[float], turnover: float) -> tuple[float, dict[str, float]]:
         r = self.env_spec.reward
@@ -299,7 +316,8 @@ class PortfolioEnv(gym.Env):
             if k < spec.window:
                 return None
             obs = self.acc.observation(spec, book, k)
-            return softmax_weights(predict(obs), self.n, spec.action_scale)
+            current, cash = self.acc.weights(book, k)
+            return allocation_action(spec, predict(obs), current, cash)
 
         values = run_schedule(self.arrays, self.cfg, spec, self.i0, self.i1, decide, self._eval_schedule if self.mode == "eval" else calendar_schedule(self.arrays, self.i0, self.i1, spec.decision_frequency))
         return {"values": values, **schedule_metrics(values, self.cfg)}

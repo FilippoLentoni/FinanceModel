@@ -243,12 +243,18 @@ def test_build_check_refuses_an_expensive_or_non_training_model_selection():
         assert validate_config("beta", bad), change
 
 
-def test_every_environment_deploys_the_same_model_selection_protocol():
+def test_beta_stability_protocol_is_isolated_from_gamma_and_prod():
     protos = [env_config(e).raw["job_types"]["model_selection"]["protocol"] for e in ("beta", "gamma", "prod")]
-    assert protos[0] == protos[1] == protos[2]
+    assert protos[1] == protos[2]
     from finplan_model.selection.protocol import DEFAULT_PROTOCOL
 
-    assert protos[0] == DEFAULT_PROTOCOL
+    assert protos[1] == DEFAULT_PROTOCOL
+    beta = protos[0]
+    assert beta["splits"] == DEFAULT_PROTOCOL["splits"]
+    assert beta["traditional"] == DEFAULT_PROTOCOL["traditional"]
+    assert beta["rl"]["algorithms"] == ["ppo"] and beta["rl"]["policy_selection"] == "ensemble"
+    assert beta["rl"]["seeds"] == [0, 1, 2, 3, 4]
+    assert beta["rl"]["env"]["episode_sessions"] == 64
 
 
 # ----------------------------------------------------------------- IaC

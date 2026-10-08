@@ -86,7 +86,7 @@
       "cost_check_usd_per_hour": 0.28
     },
     "model_selection": {
-      "$comment": "Offline model selection on request only (decision 27; change add-learning-and-llm-strategies): controls, traditional optimizers (min_variance, mean_variance, scenario_cvar) and RL (ppo, sac x 5 seeds) on one approved research-universe snapshot, through the common evaluator; train 2025, validate 2026H1, untouched test 2026-07-01..latest, evaluated once. One CPU SageMaker TRAINING job (RL learners never run in Lambda or CodeBuild). cost_check_usd_per_hour is a deliberately high planning bound for the build check (live prices come only from config/instance-prices); at about USD 0.23/h the upper-bound estimate for 3000 s is about USD 0.20, under the beta/gamma auto-approve threshold (USD 0.25, decision 24); prod always asks the approver. The protocol is configuration pending user review, frozen into every run at submission.",
+      "$comment": "Beta PPO stability experiment: fixed 2025/2026 development splits, controls and traditional grids retained; five seeds per reward configuration, equal-weight seed ensemble. Reused test paths are research-only. One CPU Training job, 3000-second hard cap; no scheduled experiments.",
       "entry_point": "model_selection",
       "compute_class": "cpu",
       "sagemaker_job": "training",
@@ -168,8 +168,7 @@
         },
         "rl": {
           "algorithms": [
-            "ppo",
-            "sac"
+            "ppo"
           ],
           "seeds": [
             0,
@@ -179,18 +178,26 @@
             4
           ],
           "env": {
-            "window": 20,
+            "window": 60,
             "return_scale": 50.0,
             "obs_clip": 5.0,
-            "action_scale": 5.0,
+            "action_scale": 1.0,
             "step_sessions": 1,
             "decision_frequency": "daily",
             "reward": {
               "risk_penalty": 1.0,
               "drawdown_penalty": 0.5,
-              "turnover_penalty": 0.0,
+              "turnover_penalty": 0.001,
               "reward_scale": 100.0
-            }
+            },
+            "version": "finplan-rl-env/2",
+            "features": [
+              "market_summary",
+              "current_weights",
+              "portfolio_drawdown"
+            ],
+            "episode_sessions": 64,
+            "rebalance_fraction": 0.25
           },
           "grid": {
             "risk_penalty": [
@@ -231,7 +238,8 @@
             ],
             "eval_every": 1000,
             "patience": 4
-          }
+          },
+          "policy_selection": "ensemble"
         },
         "runtime": {
           "reserve_seconds": 600

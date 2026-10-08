@@ -160,6 +160,15 @@ def train_policy(
             self.last_eval = -1
             self.stopped = "completed"
             self.episode_rewards: list[float] = []
+            self.updates: list[dict[str, Any]] = []
+
+        def _on_rollout_start(self) -> None:
+            # SB3 exposes the previous optimizer update here, before the next rollout.
+            keys = ("explained_variance", "approx_kl", "clip_fraction", "entropy_loss", "value_loss", "policy_gradient_loss", "std", "n_updates")
+            row = {key: float(self.model.logger.name_to_value["train/" + key])
+                   for key in keys if "train/" + key in self.model.logger.name_to_value}
+            if row and len(self.updates) < 2000:
+                self.updates.append({"step": int(self.num_timesteps), **{k: v if math.isfinite(v) else None for k, v in row.items()}})
 
         def _evaluate(self) -> bool:
             res = val_env.evaluate(lambda obs: self.model.predict(obs, deterministic=True)[0])
@@ -206,6 +215,8 @@ def train_policy(
         "last_decile_mean_episode_reward": None if not rewards else round(float(np.mean(rewards[-k:])), 6),
         "best_validation_" + metric: None if not math.isfinite(cb.best) else round(cb.best, 6),
         "note": "shaped training reward (reward_scale x (log return - risk, drawdown and turnover penalties)); not portfolio performance",
+        "optimizer_updates": cb.updates,
+        "checkpoint_improved_over_initial": cb.best_step > 0,
     }
     return TrainedPolicy(
         algorithm=algorithm,
