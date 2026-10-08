@@ -25,6 +25,8 @@ Outperformance is a research question, not an implementation guarantee.
   ensemble of target portfolios plus each seed individually. Never average network parameters.
 - Report validation curves, step-zero comparisons, PPO explained variance, KL, clip fraction,
   entropy, value/policy losses, training reward and net portfolio performance separately.
+- Preserve the full summary in the evidence artifact before response compaction. Keep all validation
+  curves in the API; sample only optimizer histories and identify the full diagnostic artifact.
 - A test path inspected in previous runs is reused development evidence. Flag reuse and prevent
   the run's promotion check from passing. Independent future evaluation is required for promotion.
 - Use existing beta pipeline and CloudFormation stacks. Gamma/prod settings and production

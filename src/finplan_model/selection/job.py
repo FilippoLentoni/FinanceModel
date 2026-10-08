@@ -529,10 +529,6 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
         ref = inp.artifacts.put(data, kind="rl_policy", content_type="application/zip", synthetic=synthetic, domain="finance")
         refs.append(ref)
         policy_rows.append({**meta, "artifact_id": ref.artifact_id, "size_bytes": len(data)})
-    evidence = {**out.evidence, "policies": policy_rows}
-    if section is not None:
-        evidence["bias_section"] = section
-    refs.insert(0, inp.artifacts.put_json(evidence, kind="run_artifact", synthetic=synthetic, domain="finance"))
     summary = out.summary
     summary["policies"] = policy_rows
     est = (spec.get("cost_estimate") or {}).get("estimated_usd_upper_bound")
@@ -551,17 +547,36 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
             "budget_category": "cpu_research",
         }
     )
+    # Serialize the full diagnostics before compacting the API response. Previously the evidence
+    # artifact omitted the summary, so removing checkpoint curves lost them permanently.
+    evidence = {**out.evidence, "policies": policy_rows, "summary": summary}
+    if section is not None:
+        evidence["bias_section"] = section
+    full = inp.artifacts.put_json(evidence, kind="run_artifact", synthetic=synthetic, domain="finance")
+    refs.insert(0, full)
+    summary["full_diagnostics_artifact_id"] = full.artifact_id
     doc = succeeded_result(inp.ctx, spec, solution_status=out.selected.results["test"].solution_status, artifacts=refs, performance=out.performance, dataset_checksum=inp.market.dataset_checksum, instance_seconds=wall, benchmark=out.test_section)
     doc["payload"]["model_selection"] = summary
     doc = _with_bias(doc, section)
     size = len(canonical_json_bytes(doc))
     if size > MAX_RESULT_BYTES:
-        # keep the decision-relevant parts; the full detail is in the evidence artifact
-        for block in summary.get("rl", {}).values():
-            for g in block.get("grid", []) if isinstance(block, Mapping) else []:
-                for ck in g.get("checkpoints", []):
-                    ck.pop("curve", None)
+        # Keep every validation curve and sample only the verbose optimizer history. Preserve the
+        # initial, selected-checkpoint and final update alongside uniformly spaced points.
+        for runs in summary.get("training_reward", {}).get("runs", {}).values():
+            for run in runs:
+                tr = run.get("training_reward", {})
+                updates = tr.get("optimizer_updates", [])
+                if len(updates) <= 16:
+                    continue
+                indices = {round(i * (len(updates) - 1) / 11) for i in range(12)}
+                before = [i for i, row in enumerate(updates) if row["step"] < run.get("best_step", 0)]
+                if before:
+                    indices.add(before[-1])
+                tr["optimizer_update_count"] = len(updates)
+                tr["optimizer_updates"] = [updates[i] for i in sorted(indices)]
+                tr["optimizer_updates_compacted"] = True
         summary["result_trimmed"] = True
+        summary["result_trimmed_sections"] = ["training_reward.optimizer_updates"]
     from finplan_model.control.validation import find_storage_location
     from finplan_model.core.outcome import require_valid
 

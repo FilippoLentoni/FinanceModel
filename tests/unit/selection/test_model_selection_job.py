@@ -147,8 +147,11 @@ def test_the_daily_trigger_cannot_submit_model_selection():
 
 
 # ----------------------------------------------------------------- the container run and the state change
-def test_container_run_writes_a_contract_result_with_every_section():
-    h, platform = _harness()
+@pytest.mark.parametrize("policy_selection", ["best_seed", "ensemble"])
+def test_container_run_writes_a_contract_result_with_every_section(policy_selection):
+    protocol = tiny_protocol()
+    protocol["rl"]["policy_selection"] = policy_selection
+    h, platform = _harness(protocol=protocol)
     run_id = h.start(**selection_request())
     ((_, req),) = [(op, kw) for op, kw in h.sagemaker.calls if op == "CreateTrainingJob"]
     env = req["Environment"]
@@ -202,6 +205,46 @@ def test_local_container_run_produces_policy_artifacts_without_aws(tmp_path):
     stored = list((tmp_path / "artifacts").rglob("*"))
     assert sum(1 for f in stored if f.is_file()) >= 4  # evidence + 3 policies
     assert '"event": "rl_training_finished"' in out.stdout and '"event": "selection_frozen"' in out.stdout
+
+
+def test_large_optimizer_histories_preserve_validation_curves_and_full_evidence(monkeypatch):
+    import finplan_model.rl.train as learner
+
+    original = learner.train_policy
+
+    def verbose_history(*args, **kwargs):
+        trained = original(*args, **kwargs)
+        trained.training_reward["optimizer_updates"] = [
+            {"step": step, "explained_variance": 0.25, "approx_kl": 0.01, "clip_fraction": 0.1,
+             "entropy_loss": -3.0, "value_loss": 0.5, "policy_gradient_loss": -0.02, "std": 1.0}
+            for step in range(1000)
+        ]
+        return trained
+
+    monkeypatch.setattr(learner, "train_policy", verbose_history)
+    protocol = tiny_protocol()
+    protocol["rl"]["policy_selection"] = "ensemble"
+    h, platform = _harness(protocol=protocol)
+    run_id = h.start(**selection_request())
+    env = next(kw for op, kw in h.sagemaker.calls if op == "CreateTrainingJob")["Environment"]
+    artifacts = InMemoryArtifactStore()
+    code, doc = run_job("model_selection", run_id, run_io=h.run_io, platform=platform, artifacts=artifacts,
+                        environment="beta", spec_checksum=env["FINPLAN_RUN_SPEC_SHA256"],
+                        correlation_id=env["FINPLAN_CORRELATION_ID"], image_digest=env["FINPLAN_IMAGE_DIGEST"], clock=h.clock)
+    assert code == 0, doc
+    summary = doc["payload"]["model_selection"]
+    assert summary["result_trimmed_sections"] == ["training_reward.optimizer_updates"]
+    assert len(json.dumps(doc)) < 300_000
+    full = artifacts.get_json(doc["artifacts"][0])["summary"]
+    assert summary["full_diagnostics_artifact_id"] == doc["artifacts"][0]["artifact_id"]
+    for algo in ("ppo", "sac"):
+        assert summary["rl"][algo]["grid"] == full["rl"][algo]["grid"]
+        assert all(c["curve"][0]["step"] == 0 for c in summary["rl"][algo]["grid"][0]["checkpoints"])
+        for small, unabridged in zip(summary["training_reward"]["runs"][algo], full["training_reward"]["runs"][algo]):
+            compact = small["training_reward"]
+            assert compact["optimizer_update_count"] == 1000 and len(compact["optimizer_updates"]) <= 13
+            assert compact["optimizer_updates"][0]["step"] == 0 and compact["optimizer_updates"][-1]["step"] == 999
+            assert len(unabridged["training_reward"]["optimizer_updates"]) == 1000
 
 
 def test_cancel_stops_the_training_job_and_timeouts_are_reported():

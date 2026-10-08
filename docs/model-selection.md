@@ -13,6 +13,11 @@ the initial run, not an attribution experiment for any individual change. The ex
 been inspected: repeated runs flag it as development evidence and cannot pass promotion. See
 [the beta specification](../openspec/changes/improve-ppo-stability/specs/rl-stability/spec.md).
 
+Large responses retain every validation checkpoint curve. Only verbose optimizer histories are
+sampled (initial, selected checkpoint, final and uniformly spaced updates); their original counts and
+compaction flags are reported. `full_diagnostics_artifact_id` identifies the evidence artifact with
+the entire unabridged summary and histories. Artifact identifiers carry no storage location.
+
 ## Protocol
 
 | Item | Value |
