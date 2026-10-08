@@ -17,8 +17,8 @@ Used by `model_selection` (`config/<env>.json` `job_types.model_selection.protoc
   "return_scale": 50.0,
   "obs_clip": 5.0,
   "action_scale": 5.0,
-  "step_sessions": 21,
-  "decision_frequency": "monthly",
+  "step_sessions": 1,
+  "decision_frequency": "daily",
   "reward": {"risk_penalty": 1.0, "drawdown_penalty": 0.5, "turnover_penalty": 0.0, "reward_scale": 100.0}
 }
 ```

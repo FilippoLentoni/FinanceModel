@@ -5,7 +5,7 @@ at build time (config gate) and frozen into the run at submission, so a run is r
 spec alone. Default (decision 27): **only 2025-2026 data**; train/calibrate 2025-01-01..2025-12-31,
 validate 2026-01-01..2026-06-30, untouched test 2026-07-01..latest session, evaluated once at the end.
 
-Families, all through the common evaluator with the same costs, monthly rebalance, long-only weights
+Families, all through the common evaluator with the same costs, daily rebalance (user decision 28), long-only weights
 of at most 1 and the same universe plus cash:
 
 * controls: ``cash``, ``buy_and_hold``, ``equal_weight`` (no parameters);
@@ -66,7 +66,7 @@ DEFAULT_PROTOCOL: dict[str, Any] = {
     "rl": {
         "algorithms": ["ppo", "sac"],
         "seeds": [0, 1, 2, 3, 4],
-        "env": {"window": 20, "return_scale": 50.0, "obs_clip": 5.0, "action_scale": 5.0, "step_sessions": 21, "decision_frequency": "monthly", "reward": {"risk_penalty": 1.0, "drawdown_penalty": 0.5, "turnover_penalty": 0.0, "reward_scale": 100.0}},
+        "env": {"window": 20, "return_scale": 50.0, "obs_clip": 5.0, "action_scale": 5.0, "step_sessions": 1, "decision_frequency": "daily", "reward": {"risk_penalty": 1.0, "drawdown_penalty": 0.5, "turnover_penalty": 0.0, "reward_scale": 100.0}},
         "grid": {"risk_penalty": [0.5, 2.0]},
         "ppo": {"total_timesteps": 30000, "learning_rate": 0.0003, "n_steps": 256, "batch_size": 64, "n_epochs": 10, "gamma": 0.9, "gae_lambda": 0.95, "clip_range": 0.2, "ent_coef": 0.0, "net_arch": [64, 64], "eval_every": 2048, "patience": 5},
         "sac": {"total_timesteps": 8000, "learning_rate": 0.0003, "buffer_size": 50000, "learning_starts": 500, "batch_size": 128, "tau": 0.005, "gamma": 0.9, "train_freq": 1, "gradient_steps": 1, "net_arch": [64, 64], "eval_every": 1000, "patience": 4},

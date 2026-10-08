@@ -23,9 +23,16 @@ from tests.unit.rl.support import market, sim_config, tiny_protocol
 FAMILIES = {"cash": "control", "buy_and_hold": "control", "equal_weight": "control", "min_variance": "traditional", "mean_variance": "traditional", "scenario_cvar": "traditional", "ppo": "rl", "sac": "rl"}
 
 
+def daily_config():
+    """The beta simulation defaults with daily rebalancing, the schedule model selection uses (decision 28)."""
+    import dataclasses
+
+    return dataclasses.replace(sim_config(), rebalance_frequency="daily")
+
+
 @pytest.fixture(scope="module")
 def outcome():
-    return select_models(market(), sim_config(), protocol=tiny_protocol())
+    return select_models(market(), daily_config(), protocol=tiny_protocol())
 
 
 # ----------------------------------------------------------------- protocol
@@ -81,7 +88,7 @@ def test_the_test_window_opens_only_after_the_selection_is_frozen():
     from finplan_model.strategies import build_strategy
 
     mkt = market()
-    ev = SplitEvaluator(mkt, sim_config(), None, list(mkt.instruments), {"validation": (mkt.sessions[10], mkt.sessions[40]), "test": (mkt.sessions[41], mkt.sessions[80])})
+    ev = SplitEvaluator(mkt, daily_config(), None, list(mkt.instruments), {"validation": (mkt.sessions[10], mkt.sessions[40]), "test": (mkt.sessions[41], mkt.sessions[80])})
     with pytest.raises(FinplanError) as exc:
         ev.run(build_strategy("equal_weight"), "test")
     assert exc.value.code == "OPERATION_NOT_PERMITTED"
@@ -105,7 +112,7 @@ def test_every_family_is_compared_on_every_split_with_one_evaluator(outcome):
             assert abs(sum(r["final_weights"].values()) + r["final_cash_weight"] - 1.0) < 1e-5 or r["strategy"] == "cash"
             assert all(w <= 1.0 + 1e-9 and w >= -1e-12 for w in r["final_weights"].values())  # long-only, max weight 1
     ev = outcome.summary["evaluation"]
-    assert ev["rebalance_frequency"] == "monthly" and ev["long_only"] is True and ev["max_weight"] == 1.0
+    assert ev["rebalance_frequency"] == "daily" and ev["long_only"] is True and ev["max_weight"] == 1.0
     assert outcome.test_section is comp["test"]
     splits = outcome.summary["data"]["splits"]
     assert splits["train"]["end"] < splits["validation"]["start"] <= splits["validation"]["end"] < splits["test"]["start"]
@@ -185,7 +192,7 @@ def test_policies_are_stored_with_checksum_seed_and_configuration_id(outcome):
 
 def test_time_budget_skips_rl_runs_and_says_so():
     clock = iter([0.0] + [1e9] * 10_000)
-    out = select_models(market(), sim_config(), protocol=tiny_protocol(), deadline=1.0, clock=lambda: next(clock))
+    out = select_models(market(), daily_config(), protocol=tiny_protocol(), deadline=1.0, clock=lambda: next(clock))
     assert out.summary["rl"]["ppo"]["status"] == "not_trained_time_budget"
     assert {c["kind"] for c in out.summary["caveats"]} >= {"rl_time_budget"}
     assert {r["strategy"] for r in out.test_section["strategies"]} == set(FAMILIES) - {"ppo", "sac"}
@@ -198,7 +205,7 @@ def test_a_production_strategy_is_the_incumbent_when_it_is_comparable():
         validate_protocol(p)  # at least one RL algorithm is part of the protocol
     p = tiny_protocol()
     p["rl"]["algorithms"] = ["ppo"]
-    out = select_models(market(), sim_config(), protocol=p, incumbent="equal_weight", prior_test_accesses=1)
+    out = select_models(market(), daily_config(), protocol=p, incumbent="equal_weight", prior_test_accesses=1)
     gate = out.summary["promotion_check"]
     assert gate["incumbent"] == "equal_weight" and gate["incumbent_source"] == "production_strategy"
     assert out.summary["test_access"]["test_reuse"] is True

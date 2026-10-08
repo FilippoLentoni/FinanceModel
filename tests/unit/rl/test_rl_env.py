@@ -92,7 +92,7 @@ def test_rl03_simulator_constraint_policy_projects_and_records():
 def test_rl02_environment_nav_matches_the_common_evaluator_for_the_same_policy():
     mkt, cfg = market(), sim_config()
     arrays = PriceArrays.from_market(mkt)
-    spec = EnvSpec.from_dict({"window": 5})
+    spec = EnvSpec.from_dict({"window": 5, "decision_frequency": cfg.rebalance_frequency, "step_sessions": 21})
     rng = np.random.default_rng(0)
     bias = rng.uniform(-1, 1, size=6)
 

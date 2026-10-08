@@ -113,8 +113,8 @@ class EnvSpec:
     obs_clip: float = 5.0
     action_transform: str = "softmax"
     action_scale: float = 5.0
-    step_sessions: int = 21
-    decision_frequency: str = "monthly"
+    step_sessions: int = 1
+    decision_frequency: str = "daily"
     reward: RewardSpec = field(default_factory=RewardSpec)
     version: str = ENV_SPEC_VERSION
 
@@ -134,7 +134,7 @@ class EnvSpec:
         transform = d.get("action_transform", "softmax")
         if transform not in ACTION_TRANSFORMS:
             raise FinplanError.validation("PPO and SAC map actions to weights by a declared continuous transform (softmax)", pointer=f"{ptr}/action_transform")
-        freq = d.get("decision_frequency", "monthly")
+        freq = d.get("decision_frequency", "daily")
         if freq not in ("daily", "weekly", "monthly", "quarterly"):
             raise FinplanError.validation("decision_frequency must be a rebalance frequency", pointer=f"{ptr}/decision_frequency")
         return cls(
@@ -144,7 +144,7 @@ class EnvSpec:
             obs_clip=_num(d, "obs_clip", 5.0, lo=0.1, hi=1e6, ptr=ptr),
             action_transform=str(transform),
             action_scale=_num(d, "action_scale", 5.0, lo=0.1, hi=50.0, ptr=ptr),
-            step_sessions=_int(d, "step_sessions", 21, lo=1, hi=252, ptr=ptr),
+            step_sessions=_int(d, "step_sessions", 1, lo=1, hi=252, ptr=ptr),
             decision_frequency=str(freq),
             reward=RewardSpec.from_dict(d.get("reward"), ptr=f"{ptr}/reward"),
         )

@@ -24,7 +24,7 @@ One SageMaker **Training** job (CPU, ``ml.m5.xlarge``) on one approved universe 
    (``rl_policy``, with checksum, seed and ``configuration_id``).
 
 Every portfolio number comes from :func:`finplan_model.evaluate.evaluate` with the same simulation
-configuration (costs, monthly rebalance, long-only, weight cap 1, universe plus cash) for every family.
+configuration (costs, daily rebalance, long-only, weight cap 1, universe plus cash) for every family.
 """
 
 from __future__ import annotations
@@ -389,6 +389,12 @@ def _run_rl(
     t_win = arrays.window_indices(*windows["train"])
     v_win = arrays.window_indices(*windows["validation"])
     base = EnvSpec.from_dict(rl_proto.get("env"))
+    if base.decision_frequency != config.rebalance_frequency:
+        # every family must decide on the same schedule (user decision 28: daily)
+        raise FinplanError.validation(
+            f"RL decides {base.decision_frequency} but the common evaluator rebalances {config.rebalance_frequency}; set configuration.rebalance_frequency to match",
+            pointer="/configuration/rebalance_frequency",
+        )
     grid = grid_points(rl_proto.get("grid") or {}) or [{}]
     training_range = {"start": windows["train"][0].isoformat(), "end": windows["train"][1].isoformat()}
     chosen: list[Candidate] = []
@@ -473,7 +479,7 @@ def promotion_check(selected: Candidate, incumbent: Candidate | None, source: st
 def caveats(n_train: int, windows: Mapping[str, tuple[date, date]], mkt: MarketData, rl_section: Mapping[str, Any]) -> list[dict[str, str]]:
     n_test = len([s for s in mkt.sessions if windows["test"][0] <= s <= windows["test"][1]])
     out = [
-        {"kind": "thin_rl_training_data", "text": f"The RL policies were trained on {n_train} daily sessions (one calendar year, about {max(1, round(n_train / 21))} monthly decisions per episode). About 250 training days is thin for reinforcement learning: expect large seed-to-seed variance and overfitting to the training year; treat RL results as exploratory, not as evidence of a durable edge."},
+        {"kind": "thin_rl_training_data", "text": f"The RL policies were trained on {n_train} daily sessions (one calendar year, one decision per trading day). About 250 training days is thin for reinforcement learning: expect large seed-to-seed variance and overfitting to the training year; treat RL results as exploratory, not as evidence of a durable edge."},
         {"kind": "hindsight_and_survivorship", "text": "The research universe was chosen in 2026 knowing that these instruments did well (hindsight selection), and it contains no failed or delisted companies (survivorship). Every family benefits from this choice, so absolute returns overstate what a forward-looking investor could expect; compare families with each other rather than with the market."},
         {"kind": "short_single_test_period", "text": f"The untouched test period has {n_test} sessions and is a single market path; a test ranking is not statistically significant. Live paper trading afterwards is the forward test."},
         {"kind": "validation_reuse", "text": "Grid points, RL checkpoints, RL reward configurations and RL seeds were all chosen on the same six-month validation period, so validation scores are optimistic; only the test numbers are out of sample."},

@@ -14,7 +14,7 @@ pending user review**. Each run freezes a copy of it at submission and records i
 | Validate (tuning, model choice) | 2026-01-01 .. 2026-06-30 |
 | Untouched test | 2026-07-01 .. latest session of the snapshot, evaluated **once**, after the selection is frozen |
 | Universe | equity-etf-daily research universe: VOO, GOOGL, NFLX, AAPL, NVDA, plus cash (the residual weight) |
-| Evaluator | `finplan_model.evaluate.evaluate`, with the same simulation configuration for every family: costs (1 bp fee, 1 bp half-spread, linear-participation slippage), monthly rebalance, next-open execution, long-only, max weight 1 |
+| Evaluator | `finplan_model.evaluate.evaluate`, with the same simulation configuration for every family: costs (1 bp fee, 1 bp half-spread, linear-participation slippage), daily rebalance (user decision 28), next-open execution, long-only, max weight 1 |
 | Selection rule | highest **validation** Sharpe ratio, net of costs. Ties go to the first entry in the declared grid and family order. A rule that names the test split or a holdout fails with `OPERATION_NOT_PERMITTED`. |
 
 ### Families and hyperparameter grids
@@ -81,7 +81,7 @@ every trained policy as an SB3 zip.
 
 ## Caveats reported with every result
 
-- **Thin data for RL.** About 250 training days (one year, about 12 monthly decisions per episode)
+- **Thin data for RL.** About 250 training days (one year, one decision per trading day)
   is thin for reinforcement learning. Expect large seed-to-seed variance and overfitting to 2025, and
   treat RL results as exploratory.
 - **Hindsight and survivorship.** The universe was chosen in 2026 knowing that these names did well,
@@ -105,5 +105,5 @@ every trained policy as an SB3 zip.
 
 Submit with `job_type: model_selection`, `purpose: research` and
 `configuration.payload.strategy: model_selection`. The payload carries the universe (with
-`USD_CASH`), monthly rebalance and the constraints. Name the approved research-universe snapshot by
+`USD_CASH`), daily rebalance (`"rebalance_frequency": "daily"`) and the constraints. Name the approved research-universe snapshot by
 `input_snapshot_id`. A `dry_run: true` submission returns the estimate without recording anything.

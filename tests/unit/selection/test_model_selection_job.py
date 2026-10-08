@@ -62,7 +62,7 @@ def _cfg(protocol=None):
 
 
 def selection_request(**over):
-    cfg = {"domain": "finance", "domain_schema_version": "1.0", "payload": {"strategy": "model_selection", "objective": "backtest", "universe": [*TICKERS, "USD_CASH"], "rebalance_frequency": "monthly", "constraints": {"long_only": True, "max_weight": 1.0}}, "synthetic": True}
+    cfg = {"domain": "finance", "domain_schema_version": "1.0", "payload": {"strategy": "model_selection", "objective": "backtest", "universe": [*TICKERS, "USD_CASH"], "rebalance_frequency": "daily", "constraints": {"long_only": True, "max_weight": 1.0}}, "synthetic": True}
     body = {"job_type": "model_selection", "configuration": cfg, "input_snapshot_id": SID, "evaluation_window": None, **over}
     return body
 
