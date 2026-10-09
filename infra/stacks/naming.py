@@ -74,12 +74,14 @@ REGISTRY_LOOKUP = "job-registry-lookup"
 #: The strategy-selection operation (contracts 1.1.0 ``ssm.PRODUCTION_STRATEGY_WRITER``): the only
 #: writer of ``/finplan/<env>/financemodel/config/production-strategy``.
 STRATEGY_SELECTION = "strategy-selection"
+STRATEGY_INFERENCE = "job-api-handler-inference"
 FUNCTIONS: dict[str, str] = {
     JOB_API_HANDLER: "finplan_model.control.handlers.api_handler",
     DISPATCHER: "finplan_model.control.handlers.dispatcher_handler",
     STATE_HANDLER: "finplan_model.control.handlers.state_change_handler",
     REGISTRY_LOOKUP: "finplan_model.registry.handlers.lookup_handler",
     STRATEGY_SELECTION: "finplan_model.control.selection.selection_handler",
+    STRATEGY_INFERENCE: "finplan_model.serving.handler",
 }
 JOB_EXECUTION = "job-execution"
 #: ``logical-role`` tag of the job-execution role (matrix row ``sagemaker-job-definitions``, contracts 1.0.0 D16).

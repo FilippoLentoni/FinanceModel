@@ -96,7 +96,11 @@ def build_service(env: str | None = None, *, session: Any = None) -> Any:
 
     s3 = s3_client(cfg.region, session=session)
     ids = IdMinter(clock)
+    from finplan_model.core.artifacts import S3ArtifactStore
+    from .production_strategy import SsmStrategyParameter
     deps = ServiceDeps(
+        artifacts=S3ArtifactStore(s3, bucket),
+        advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
         cfg=cfg,
         store=DynamoRunStore(session.client("dynamodb"), os.environ["FINPLAN_RUNS_TABLE"]),
         settings=settings,

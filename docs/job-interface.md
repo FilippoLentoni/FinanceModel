@@ -409,3 +409,13 @@ job (then `cancelled`), and the unchanged terminal state for a finished run.
 
 `GET /v1/jobs?state=queued&page_size=20` returns `{"jobs": [<job-status>...], "next_token": "<opaque>"}`.
 `next_token` is opaque and is only present when more runs exist.
+
+## Beta advisory interfaces
+
+`recommend_portfolio`: `GET /v1/recommendations` is a compatibility route for small requests.
+MCP serving invokes the dedicated strategy Lambda directly with a longer bounded deadline.
+`activate_advisory`: `PUT /v1/advisory-policy` pins a succeeded `prepare_policy` export after
+explicit operator intent; production selection is unchanged. `performance_evidence`:
+`GET /v1/performance-evidence` returns a bounded published-allocation comparison when an
+account ledger is available. This is a hold-baseline summary, not the full CPU evidence workflow.
+See `selected-strategy-serving.md` for request inputs, provenance and limitations.

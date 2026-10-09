@@ -246,6 +246,19 @@
         },
         "incumbent_fallback": "buy_and_hold"
       }
+    },
+    "prepare_policy": {
+      "entry_point": "prepare_policy",
+      "compute_class": "cpu",
+      "default_runtime_seconds": 600,
+      "max_runtime_seconds": 600,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true
     }
   },
   "lease": {

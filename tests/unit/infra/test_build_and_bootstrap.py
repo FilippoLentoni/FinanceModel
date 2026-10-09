@@ -131,7 +131,7 @@ def test_build_stage_produces_build_output(tmp_path, monkeypatch):
     info = build_stage.run_build(root, tmp_path / "out", source_commit=COMMIT, synth_fn=_fake_synth, bundle_fn=_fake_bundle, image_fn=lambda rid, c: image, gates=(), log=lambda s: None)
     saved = ReleaseInfo.load(tmp_path / "out" / "release-info.json")
     assert saved.release_id == info.release_id and saved.release_id.startswith("rel_")
-    assert saved.image_digest == DIGEST and saved.contract_version == "1.1.0" and saved.served_contract_majors == [1]
+    assert saved.image_digest == DIGEST and saved.contract_version == "1.2.0" and saved.served_contract_majors == [1]
     assert (tmp_path / "out" / "cdk.out" / "manifest.json").is_file() and (tmp_path / "out" / "config" / "beta.json").is_file()
 
 

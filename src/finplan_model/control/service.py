@@ -69,6 +69,8 @@ class ServiceDeps:
     run_io: RunIO
     clock: Clock
     ids: IdMinter
+    artifacts: Any = None
+    advisory_parameter: Any = None
     platform: PlatformClient | None = None
     model_version_resolver: Callable[[str | None, str | None], str | None] | None = None
     kick: Callable[[str], None] | None = None
@@ -247,6 +249,16 @@ class JobService:
             if universe and not disclosures:
                 raise FinplanError.validation("the universe snapshot carries no bias disclosures", pointer="/input_snapshot_id", reason="bias_disclosures_missing")
         payload = body["configuration"]["payload"]
+        policy_source = None
+        if sub.job_type.name == "prepare_policy":
+            from finplan_model.jobs.policy_export import freeze_policy_source
+            source_id = payload.get("policy_source_run_id")
+            source_run = self._get(source_id)
+            if sub.purpose != "research" or source_run.get("state") != "succeeded" or source_run.get("job_type") != "model_selection":
+                raise FinplanError.precondition("only succeeded model-selection research policies can be exported", reason="policy_source_invalid")
+            source_result = self.d.run_io.get_result(source_id) or {}
+            source_spec = self.d.run_io.get_spec(source_id, None)
+            policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'))
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
         selection: dict[str, Any] = {}
         if sub.job_type.name == "model_selection":
@@ -329,6 +341,7 @@ class JobService:
             "dataset_id": dataset_id,
             "plan_id": body.get("plan_id"),
             "production_strategy": production,
+            "policy_source": policy_source,
             "bias_disclosures": disclosures,
             "sagemaker_job": sub.job_type.sagemaker_job,
             **selection,

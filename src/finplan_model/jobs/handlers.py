@@ -229,3 +229,6 @@ HANDLERS: dict[str, Handler] = {
 def register_handler(job_type: str, handler: Handler) -> None:
     """Later task groups or changes register additional job types here."""
     HANDLERS[job_type] = handler
+
+from .policy_export import run_prepare_policy
+HANDLERS["prepare_policy"] = run_prepare_policy

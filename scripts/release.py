@@ -190,6 +190,7 @@ def planned_parameters(env: str, info: ReleaseInfo, outputs: Mapping[str, str], 
     add("job-api-role-ref", "job", "job-api-role-ref", outputs.get("JobApiRoleRef"))
     add("job-role-ref", "job", "job-role-ref", outputs.get("JobRoleRef"))
     add("job-endpoint", "api", "job-endpoint", outputs.get("JobEndpoint"))
+    add("strategy-function-ref", "api", "strategy-function-ref", outputs.get("StrategyFunctionRef"))
     add("registry-ref", "model", "registry-ref", outputs.get("RegistryRef"))
     add("approver-role-ref", "config", "approver-role-ref", outputs.get("ApproverRoleRef"))
     if info.image_repository and info.image_digest:
@@ -303,7 +304,10 @@ def publish_release(
     if env == "prod" and not approval:
         raise ManifestError("prod manifests require the approval record (approved_by, approved_at)")
     outputs = stack_outputs(cfn, env)
-    for required in REQUIRED_OUTPUTS:
+    required_outputs = REQUIRED_OUTPUTS
+    if env == "beta" and tuple(int(p) for p in info.contract_version.split(".")[:2]) >= (1, 2):
+        required_outputs += ("StrategyFunctionRef",)
+    for required in required_outputs:
         if not outputs.get(required):
             raise ManifestError(f"the {env} deploy did not produce the output {required}")
     if seed is not None and info.image_digest:
