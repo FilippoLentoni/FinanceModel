@@ -14,6 +14,7 @@ from finplan_model.core.outcome import require_valid
 from finplan_model.rl.advisory import recommendation
 
 log = logging.getLogger("finplan_model.serving")
+log.setLevel(logging.INFO)
 _SERVICE = None
 
 
