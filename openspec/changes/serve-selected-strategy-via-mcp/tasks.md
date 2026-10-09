@@ -9,7 +9,7 @@
 
 ## 2. Deployed beta verification
 
-- [ ] 2.1 Deploy beta through the existing pipeline, export and pin the existing research policy under a dry-run estimate, and verify repeatable inference with no training job created; record latency and incremental cost within USD 2.
+- [x] 2.1 Deploy beta through the existing pipeline, export and pin the existing research policy under a dry-run estimate, and verify repeatable inference with no training job created; record latency and incremental cost within USD 2.
 
 ## Workflow follow-up
 
