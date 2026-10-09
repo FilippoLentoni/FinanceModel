@@ -31,7 +31,7 @@ def activate(service, principal, body):
     if bundle.get('mode')!='advisory_paper' or bundle.get('format') != 'finplan-strategy-bundle/1' or (bundle.get('strategy_id') in ('ppo','sac') and len(bundle.get('members',[]))!=5):
         raise FinplanError.precondition('only a complete frozen research strategy may be pinned',reason='policy_members_missing')
     doc={'export_run_id':run_id,'artifact':refs[0],'source_run_id':bundle['source_run_id'],'strategy_id':bundle['strategy_id'],'mode':'advisory_paper','set_at':service.ts(),'set_by':principal.role_name}
-    service.store.append_audit({'event':'advisory_policy_selected','at':service.ts(),'old':service.d.advisory_parameter.read(),'new':doc,'actor':principal.role_name})
+    service.store.append_audit({'event':'advisory_policy_selected','audit_id':service.d.ids.correlation_id(),'at':service.ts(),'old':service.d.advisory_parameter.read(),'new':doc,'actor':principal.role_name})
     service.d.advisory_parameter.write(json.dumps(doc,sort_keys=True))
     return {'advisory_policy':doc}
 
