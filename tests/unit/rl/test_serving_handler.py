@@ -26,7 +26,8 @@ def setup(monkeypatch):
     pointer = json.dumps({'export_run_id':'run_'+UID,'artifact':ref.to_dict()})
     deps = SimpleNamespace(advisory_parameter=SimpleNamespace(read=lambda:pointer), artifacts=artifacts, platform=None)
     svc = SimpleNamespace(env='beta', d=deps, now=lambda:datetime(2026,10,9,tzinfo=UTC))
-    content = SimpleNamespace(snapshot=SimpleNamespace(manifest_checksum='sha256:'+'b'*64,record={}))
+    content = SimpleNamespace(snapshot=SimpleNamespace(manifest_checksum='sha256:'+'b'*64,record={}),
+                              payload={'observations':[{'instrument_id':i,'session_date':b.session_date.isoformat(),'close':b.close} for i in market.instruments for b in market.bars_of(i)]})
     monkeypatch.setattr('finplan_model.rl.advisory.load_market',lambda *a:(market,content))
     body = {'input_snapshot_id':'snap_'+UID,'as_of':market.sessions[-1].isoformat(),
             'holdings':{'weights':[],'cash_weight':1.,'portfolio_value':1000.,'high_watermark':1000.}}
@@ -76,3 +77,12 @@ def test_inference_iam_has_no_training_selection_or_storage_write_permission():
     assert not allowed('s3:GetObject', research+'/artifacts/rl_policy/example.zip')
     for action in ('sagemaker:CreateProcessingJob','dynamodb:PutItem','s3:PutObject','ssm:PutParameter'):
         assert not allowed(action,'*')
+    root = f'arn:aws:execute-api:us-east-2:{account}:api/beta/'
+    assert allowed('execute-api:Invoke', root+'GET/v1/portfolios/pf_example/state')
+    assert allowed('execute-api:Invoke', root+'GET/v1/plans/pl_example')
+    assert allowed('execute-api:Invoke', root+'GET/v1/snapshots/latest')
+    assert not allowed('execute-api:Invoke', root+'PUT/v1/portfolios/pf_example/state')
+    assert not allowed('execute-api:Invoke', root+'POST/v1/ingestions')
+    param = f'arn:aws:ssm:us-east-2:{account}:parameter/finplan/beta/financialplanning/config/research-plan-ref'
+    assert allowed('ssm:GetParameter', param)
+    assert not allowed('ssm:GetParameter', param.replace('/beta/', '/gamma/'))

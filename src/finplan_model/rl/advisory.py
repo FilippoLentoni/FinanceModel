@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import json
-from datetime import date
 
 from finplan_model.core.errors import ErrorCode, FinplanError
 from finplan_model.core.outcome import require_valid
 from finplan_model.core.ids import require_id
 from finplan_model.jobs.market_loader import load_market
 from .inference import recommend, recommend_baseline
+from .serving_context import completed_date, raw_market, resolve_inputs, value_holdings, with_quantities
 
 
 def activate(service, principal, body):
@@ -37,7 +37,7 @@ def activate(service, principal, body):
 
 
 def recommendation(service, body):
-    require_valid(body,'tools/recommend-portfolio-request')
+    require_valid(body,'tools/recommend-portfolio-invocation-request')
     if service.env!='beta' or service.d.advisory_parameter is None:
         raise FinplanError.precondition('advisory strategy serving is unavailable in this environment',reason='advisory_disabled')
     raw=service.d.advisory_parameter.read()
@@ -47,14 +47,11 @@ def recommendation(service, body):
     bundle=json.loads(service.d.artifacts.get(pinned['artifact']))
     if bundle.get('format') != 'finplan-strategy-bundle/1' or bundle.get('mode') != 'advisory_paper':
         raise FinplanError.precondition('the selected strategy artifact format is unsupported',reason='policy_format_invalid')
-    as_of=date.fromisoformat(body['as_of'])
-    if as_of>service.now().date():
-        raise FinplanError.validation('recommendations cannot use a future decision date',pointer='/as_of')
+    snapshot_id,saved=resolve_inputs(service,body)
+    market,content=load_market(service.d.platform,snapshot_id)
+    as_of=completed_date(service,body,market,bundle['instruments'])
     if as_of.isoformat()<=bundle['available_after']:
         raise FinplanError.precondition('advisory decisions must follow training and validation selection',reason='decision_before_selection_end')
-    market,content=load_market(service.d.platform,body['input_snapshot_id'])
-    if as_of not in market.sessions or market.decision_time(as_of) > service.now():
-        raise FinplanError.precondition('the decision session is unavailable or has not completed',reason='stale_or_incomplete_market_data')
     missing=set(bundle['instruments'])-set(market.instruments)
     if missing:
         raise FinplanError.precondition('snapshot does not cover the trained universe',reason='universe_not_covered')
@@ -62,6 +59,8 @@ def recommendation(service, body):
     dates,px=market.view(as_of,bundle['instruments']).price_matrix('close',lookback=lookback)
     if not dates or dates[-1]!=as_of:
         raise FinplanError.precondition('as_of must name the latest aligned completed session in the supplied snapshot',reason='stale_or_incomplete_market_data')
-    rec=recommend(bundle,px,body['holdings']) if bundle.get('members') else recommend_baseline(bundle,market,as_of,body['holdings'])
-    rec.update({'as_of':body['as_of'],'input_snapshot_id':body['input_snapshot_id'],'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
-    return {'recommendation':rec,'synthetic':bool(market.synthetic)}
+    holdings,metadata=value_holdings(body,saved,raw_market(content,market),as_of,bundle['instruments'])
+    rec=recommend(bundle,px,holdings) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
+    with_quantities(rec,metadata)
+    rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
+    return {'recommendation':rec,'synthetic':bool(market.synthetic or saved is not None)}

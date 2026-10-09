@@ -114,3 +114,23 @@ def test_http_client_signs_and_maps_errors():
     assert client2.get_snapshot(SID)["snapshot"]["input_snapshot_id"] == SID
     with pytest.raises(ValueError):
         HttpPlatformClient("http://plain.example.invalid", region="us-east-2", credentials=None)
+
+
+def test_saved_context_reads_use_signed_gets_and_validate_identifiers():
+    from botocore.credentials import Credentials
+    from urllib.parse import parse_qs, urlparse
+
+    seen = []
+    def opener(req, timeout):
+        seen.append(req)
+        return _Resp(200, b'{}')
+    client = HttpPlatformClient("https://plan-api.example.invalid", region="us-east-2", credentials=Credentials("testing", "testing"), opener=opener)
+    suffix = SID.removeprefix("snap_")
+    client.get_plan("pl_" + suffix)
+    client.get_portfolio_state("pf_" + suffix)
+    client.get_latest_snapshot("finance/equity-etf-daily/research-universe")
+    assert [urlparse(r.full_url).path for r in seen] == [f"/v1/plans/pl_{suffix}", f"/v1/portfolios/pf_{suffix}/state", "/v1/snapshots/latest"]
+    assert parse_qs(urlparse(seen[-1].full_url).query)["dataset_id"] == ["finance/equity-etf-daily/research-universe"]
+    assert all(r.method == "GET" and "AWS4-HMAC-SHA256" in r.headers["Authorization"] for r in seen)
+    with pytest.raises(FinplanError):
+        client.get_portfolio_state("../../another/path")

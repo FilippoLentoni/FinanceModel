@@ -33,6 +33,7 @@ def build_service():
     endpoint = ssm.get_parameter(Name=cfg.ssm["plan_endpoint"])["Parameter"]["Value"]
     deps = SimpleNamespace(
         advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
+        research_plan_parameter=SsmStrategyParameter(ssm, f"/finplan/{env}/financialplanning/config/research-plan-ref"),
         artifacts=S3ArtifactStore(s3_client(cfg.region, session=session), bucket),
         platform=HttpPlatformClient(endpoint, region=cfg.region, credentials=session.get_credentials()),
     )

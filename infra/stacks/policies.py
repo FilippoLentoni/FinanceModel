@@ -239,11 +239,13 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
     research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
     params = [f"/finplan/{env}/financemodel/config/{key}" for key in ("research-storage-ref", "advisory-policy")]
     params.append(f"/finplan/{env}/financialplanning/api/plan-endpoint")
+    params.append(f"/finplan/{env}/financialplanning/config/research-plan-ref")
     return {"Version": "2012-10-17", "Statement": [
         _log_statement(env, n.STRATEGY_INFERENCE, partition=partition, region=region, account=account),
         {"Sid": "ReadInferenceConfiguration", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
         {"Sid": "ReadFrozenStrategy", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
         {"Sid": "ReadApprovedSnapshots", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*")},
+        {"Sid": "ReadSavedPortfolio", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/plans/*", "v1/portfolios/*/state")},
         {"Sid": "DenyTrainingAndWrites", "Effect": "Deny", "Action": ["sagemaker:*", "s3:PutObject", "s3:DeleteObject", "ssm:PutParameter", "ssm:DeleteParameter", "dynamodb:*"], "Resource": "*"},
     ]}
 

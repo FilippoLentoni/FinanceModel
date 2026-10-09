@@ -55,6 +55,12 @@ DOMAIN_SCHEMA_VERSION = "1.0"
 
 @runtime_checkable
 class PlatformClient(Protocol):
+    def get_latest_snapshot(self, dataset_id: str) -> dict[str, Any]: ...
+
+    def get_plan(self, plan_id: str) -> dict[str, Any]: ...
+
+    def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]: ...
+
     def get_snapshot(self, input_snapshot_id: str, *, download: bool = False) -> dict[str, Any]: ...
 
     def read_snapshot_observations(self, input_snapshot_id: str, *, instrument_id: str | None = None, start_date: str | None = None, end_date: str | None = None, page_size: int = 100, next_token: str | None = None) -> dict[str, Any]: ...
@@ -274,7 +280,28 @@ class FixturePlatformClient:
         self.snapshots: dict[str, dict[str, Any]] = {}
         self.blobs: dict[str, bytes] = {}
         self.staged_outputs: dict[str, dict[str, Any]] = {}
+        self.plans: dict[str, dict[str, Any]] = {}
+        self.portfolio_states: dict[str, dict[str, Any]] = {}
         self.calls: list[tuple[str, str]] = []
+
+    def get_latest_snapshot(self, dataset_id: str) -> dict[str, Any]:
+        self.calls.append(("get_latest_snapshot", dataset_id))
+        rows = [r for r in self.snapshots.values() if r.get("status") == "approved" and (r.get("dataset") or {}).get("dataset_id") == dataset_id]
+        if not rows:
+            raise FinplanError.precondition("no approved snapshot is available", reason="no_approved_snapshot")
+        return {"snapshot": json.loads(json.dumps(max(rows, key=lambda r: (r.get("created_at", ""), r["input_snapshot_id"]))))}
+
+    def get_plan(self, plan_id: str) -> dict[str, Any]:
+        self.calls.append(("get_plan", plan_id))
+        if plan_id not in self.plans:
+            raise FinplanError(ErrorCode.NOT_FOUND, "plan not found")
+        return {"plan": json.loads(json.dumps(self.plans[plan_id]))}
+
+    def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]:
+        self.calls.append(("get_portfolio_state", portfolio_id))
+        if portfolio_id not in self.portfolio_states:
+            raise FinplanError.precondition("paper portfolio state is not initialized", reason="paper_state_missing")
+        return json.loads(json.dumps(self.portfolio_states[portfolio_id]))
 
     def add_snapshot(self, record: Mapping[str, Any], blobs: Mapping[str, bytes]) -> str:
         sid = str(record["input_snapshot_id"])
@@ -387,7 +414,19 @@ class HttpPlatformClient:
             raise FinplanError.dependency_unavailable("platform request failed", status=status) from None
 
     def get_snapshot(self, input_snapshot_id: str, *, download: bool = False) -> dict[str, Any]:
+        require_id("input_snapshot_id", input_snapshot_id)
         return self._json("GET", f"/v1/snapshots/{input_snapshot_id}", {"download": "true"} if download else None)
+
+    def get_latest_snapshot(self, dataset_id: str) -> dict[str, Any]:
+        return self._json("GET", "/v1/snapshots/latest", {"dataset_id": dataset_id})
+
+    def get_plan(self, plan_id: str) -> dict[str, Any]:
+        require_id("plan_id", plan_id)
+        return self._json("GET", f"/v1/plans/{plan_id}")
+
+    def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]:
+        require_id("portfolio_id", portfolio_id)
+        return self._json("GET", f"/v1/portfolios/{portfolio_id}/state")
 
     def read_snapshot_observations(self, input_snapshot_id: str, *, instrument_id: str | None = None, start_date: str | None = None, end_date: str | None = None, page_size: int = 100, next_token: str | None = None) -> dict[str, Any]:
         return self._json("GET", f"/v1/snapshots/{input_snapshot_id}/observations", {"instrument_id": instrument_id, "start_date": start_date, "end_date": end_date, "page_size": page_size, "next_token": next_token})
