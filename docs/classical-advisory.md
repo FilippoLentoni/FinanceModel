@@ -4,6 +4,11 @@ The beta classical MCP has its own Lambda and Gateway. It does not read or repla
 
 Saved-portfolio recommendations additionally persist an immutable Platform proposal (`pd_`) before returning. The proposal links the exact recommendation, approved input snapshot, authoritative portfolio revision, optimizer implementation/settings, and the source analysis. A deterministic idempotency key prevents repeated identical requests from duplicating proposals; a new explicit request key can create a fresh proposal. Supplied hypothetical holdings remain analysis-only and cannot be accepted as an authoritative saved portfolio. A proposal records the explicit beta paper-execution assumption of fractional shares at the stored completed-close reference prices with 2 basis points of traded-notional costs; this is separate from the optimizer's objective turnover proxy. Only the Platform acceptance tool can atomically record paper fills and update holdings. The Model role cannot accept decisions or write holdings.
 
+The investable universe comes from the approved market snapshot, independently of current holdings.
+A saved all-cash book can receive an allocation, and an asset sold completely remains eligible for
+later purchase. Held instruments outside that approved universe fail explicitly; the five-instrument
+beta bound and complete aligned-price requirements still apply.
+
 ## Numerical model
 
 The supported algorithms are `min_variance`, `mean_variance` and `cvar`. The default settings are 60 completed return observations, Ledoit–Wolf covariance shrinkage, historical arithmetic mean, 21-session objective horizon, maximum instrument weight 60%, fixed cash weight 0%, mean-variance risk aversion 2, CVaR confidence 90%, and a one-time transaction-cost proxy of 0.001 times two-way traded notional divided by NAV. Cash is explicitly fixed, preventing a risk-only optimizer from silently selecting all cash. Requested bounds and cash must admit a feasible allocation.

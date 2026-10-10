@@ -13,6 +13,10 @@ The system SHALL retain an immutable issued recommendation from either algorithm
 - **WHEN** a recommendation is generated
 - **THEN** a retrievable decision identifier is returned and the saved holdings revision is unchanged
 
+#### Scenario: Exited assets remain investable
+- **WHEN** the saved portfolio contains only cash or an earlier accepted decision fully exited an asset
+- **THEN** optimization considers all eligible instruments in the approved snapshot, can recommend a new purchase, rejects unsupported held assets and preserves the five-instrument beta bound
+
 ### Requirement: Confirmed paper acceptance
 The system SHALL apply an explicitly accepted paper recommendation at recorded reference prices with disclosed costs and fill semantics, commit one new holdings revision, and retain acceptance provenance. Rejection SHALL retain its decision record without changing holdings.
 

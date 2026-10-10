@@ -94,7 +94,7 @@ def accept_for_test(context, result, *, recorded_index=111, costs=5.):
     net = rec["portfolio_state"]["portfolio_value"] - costs
     prices = doc["execution"]["reference_prices"]
     book = {**copy.deepcopy(context.state["paper_state"]),
-            "positions": [{"instrument_id": r["instrument_id"], "quantity": net * r["weight"] / prices[r["instrument_id"]]} for r in rec["target_weights"]],
+            "positions": [{"instrument_id": r["instrument_id"], "quantity": net * r["weight"] / prices[r["instrument_id"]]} for r in rec["target_weights"] if r["weight"] > 1e-12],
             "cash_balance": net * rec["cash_weight"], "as_of": rec["as_of"]}
     at = (context.market.decision_time(context.dates[recorded_index]) - timedelta(hours=1)).isoformat()
     baseline = {**copy.deepcopy(context.state), "recorded_at": context.market.decision_time(context.dates[100]).isoformat(), "reason": "legacy_baseline"}
@@ -106,6 +106,56 @@ def accept_for_test(context, result, *, recorded_index=111, costs=5.):
     }
     doc.update(status="accepted", resolution={"before_revision": 1, "after_revision": 2, "paper_execution": True, "recorded_at": at, "paper_state": copy.deepcopy(book), "transaction_cost": costs, "simulated_fills": []})
     return revision
+
+
+@pytest.mark.parametrize("algorithm", ["min_variance", "mean_variance", "cvar"])
+def test_saved_cash_only_book_can_allocate_across_approved_universe(context, algorithm):
+    context.state["paper_state"].update(positions=[], cash_balance=10000.)
+    before = copy.deepcopy(context.state)
+    result = handle({"environment": "beta", "operation": "recommend_classical_portfolio", "request": {"portfolio_id": context.pid, "algorithm": algorithm}}, context.service)
+    rec = result["recommendation"]
+    assert {r["instrument_id"] for r in rec["target_weights"]} == set(context.market.instruments)
+    assert sum(r["weight"] for r in rec["target_weights"]) == pytest.approx(1.)
+    assert all(r["current_quantity"] == 0. for r in rec["decisions"])
+    assert any(r["action"] == "buy" and r["target_quantity"] > 0. for r in rec["decisions"])
+    assert result["decision_id"] and context.state == before
+
+
+def test_asset_exited_by_accepted_optimizer_can_reenter_on_next_saved_revision(context):
+    first = issued(context, len(context.dates) - 1, algorithm="mean_variance")
+    exited = {r["instrument_id"] for r in first["recommendation"]["target_weights"] if r["weight"] <= 1e-12}
+    assert exited, "fixture must exercise an optimizer that sells at least one asset completely"
+    accepted = accept_for_test(context, first, recorded_index=len(context.dates) - 1, costs=0.)
+    assert exited.isdisjoint(r["instrument_id"] for r in accepted["paper_state"]["positions"])
+    before = copy.deepcopy(context.platform.portfolio_states[context.pid])
+    next_plan = context.service.recommend({"portfolio_id": context.pid, "algorithm": "min_variance", "settings": {"turnover_penalty": 0.}})
+    rec = next_plan["recommendation"]
+    assert rec["portfolio_state"]["revision"] == 2
+    assert {r["instrument_id"] for r in rec["target_weights"]} == set(context.market.instruments)
+    reentries = [r for r in rec["decisions"] if r["instrument_id"] in exited and r["action"] == "buy"]
+    assert reentries and all(r["current_quantity"] == 0. and r["target_quantity"] > 0. for r in reentries)
+    assert context.platform.portfolio_states[context.pid] == before
+    assert context.platform.portfolio_decisions[next_plan["decision_id"]]["portfolio_revision"] == 2
+
+
+def test_saved_asset_outside_approved_universe_fails_without_issuing_proposal(context):
+    context.state["paper_state"]["positions"].append({"instrument_id": "UNAPPROVED", "quantity": 1.})
+    with pytest.raises(FinplanError) as error:
+        context.service.recommend({"portfolio_id": context.pid})
+    assert error.value.details["reason"] == "paper_state_invalid"
+    assert not context.platform.portfolio_decisions
+
+
+def test_classical_universe_bound_still_rejects_more_than_five_approved_assets(context, monkeypatch):
+    from types import SimpleNamespace
+    from finplan_model.jobs.market_loader import load_market
+
+    _, content = load_market(context.platform, context.sid)
+    monkeypatch.setattr("finplan_model.classical.service.load_market", lambda *args: (SimpleNamespace(instruments=(*context.market.instruments, "EXTRA")), content))
+    with pytest.raises(FinplanError) as error:
+        context.service.recommend({"portfolio_id": context.pid})
+    assert error.value.details["reason"] == "classical_universe_bound"
+    assert not context.platform.portfolio_decisions
 
 
 def test_performance_uses_recorded_revision_and_costs_not_unchanged_holdings(context):

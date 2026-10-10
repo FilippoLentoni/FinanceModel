@@ -14,6 +14,10 @@ FinancialPlanning owns authoritative proposal, resolution, holdings history and 
 
 FinanceModel captures issued PPO and traditional recommendations against the exact stored snapshot and holdings revision. Explicit supplied portfolios without a saved identity remain hypothetical evidence. Both Gateways expose shared lifecycle tools and algorithms remain separate selectable producers. Hosted acceptance presents the exact decision and revision before mutation. Paper fills use stored reference prices, are labeled simulated, and disclose costs; acceptance timestamps are distinct from historical pricing dates.
 
+Traditional optimization uses the approved snapshot's eligible instrument universe, independent of
+nonzero saved positions. All-cash books can allocate and fully exited assets can reenter on a later
+revision. Unsupported held assets fail closed, and the five-instrument attribution bound remains.
+
 Tool adapters persist sanitized request/result receipts. Hosted completed turns persist narrative, skill identity and numerical evidence references. History exposes recent revisions and snapshot discovery supports multi-day analysis. Existing weekly bounded review consumes lifecycle outcomes without auto-activating an algorithm. Beta data retention is extended to preserve evidence.
 
 ## Risks / Trade-offs

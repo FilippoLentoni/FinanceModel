@@ -57,11 +57,9 @@ class ClassicalService:
         cfg = settings(body.get("settings"))
         snap, saved = resolve_inputs(self, body)
         market, content = load_market(self.d.platform, snap)
-        instruments = (
-            sorted(r["instrument_id"] for r in saved["paper_state"]["positions"])
-            if saved
-            else sorted(market.instruments)
-        )
+        # A zero holding is a portfolio state, not removal from the investable universe.
+        # Keep approved assets eligible after a full exit and when starting from cash.
+        instruments = sorted(market.instruments)
         if not 1 <= len(instruments) <= 5:
             raise FinplanError.precondition(
                 "classical beta attribution supports one to five instruments",
