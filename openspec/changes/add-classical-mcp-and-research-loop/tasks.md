@@ -6,4 +6,4 @@
 - [x] 1.2 Implement current-plan counterfactual/Shapley and grouped plan-change producers; verify additive/interacting efficiency, incompatible and infeasible cases.
 - [x] 1.3 Implement observed-performance reconciliation and dated market context; verify paper labels, no invented fills/forecasts and missing-source behavior.
 - [x] 1.4 Implement stored feedback, literature review and bounded weekly sandbox controller; verify budget, authorization, duplicate-event and no-auto-activation guards.
-- [ ] 1.5 Deploy beta and verify numerical producers, persistence/retrieval and a bounded real sandbox/controller path through the existing pipeline.
+- [x] 1.5 Deploy beta and verify numerical producers, persistence/retrieval and a bounded real sandbox/controller path through the existing pipeline.
