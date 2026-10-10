@@ -12,4 +12,4 @@
 
 ## 3. Beta integration
 
-- [ ] 3.1 Deploy the reviewed beta artifact and verify natural hosted-agent requests invoke the existing MCP tool against initialized paper state, with Gamma/prod unchanged and incremental spend below $2.
+- [x] 3.1 Deploy the reviewed beta artifact and verify natural hosted-agent requests invoke the existing MCP tool against initialized paper state, with Gamma/prod unchanged and incremental spend below $2.
