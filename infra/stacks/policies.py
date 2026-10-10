@@ -250,6 +250,25 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
     ]}
 
 
+def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
+    """Independent numerical evidence store; paid work only through the guarded job API."""
+    research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
+    params = [f"/finplan/{env}/financemodel/config/research-storage-ref", f"/finplan/{env}/financemodel/api/job-endpoint",
+              f"/finplan/{env}/financialplanning/api/plan-endpoint", f"/finplan/{env}/financialplanning/config/research-plan-ref"]
+    own_api = f"arn:{partition}:execute-api:{region}:{account}:*/api"
+    return {"Version": "2012-10-17", "Statement": [
+        _log_statement(env, logical, partition=partition, region=region, account=account),
+        {"Sid": "ReadClassicalConfiguration", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
+        {"Sid": "ClassicalWriteOnceEvidence", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": [research+"/classical/*"]},
+        {"Sid": "ClassicalBoundedIndex", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "classical/index/*"}}},
+        {"Sid": "DenyClassicalEvidenceOverwrite", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": [research+"/classical/*"], "Condition": {"Null": {"s3:if-none-match": "true"}}},
+        {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/plans/*", "v1/portfolios/*/state")},
+        {"Sid": "GuardedSandboxApi", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [own_api+"/POST/v1/jobs", own_api+"/GET/v1/jobs", own_api+"/GET/v1/jobs/*"]},
+        {"Sid": "ReadProjectBudget", "Effect": "Allow", "Action": ["budgets:ViewBudget", "sts:GetCallerIdentity"], "Resource": "*"},
+        {"Sid": "DenyDirectComputeAndFinancialWrites", "Effect": "Deny", "Action": ["sagemaker:*", "ssm:PutParameter", "ssm:DeleteParameter", "s3:DeleteObject*", "dynamodb:*"], "Resource": "*"},
+    ]}
+
+
 def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
     """Identity policy of the control-plane Lambdas (``kind``: ``api``, ``dispatcher`` or ``state``).
 
@@ -352,6 +371,8 @@ def job_api_invoker_patterns(env: str) -> list[str]:
         f"finplan-{env}-financialplanning-plan-api-handler-role",
         f"finplan-{env}-financialplanning-operator*",
         n.stage_role_name(env),
+        n.role_name(env, n.CLASSICAL_INFERENCE),
+        n.role_name(env, n.RESEARCH_CONTROLLER),
     ]
 
 

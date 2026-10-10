@@ -75,6 +75,9 @@ REGISTRY_LOOKUP = "job-registry-lookup"
 #: writer of ``/finplan/<env>/financemodel/config/production-strategy``.
 STRATEGY_SELECTION = "strategy-selection"
 STRATEGY_INFERENCE = "job-api-handler-inference"
+CLASSICAL_INFERENCE = "job-api-handler-classical"
+RESEARCH_CONTROLLER = "job-api-handler-research"
+RESEARCH_SCHEDULE = "weekly-research"
 FUNCTIONS: dict[str, str] = {
     JOB_API_HANDLER: "finplan_model.control.handlers.api_handler",
     DISPATCHER: "finplan_model.control.handlers.dispatcher_handler",
@@ -82,6 +85,8 @@ FUNCTIONS: dict[str, str] = {
     REGISTRY_LOOKUP: "finplan_model.registry.handlers.lookup_handler",
     STRATEGY_SELECTION: "finplan_model.control.selection.selection_handler",
     STRATEGY_INFERENCE: "finplan_model.serving.handler",
+    CLASSICAL_INFERENCE: "finplan_model.classical_api.handler",
+    RESEARCH_CONTROLLER: "finplan_model.classical_api.weekly_handler",
 }
 JOB_EXECUTION = "job-execution"
 #: ``logical-role`` tag of the job-execution role (matrix row ``sagemaker-job-definitions``, contracts 1.0.0 D16).

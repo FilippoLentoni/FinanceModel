@@ -51,7 +51,7 @@ from finplan_model.control.wakeup import TICK
 from . import naming as n
 from .common import ModelStack, StageContext, research_boundary, stack_name, tag_role
 from .lambda_code import function_code
-from .policies import control_role_policy, inference_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy, strategy_selection_policy
+from .policies import classical_role_policy, control_role_policy, inference_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy, strategy_selection_policy
 
 __all__ = ["API_STAGE", "DISPATCH_SCHEDULE_DESCRIPTION", "LAMBDA_ARCHITECTURE", "LOG_RETENTION_DAYS", "OPENAPI_ROUTES", "ControlStack", "add_to_stage", "openapi_body"]
 
@@ -199,6 +199,23 @@ class ControlStack(ModelStack):
             inference = self._function("StrategyInference", n.STRATEGY_INFERENCE, "job-api-handler", inference_role_policy(env, partition=p, region=r, account=a), code,
                                        {"FINPLAN_ENVIRONMENT": env, "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=270, memory=512)
             cdk.CfnOutput(self, "StrategyFunctionRef", value=inference.function_arn, description="Published at api/strategy-function-ref for direct MCP adapter invocation")
+            classical = self._function("ClassicalInference", n.CLASSICAL_INFERENCE, "job-api-handler", classical_role_policy(env, partition=p, region=r, account=a), code,
+                                       {"FINPLAN_ENVIRONMENT": env, "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=270, memory=1024)
+            cdk.CfnOutput(self, "ClassicalFunctionRef", value=classical.function_arn, description="Published at api/classical-function-ref; independent traditional-optimization MCP backend")
+            controller = self._function("ResearchController", n.RESEARCH_CONTROLLER, "job-api-handler", classical_role_policy(env, n.RESEARCH_CONTROLLER, partition=p, region=r, account=a), code,
+                                        {"FINPLAN_ENVIRONMENT": env, "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=270, memory=1024)
+            controller.node.default_child.add_property_override("ReservedConcurrentExecutions", 1)
+            weekly_role = iam.Role(self, "WeeklyResearchScheduleRole", role_name=n.role_name(env, n.RESEARCH_SCHEDULE),
+                                   assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com", conditions={"StringEquals": {"aws:SourceAccount": a}}),
+                                   inline_policies={"invoke-weekly-review": iam.PolicyDocument(statements=[iam.PolicyStatement(actions=["lambda:InvokeFunction"], resources=[controller.function_arn])])})
+            tag_role(weekly_role, "job-dispatcher-schedule")
+            weekly = scheduler.CfnSchedule(self, "WeeklyResearchSchedule", name=n.env_name(env, n.RESEARCH_SCHEDULE),
+                    description="One bounded classical research review per week; max one USD 0.50 sandbox job, no strategy activation",
+                    schedule_expression="cron(0 9 ? * MON *)", schedule_expression_timezone="America/New_York", state="ENABLED",
+                    flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
+                    target=scheduler.CfnSchedule.TargetProperty(arn=controller.function_arn, role_arn=weekly_role.role_arn, input='{"trigger":"weekly_classical_research"}',
+                           retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=1, maximum_event_age_in_seconds=3600)))
+            _metadata_role(weekly, "job-dispatcher-schedule")
 
     # ------------------------------------------------------------------ helpers
     def _function(self, cid: str, logical: str, logical_role: str, policy: dict[str, Any], code: lambda_.Code, environment: dict[str, str], *, timeout: int, memory: int) -> lambda_.Function:

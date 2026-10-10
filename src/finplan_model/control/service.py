@@ -213,7 +213,31 @@ class JobService:
         key = body.get("idempotency_key")
         scope_key = None
         if not dry_run and isinstance(key, str) and _IDEM_KEY.match(key):
-            scope_key = idempotency_scope_key(principal.arn, self.env, "submit_job", key)
+            scope_principal = principal.arn
+            # On-demand and scheduled reviews share one durable weekly submission identity.
+            # Otherwise the same S3 reservation would submit twice from the two Lambda roles.
+            weekly_roles = (
+                f"finplan-{self.env}-financemodel-job-api-handler-classical-role",
+                f"finplan-{self.env}-financemodel-job-api-handler-research-role",
+            )
+            request_configuration = body.get("configuration")
+            request_payload = (
+                request_configuration.get("payload")
+                if isinstance(request_configuration, Mapping)
+                else None
+            )
+            if (
+                self.env == "beta"
+                and principal.role_name in weekly_roles
+                and isinstance(request_payload, Mapping)
+                and request_payload.get("objective") == "classical_weekly_review"
+            ):
+                scope_principal = (
+                    principal.arn.rsplit("/", 1)[0] + "/" + weekly_roles[1]
+                )
+            scope_key = idempotency_scope_key(
+                scope_principal, self.env, "submit_job", key
+            )
             replay = self._replay(scope_key, body)
             if replay is not None:
                 return replay
@@ -280,6 +304,30 @@ class JobService:
             raise FinplanError(ErrorCode.RATE_LIMITED, "the job queue is full; retry later", details={"max_depth": int(self.cfg.queue["max_depth"])})
         gpu = sub.job_type.compute_class == "gpu" or est.budget_category == "gpu"
         threshold = sub.job_type.auto_approve_usd if sub.job_type.auto_approve_usd is not None else self.d.settings.auto_approve_usd()
+        # This dedicated beta controller has user-authorized weekly compute only. It cannot
+        # approve arbitrary jobs, submit production candidates, or bypass global/category limits.
+        weekly_controller = principal.role_name in (
+            f"finplan-{self.env}-financemodel-job-api-handler-classical-role",
+            f"finplan-{self.env}-financemodel-job-api-handler-research-role",
+        )
+        if weekly_controller:
+            if (
+                self.env != "beta"
+                or sub.job_type.name != "run_benchmark"
+                or sub.purpose != "research"
+                or payload.get("objective") != "classical_weekly_review"
+                or sub.max_runtime_seconds > 900
+                or sub.instance_count != 1
+                or not str(body.get("idempotency_key", "")).startswith(
+                    "classical-weekly-"
+                )
+                or est.estimated_usd_upper_bound > 0.50
+            ):
+                raise FinplanError(
+                    ErrorCode.FORBIDDEN,
+                    "weekly controller may submit only its bounded research benchmark",
+                )
+            threshold = 0.50
         needs_approval = gpu or est.estimated_usd_upper_bound > threshold + 1e-12
         state = "awaiting_approval" if needs_approval else "queued"
         now = self.ts()

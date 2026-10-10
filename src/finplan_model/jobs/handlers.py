@@ -163,6 +163,9 @@ def run_daily_recommendation(inp: JobInputs) -> dict[str, Any]:
 
 
 def run_benchmark(inp: JobInputs) -> dict[str, Any]:
+    if inp.spec["configuration"]["payload"].get("objective") == "classical_weekly_review":
+        from finplan_model.classical.benchmark import run_weekly_benchmark
+        return run_weekly_benchmark(inp)
     section = _bias(inp)
     main = str(inp.spec["strategy"])
     names = [main, *[c for c in CONTROLS if c != main]]
