@@ -204,7 +204,6 @@ class ControlStack(ModelStack):
             cdk.CfnOutput(self, "ClassicalFunctionRef", value=classical.function_arn, description="Published at api/classical-function-ref; independent traditional-optimization MCP backend")
             controller = self._function("ResearchController", n.RESEARCH_CONTROLLER, "job-api-handler", classical_role_policy(env, n.RESEARCH_CONTROLLER, partition=p, region=r, account=a), code,
                                         {"FINPLAN_ENVIRONMENT": env, "FINPLAN_CONFIG_DIR": "/var/task/config"}, timeout=270, memory=1024)
-            controller.node.default_child.add_property_override("ReservedConcurrentExecutions", 1)
             weekly_role = iam.Role(self, "WeeklyResearchScheduleRole", role_name=n.role_name(env, n.RESEARCH_SCHEDULE),
                                    assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com", conditions={"StringEquals": {"aws:SourceAccount": a}}),
                                    inline_policies={"invoke-weekly-review": iam.PolicyDocument(statements=[iam.PolicyStatement(actions=["lambda:InvokeFunction"], resources=[controller.function_arn])])})

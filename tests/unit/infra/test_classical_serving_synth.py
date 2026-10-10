@@ -30,12 +30,9 @@ def test_independent_classical_and_weekly_controller_are_beta_only(assembly):
         assert all(
             f["Timeout"] == 270 and f["MemorySize"] == 1024 for f in found.values()
         )
-        assert (
-            found[n.function_name(env, n.RESEARCH_CONTROLLER)][
-                "ReservedConcurrentExecutions"
-            ]
-            == 1
-        )
+        # Weekly cost safety comes from durable claims and sandbox idempotency,
+        # without consuming scarce account-level reserved Lambda concurrency.
+        assert all("ReservedConcurrentExecutions" not in f for f in found.values())
         assert "ClassicalFunctionRef" in assembly.stack(name)["Outputs"]
         schedules = assembly.resources(name, "AWS::Scheduler::Schedule")
         weekly = next(
