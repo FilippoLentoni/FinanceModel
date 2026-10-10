@@ -41,6 +41,18 @@ def test_recursive_paid_intent_is_required_before_compute(context):
     assert context.service.d.job_api.calls == []
 
 
+def test_confirmed_launch_freezes_the_latest_reviewed_feedback_profile(context):
+    s = context.service
+    first = run_recursive_improvement(s, {"query": "PPO horizon"})
+    revised = run_recursive_improvement(s, {"cycle_id": first["cycle_id"], "feedback": "lower turnover and transaction costs"})
+    approved = run_recursive_improvement(s, {"cycle_id": first["cycle_id"], "dry_run": False, "confirmed_by_user": True, "idempotency_key": "approve-latest-preview"})
+    assert first["proposed_experiment"]["candidate_profile"] == "recursive_ppo_horizon"
+    assert revised["proposed_experiment"]["candidate_profile"] == "recursive_ppo_turnover"
+    assert approved["proposed_experiment"] == revised["proposed_experiment"]
+    assert approved["experiment_review_id"] == revised["experiment_review_id"]
+    assert s.d.job_api.calls[-1]["configuration"]["payload"]["objective"] == "recursive_ppo_turnover"
+
+
 @pytest.mark.parametrize("query,kind,strategy,compute", [("Qwen agent swarm", "swarm_mode_a", "qwen_swarm", "gpu"), ("TypeSafe Jev", "jev_backtest", "jev", "cpu")])
 def test_identified_benchmark_preview_targets_actual_matching_job(context, query, kind, strategy, compute):
     result = run_recursive_improvement(context.service, {"query": query})

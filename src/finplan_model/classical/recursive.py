@@ -87,6 +87,7 @@ def run_recursive_improvement(service, body, *, scheduled=False):
         # Public issue responses carry artifact metadata; always operate on the stored record.
         cycle = service.store.get(cycle["analysis_id"])
     previous = _latest(service, cycle)
+    frozen_preview = previous if previous and previous["state"] == "awaiting_experiment_approval" and not previous.get("job") and previous.get("experiment_review_id") and not body.get("query") and not body.get("feedback") else None
     iteration = previous["iteration"] if previous else 0
     # Refresh persisted feedback, matured outcomes and literature on every resume.
     # The cycle's book/universe and bounds remain frozen, but its evidence does not.
@@ -160,6 +161,8 @@ def run_recursive_improvement(service, body, *, scheduled=False):
             benchmark_family=request["job_type"], budget_category="gpu" if cycle["family"] == "qwen" else "cpu_research",
             tool_request={"name": "submit_experiment", "arguments": request}, manual_compute_approval_required=True,
             external_vendor_cost_cap_usd=.01 if cycle["family"] == "jev" else 0.)
+    if frozen_preview:
+        proposal = copy.deepcopy(frozen_preview["proposed_experiment"])
     lineage = (previous.get("lineage", []) if previous else []) + ([{"analysis_id": previous["analysis_id"], "iteration": previous["iteration"], "job_run_id": (previous.get("job") or {}).get("run_id")}] if previous else [])
     payload = {"summary": "Recursive evidence review with bounded, reproducible experiment proposals", "cycle_id": cycle["analysis_id"], "state": "evidence_review", "iteration": iteration,
         "max_iterations": cycle["max_iterations"], "evidence": evidence, "proposed_experiment": None if stop else proposal,
@@ -172,7 +175,7 @@ def run_recursive_improvement(service, body, *, scheduled=False):
         payload.update(state="proposal_ready" if stop.startswith("candidate_requires") else "stopped", stopping_reason=stop)
     else:
         # An immutable new review freezes the approved profile and the exact evidence lineage.
-        experiment_review = service.issue("research", {**{k: v for k, v in initial.items() if k not in ("analysis_id", "analysis_kind", "created_at", "request_fingerprint", "analysis_ref", "contract_version", "synthetic")},
+        experiment_review = service.store.get(frozen_preview["experiment_review_id"]) if frozen_preview else service.issue("research", {**{k: v for k, v in initial.items() if k not in ("analysis_id", "analysis_kind", "created_at", "request_fingerprint", "analysis_ref", "contract_version", "synthetic")},
             "summary": "Recursive candidate experiment frozen for budgeted evaluation", "proposed_experiment": proposal,
         }, {"cycle_id": cycle["analysis_id"], "iteration": iteration + 1, "profile": profile, "parent": previous["analysis_id"] if previous else None, "evidence_review_id": initial["analysis_id"]})
         # Claim only a launch, never a dry preview. Crash recovery uses the same job idempotency.
