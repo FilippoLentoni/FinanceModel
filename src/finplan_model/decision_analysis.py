@@ -75,7 +75,6 @@ def explain_decision(service, body):
     payload = {
         "summary": "Issued paper decision explained from immutable model evidence; approval and paper execution shown separately",
         "source_decision_id": doc["decision_id"], "source_decision_ref": decision_ref(doc),
-        "recommendation": rec,
         "decision_status": doc["status"], "resolution": doc.get("resolution"),
         "explanation": {
             "trade_logic": [{**r, "reason": "target exposure is below recorded current exposure" if r["action"] == "sell" else "target exposure is above recorded current exposure" if r["action"] == "buy" else "target and current exposure are within the action tolerance"} for r in trades],
@@ -83,6 +82,14 @@ def explain_decision(service, body):
             "causality": "Model diagnostics and input counterfactuals do not prove the cause of future market moves",
         },
     }
+    identity = {"decision": decision_ref(doc), "instrument_id": instrument}
+    if doc["algorithm"] in ("min_variance", "mean_variance", "cvar"):
+        payload["recommendation"] = rec
+    else:
+        # The shared evidence contract reserves `recommendation` for classical plans.
+        # Add policy evidence without changing that released schema or old records.
+        payload["policy_recommendation"] = rec
+        identity["recommendation_representation"] = "policy_recommendation/1"
     if doc["algorithm_family"] == "optimization" and doc.get("source_analysis_id"):
         result = service.explanation({"analysis_id": doc["source_analysis_id"], **({"instrument_id": instrument} if instrument else {})})
         payload["explanation"]["optimizer"] = result["explanation"]
@@ -92,7 +99,7 @@ def explain_decision(service, body):
         payload["explanation"]["attribution"] = {"status": "not_available", "reason": "Frozen policy replay and actual actor diagnostics are available; causal or Shapley feature attribution is not implemented for PPO"}
     else:
         payload["explanation"]["diagnostics"] = rec.get("diagnostics", {})
-    return service.issue("explanation", payload, {"decision": decision_ref(doc), "instrument_id": instrument}, portfolio_id=doc["portfolio_id"])
+    return service.issue("explanation", payload, identity, portfolio_id=doc["portfolio_id"])
 
 
 def compare_decisions(service, body):

@@ -29,6 +29,11 @@ Min-variance minimizes horizon variance plus the turnover proxy. Mean-variance m
 
 The family-independent tools `explain_portfolio_decision`, `compare_portfolio_decisions`, and `evaluate_portfolio_decision` retrieve persisted `pd_` decisions, with an optional portfolio identifier defaulting to the configured paper book. Classical decisions delegate to the exact reproducible mathematical explanation and grouped Shapley comparison. PPO/SAC decisions replay the checksum-verified frozen actor against the recorded feature-price window and holdings, report actual member outputs, input changes and constraint effects, and explicitly do not claim causal or Shapley attribution. All resulting analyses are written once to the existing durable Model evidence store and are retrievable by `analysis_id`.
 
+Generic explanations retain traditional allocations in the contracted `recommendation` field;
+PPO/SAC and other frozen-policy allocations use additive `policy_recommendation` evidence instead.
+Their immutable explanation identity includes this representation version, so an earlier malformed
+response cannot replace a corrected public result. The released contract package is unchanged.
+
 Generic performance follows the contiguous recorded holdings revisions and linked accepted paper resolutions. A revision takes effect at its real `recorded_at`, never at its historical price-reference date. It compares observed raw-close paper value with the issued target-allocation hold and unchanged-holdings benchmarks, retaining paper costs and reference evidence. Missing revisions, operator edits with unrecorded flows, incomplete fill evidence, or unaccounted dividends/splits make observed accounting explicitly unavailable. No forward session yields unavailable trend. Green/red is an observed PnL or implementation-gap sign, not forecast accuracy: a calibrated future-return forecast and broker execution evidence remain unavailable.
 
 ## Weekly research loop

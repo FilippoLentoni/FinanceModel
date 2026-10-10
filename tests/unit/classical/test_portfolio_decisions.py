@@ -1,20 +1,89 @@
 import copy
 import json
 from datetime import timedelta
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from finplan_contracts.validate import validate
 
 from finplan_model.classical_api import handle
 from finplan_model.core.artifacts import InMemoryArtifactStore
 from finplan_model.core.errors import FinplanError
-from finplan_model.decision_analysis import compare_decisions, evaluate_decision, explain_decision
+from finplan_model.decision_analysis import compare_decisions, decision_ref, evaluate_decision, explain_decision
 from finplan_model.portfolio_decisions import persist_proposal
 from finplan_model.rl.inference import implementation_identity, recommend
 
 
 def issued(context, index=110, **extra):
     return context.service.recommend({"as_of": context.dates[index].isoformat(), **extra})
+
+
+def issued_ppo(context, index=110):
+    """Exercise the public serving producer with a real tiny frozen actor, without training."""
+    from finplan_model.serving import handle as serve
+
+    instruments = list(context.market.instruments)
+    dim = 2 * len(instruments) + len(instruments) + 1
+    actor = {"format": "finplan-actor/1", "output_transform": "clip", "layers": [
+        {"weight": np.zeros((2, dim)).tolist(), "bias": [0., 0.], "activation": "tanh"},
+        {"weight": np.zeros((2, 2)).tolist(), "bias": [0., 0.], "activation": "tanh"},
+        {"weight": np.zeros((len(instruments) + 1, 2)).tolist(), "bias": [0.] * (len(instruments) + 1), "activation": "linear"}]}
+    bundle = {"format": "finplan-strategy-bundle/1", "mode": "advisory_paper", "source_run_id": "run_01KDVDP88REHGPBXFX6CHX92KS", "configuration_id": "cfg_" + "a" * 64,
+              "strategy_id": "ppo", "environment": {"window": 2}, "constraints": {}, "instruments": instruments, "members": [{"seed": 0, "actor": actor}], "available_after": context.dates[0].isoformat()}
+    if not getattr(context.service.d, "artifacts", None):
+        context.service.d.artifacts = InMemoryArtifactStore()
+    artifact = context.service.d.artifacts.put_json(bundle, kind="policy_inference").to_dict()
+    context.service.d.advisory_parameter = SimpleNamespace(read=lambda: json.dumps({"export_run_id": "run_01KDVDP88REHGPBXFX6CHX92KS", "artifact": artifact}))
+    return serve({"environment": "beta", "request": {"portfolio_id": context.pid, "input_snapshot_id": context.sid, "as_of": context.dates[index].isoformat()}}, context.service)
+
+
+@pytest.mark.parametrize("family", ["ppo", "classical"])
+@pytest.mark.parametrize("operation", ["explain_portfolio_decision", "compare_portfolio_decisions", "evaluate_portfolio_decision"])
+def test_complete_generic_public_responses_conform_for_both_algorithm_families(context, family, operation):
+    producer = issued_ppo if family == "ppo" else issued
+    first, second = producer(context, 110), producer(context, 111)
+    body = {"portfolio_id": context.pid}
+    if operation == "compare_portfolio_decisions":
+        body.update(previous_decision_id=first["decision_id"], current_decision_id=second["decision_id"])
+    else:
+        body["decision_id"] = first["decision_id"]
+        if operation == "explain_portfolio_decision":
+            body["instrument_id"] = "GOOGL"
+        else:
+            body["end_date"] = context.dates[150].isoformat()
+            context.platform.portfolio_history[context.pid] = [{**copy.deepcopy(context.state), "recorded_at": context.market.decision_time(context.dates[100]).isoformat(), "reason": "legacy_baseline"}]
+    result = handle({"environment": "beta", "operation": operation, "request": body}, context.service)
+    assert validate(result, "tools/" + operation.replace("_", "-") + "-response").valid
+    assert context.service.store.get(result["analysis_id"])["portfolio_id"] == context.pid
+    if operation == "explain_portfolio_decision":
+        if family == "ppo":
+            assert "recommendation" not in result
+            assert result["policy_recommendation"] == first["recommendation"]
+            assert result["explanation"]["policy_replay"]["status"] == "verified"
+        else:
+            assert "policy_recommendation" not in result
+            assert result["recommendation"] == first["recommendation"]
+            assert result["explanation"]["optimizer"]["reproduction"]["status"] == "verified"
+    elif operation == "compare_portfolio_decisions":
+        assert result["status"] == "available"
+        if family == "ppo":
+            assert result["policy_replay"]["previous"]["status"] == result["policy_replay"]["current"]["status"] == "verified"
+    else:
+        assert result["status"] == "available"
+        assert result["forecast"]["status"] == "not_available"
+        assert result["real_execution"]["status"] == "not_available"
+
+
+def test_policy_explanation_does_not_reuse_previously_persisted_invalid_response(context):
+    first = issued_ppo(context)
+    doc = context.platform.get_portfolio_decision(context.pid, first["decision_id"])["decision"]
+    legacy = context.service.issue("explanation", {"summary": "Legacy policy explanation with a classical-only field", "recommendation": first["recommendation"]}, {"decision": decision_ref(doc), "instrument_id": "GOOGL"}, portfolio_id=context.pid)
+    assert not validate(legacy, "tools/explain-portfolio-decision-response").valid
+    corrected = handle({"environment": "beta", "operation": "explain_portfolio_decision", "request": {"portfolio_id": context.pid, "decision_id": first["decision_id"], "instrument_id": "GOOGL"}}, context.service)
+    assert corrected["analysis_id"] != legacy["analysis_id"]
+    assert corrected["policy_recommendation"] == first["recommendation"]
+    assert context.service.store.get(legacy["analysis_id"])["recommendation"] == first["recommendation"]
 
 
 def test_saved_optimizer_proposal_is_linked_immutable_and_never_applies_holdings(context):
