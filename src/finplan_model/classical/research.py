@@ -14,6 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
+from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.errors import ErrorCode, FinplanError
 
 MAX_BYTES = 512_000
@@ -477,6 +478,31 @@ def review(service, body):
         body.get("feedback", ""),
         n_instruments,
     )
+    # Immutable reviews refresh when their evidence changes. Hash only bounded,
+    # stable provider fields; publication dates matter, retrieval timestamps do not.
+    literature_identity = {
+        "status": sources["status"],
+        "reason": sources.get("reason"),
+        "provider": sources.get("provider"),
+        "sources": sorted(
+            (
+                {
+                    key: source.get(key)
+                    for key in (
+                        "url",
+                        "published_at",
+                        "title",
+                        "excerpt",
+                        "source",
+                        "peer_review_status",
+                        "trust",
+                    )
+                }
+                for source in sources["sources"][:5]
+            ),
+            key=canonical_json_bytes,
+        ),
+    }
     payload = {
         "summary": "Evidence-linked weekly research proposal; serving strategies remain unchanged",
         "sources": sources["sources"],
@@ -518,6 +544,12 @@ def review(service, body):
             "feedback": body.get("feedback"),
             "evidence": evidence,
             "plan_id": payload["plan_context_id"],
+            "prior_experiment_findings_checksum": sha256_checksum(
+                canonical_json_bytes(findings)
+            ),
+            "literature_checksum": sha256_checksum(
+                canonical_json_bytes(literature_identity)
+            ),
         },
     )
 

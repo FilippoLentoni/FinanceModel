@@ -127,6 +127,93 @@ def test_weekly_launch_idempotency_no_activation_and_retry_replays_exact_request
         run_review(context.service, {**request, "review_id": alternate["analysis_id"]})
 
 
+def test_same_week_same_review_request_refreshes_completed_job_evidence_once(context):
+    context.service.recommend({})
+    request = {"query": "portfolio covariance"}
+    initial = review(context.service, request)
+    run_review(
+        context.service,
+        {
+            "review_id": initial["analysis_id"],
+            "dry_run": False,
+            "confirmed_by_user": True,
+        },
+    )
+    completed_result = context.service.d.job_api.result
+
+    def pending_result(_):
+        raise FinplanError.precondition("run is pending", reason="run_not_terminal")
+
+    context.service.d.job_api.result = pending_result
+    before = review(context.service, request)
+    assert before["prior_experiment_findings"][0]["status"] == "not_available"
+    assert review(context.service, request) == before
+    context.service.d.job_api.result = completed_result
+    after = review(context.service, request)
+    assert after["analysis_id"] != before["analysis_id"]
+    assert after["prior_experiment_findings"][0]["status"] == "succeeded"
+    assert review(context.service, request) == after
+    assert (
+        context.service.store.get(before["analysis_id"])["prior_experiment_findings"][
+            0
+        ]["status"]
+        == "not_available"
+    )
+
+    paid_before = sum(not c["dry_run"] for c in context.service.d.job_api.calls)
+    with pytest.raises(FinplanError) as exc:
+        run_review(
+            context.service,
+            {
+                "review_id": after["analysis_id"],
+                "dry_run": False,
+                "confirmed_by_user": True,
+            },
+        )
+    assert exc.value.details["reason"] == "weekly_research_limit"
+    assert sum(not c["dry_run"] for c in context.service.d.job_api.calls) == paid_before
+    assert len(context.service.store.claims) == 1
+
+
+@pytest.mark.parametrize("change", ["source", "status"])
+def test_same_week_same_review_request_refreshes_changed_literature(context, change):
+    context.service.recommend({})
+    request = {"query": "portfolio covariance"}
+    before = review(context.service, request)
+    original_fetch = context.service.d.external_fetch
+    if change == "source":
+        context.service.d.external_fetch = lambda url: original_fetch(url).replace(
+            b"2601.00001", b"2601.00002"
+        )
+    else:
+
+        def unavailable(_):
+            raise TimeoutError()
+
+        context.service.d.external_fetch = unavailable
+    after = review(context.service, request)
+    assert before["analysis_id"] != after["analysis_id"]
+    assert review(context.service, request) == after
+    context.service.d.external_fetch = original_fetch
+    assert review(context.service, request) == before
+
+
+def test_review_identity_ignores_literature_retrieval_timestamps(context, monkeypatch):
+    import copy
+
+    context.service.recommend({})
+    metadata = literature("portfolio covariance", context.service.d.external_fetch)
+    monkeypatch.setattr(
+        "finplan_model.classical.research.literature",
+        lambda query, fetch: copy.deepcopy(metadata),
+    )
+    request = {"query": "portfolio covariance"}
+    before = review(context.service, request)
+    metadata["retrieved_at"] = "2026-10-10T12:30:00Z"
+    metadata["sources"][0]["retrieved_at"] = "2026-10-10T12:30:00Z"
+    assert review(context.service, request) == before
+
+
 @pytest.mark.parametrize(
     "reason", ["weekly", "project", "monthly", "overlap", "unconfirmed"]
 )
