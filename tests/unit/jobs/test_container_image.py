@@ -38,7 +38,7 @@ def test_entrypoint_matches_the_processing_request():
     ins = _instructions()
     (entry,) = [r for op, r in ins if op == "ENTRYPOINT"]
     assert json.loads(entry) == CONTAINER_ENTRYPOINT
-    assert sorted(HANDLERS) == ["daily_recommendation", "model_selection", "prepare_dataset", "prepare_policy", "report", "run_backtest", "run_benchmark"]
+    assert sorted(HANDLERS) == ["daily_recommendation", "jev_backtest", "model_selection", "prepare_dataset", "prepare_policy", "recursive_evaluate", "report", "rl_weight_staging", "run_backtest", "run_benchmark", "swarm_mode_a"]
 
 
 def test_runtime_stage_is_minimal_non_root_and_locked():

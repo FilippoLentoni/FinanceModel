@@ -3,7 +3,10 @@
 `run_recursive_improvement` persists an immutable cycle and every review/iteration in the
 existing S3 classical-analysis store. It reviews accepted/rejected decisions, stored user
 feedback, observed performance, horizon evaluations, dated primary-research metadata and
-previous experiment results. Every resume refreshes that evidence. External prose is data;
+previous experiment results. Result/evidence reviews refresh those inputs. Approval or
+preflight without new feedback preserves the latest reviewed experiment proposal and its
+immutable review identifier; it cannot silently revert to the cycle's original profile.
+External prose is data;
 it cannot execute code, change the budget, or authorize a strategy.
 
 The states are `evidence_review`, `awaiting_experiment_approval`, `experiment_running`,

@@ -161,7 +161,7 @@ def test_ssm_settings_read_runtime_values(ssm):
     s = SsmSettings(ssm, cfg)
     assert s.instance_prices()["usd_per_hour"]["ml.m5.xlarge"] == 0.25
     assert s.auto_approve_usd() == 0.5
-    assert s.lease_limits() == {"cpu": 2, "gpu": 0}
+    assert s.lease_limits() == {"cpu": 2, "gpu": 1}
     assert s.approver_role_name() == "finplan-beta-financemodel-approver-role"
     assert s.production_candidate_principals() == ["finplan-beta-financialplanning-candidate-role"]
     assert s.budget_allocation() == {"cpu_research": 7, "gpu": 25}
@@ -176,7 +176,7 @@ def test_ssm_settings_defaults_and_invalid_values(ssm):
     cfg = env_config()
     s = SsmSettings(ssm, cfg)
     assert s.auto_approve_usd() == 0.0  # FM-OQ-3 default
-    assert s.lease_limits() == {"cpu": 1, "gpu": 0}
+    assert s.lease_limits() == {"cpu": 1, "gpu": 1}
     assert s.budget_allocation()["cpu_research"] == 7 and s.budget_allocation()["gpu"] == 25
     assert s.budget_state() is None and s.instance_prices() is None
     ssm.put_parameter(Name=cfg.ssm["lease_limits"], Value="not json", Type="String")

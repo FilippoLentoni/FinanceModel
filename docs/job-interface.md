@@ -42,15 +42,21 @@ contract wins and the test fails.
 | `report` | benchmark report | 300 s / 900 s | `cpu_research` |
 | `daily_recommendation` | the production strategy (from `config/production-strategy`) on an approved `equity-etf-daily` snapshot; stages one recommendation | 1800 s / 1800 s | `cpu_research` |
 | `model_selection` | decision 27 offline model selection: controls, traditional optimizers and PPO/SAC (5 seeds) on one snapshot, tuned on train/validation, one test evaluation (a SageMaker **Training** job; [model-selection.md](model-selection.md)) | 3000 s / 3000 s | `cpu_research` |
+| `recursive_evaluate` | beta released PPO feature/reward/horizon profiles with three-seed ensemble and common controls; [recursive improvement](recursive-improvement.md) | 900 s / 900 s | `cpu_research` |
+| `rl_weight_staging` | beta approved exact Qwen revision into verified temporary S3 scratch; [LLM benchmarks](llm-benchmarks.md) | 900 s / 900 s | `cpu_research` |
+| `jev_backtest` | beta approved TypeSafe System One choices, bounded descriptor-only requests and calibration | 900 s / 900 s | `cpu_research` |
+| `swarm_mode_a` | beta approved exact self-hosted Qwen fixed-role swarm in network-isolated GPU Training Job | 900 s / 900 s | `gpu` |
 
-All jobs are CPU jobs on `ml.m5.xlarge` (one instance); all but `model_selection` run as SageMaker
-Processing jobs. They run on whatever approved
+CPU jobs use `ml.m5.xlarge` (one instance); `model_selection` and `recursive_evaluate`
+use SageMaker Training and other CPU jobs use Processing. `swarm_mode_a` uses one
+`ml.g6.12xlarge` GPU Training Job. GPU, weight staging and Jev always require manual
+approval. The new benchmark types are deployed in beta only. They run on whatever approved
 platform snapshot is named: real phase 2 (yfinance) snapshots or synthetic ones, identically in
 beta, gamma and prod (data parity, user decision 26; prod may still serve synthetic snapshots
 during the transition). Synthetic fixtures remain for offline and unit tests. The contract
 fixtures' `fixture_optimizer` is **not** a FinanceModel job type, so submitting it gives
 `VALIDATION_FAILED` (`/job_type`). Job types announced for later changes (`rl_train`,
-`rl_evaluate`, `rl_weight_staging`, `swarm_mode_a`, `swarm_mode_b`, `jev_backtest`) give
+`rl_evaluate`, `swarm_mode_b`) give
 `DEPENDENCY_UNAVAILABLE` with `retryable` false until they are deployed. A configured job type
 whose job definition is not published in the environment gives the same error.
 
