@@ -1,5 +1,6 @@
 import json
 import urllib.parse
+from datetime import timedelta
 
 import pytest
 from finplan_contracts.validate import validate
@@ -101,6 +102,71 @@ def test_research_dry_run_has_estimate_and_no_reserved_or_paid_job(context):
     assert result["dry_run"] and "job" not in result
     assert all(c["dry_run"] for c in context.service.d.job_api.calls)
     assert context.service.store.claims == {}
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_review_pins_current_saved_plan_despite_newer_historical_scenario(
+    context, monkeypatch, scheduled
+):
+    service = context.service
+    current = service.recommend({})
+    now = service.now()
+    service.now = lambda: now + timedelta(seconds=1)
+    historical = service.recommend(
+        {
+            "input_snapshot_id": context.sid,
+            "as_of": context.dates[90].isoformat(),
+            "holdings": {
+                "weights": [
+                    {"instrument_id": i, "weight": 0.2}
+                    for i in context.market.instruments
+                ],
+                "cash_weight": 0.0,
+                "portfolio_value": 10000.0,
+                "high_watermark": 10000.0,
+            },
+        }
+    )
+    assert (
+        service.store.list(kind="recommendation", limit=1)[0]["analysis_id"]
+        == historical["analysis_id"]
+    )
+    assert historical["created_at"] > current["created_at"]
+    assert historical["recommendation"]["portfolio_state"]["source"] == "supplied"
+    assert service.recommend({}) == current
+    saved_book_before = json.loads(json.dumps(context.platform.portfolio_states))
+    calls = []
+    recommend = service.recommend
+
+    def tracked_recommend(body):
+        calls.append(body)
+        return recommend(body)
+
+    monkeypatch.setattr(service, "recommend", tracked_recommend)
+    if scheduled:
+        monkeypatch.setattr("finplan_model.classical_api._SERVICE", service)
+        result = weekly_handler({"trigger": "weekly_classical_research"})
+        issued_review = service.store.get(result["review_id"])
+    else:
+        issued_review = review(service, {})
+        assert review(service, {}) == issued_review
+        result = run_review(service, {"review_id": issued_review["analysis_id"]})
+    assert issued_review["plan_context_id"] == current["analysis_id"]
+    assert calls == ([{}] if scheduled else [{}, {}])
+    assert context.platform.portfolio_states == saved_book_before
+    assert (
+        service.store.get(historical["analysis_id"])["recommendation"]
+        == historical["recommendation"]
+    )
+    submitted = service.d.job_api.calls[-1]
+    assert (
+        submitted["input_snapshot_id"] == current["recommendation"]["input_snapshot_id"]
+    )
+    assert submitted["evaluation_window"]["end"] == current["recommendation"]["as_of"]
+    assert (
+        submitted["evaluation_window"]["end"] != historical["recommendation"]["as_of"]
+    )
+    assert result["activation"] == "proposal_only"
 
 
 def test_weekly_launch_idempotency_no_activation_and_retry_replays_exact_request(

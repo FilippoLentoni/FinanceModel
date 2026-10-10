@@ -356,13 +356,19 @@ def select_preset(feedback, performance, sources, user_feedback, n_instruments):
     }
 
 
-def review(service, body):
+def review(service, body, *, plan_context_id=None):
+    # Creation order is not decision freshness: immutable default plans replay
+    # their original timestamp, and historical scenarios may be created later.
+    # The scheduler pins the recommendation it just refreshed; on-demand reviews
+    # independently resolve the current approved data and saved paper book.
+    if plan_context_id is None:
+        plan_context_id = service.recommend({})["analysis_id"]
+    plan = service.plan(plan_context_id)
     sources = literature(
         body.get("query"), getattr(service.d, "external_fetch", external)
     )
     feedback = service.store.list(kind="feedback", limit=10)
     performance = service.store.list(kind="performance", limit=10)
-    plans = service.store.list(kind="recommendation", limit=1)
     prior_runs = service.store.list(kind="research_run", limit=20)
     findings = []
     for prior in prior_runs[:3]:
@@ -470,7 +476,7 @@ def review(service, body):
     hypothesis = "Compare shrinkage covariance lookbacks and optimizer families against equal-weight, cash and buy-and-hold after transaction costs"
     if any(d.get("gap", {}).get("total", 0) < 0 for d in performance):
         hypothesis = "Observed paper implementation gap warrants lower-turnover/lookback benchmarks before considering model changes"
-    n_instruments = len(plans[0]["solve_inputs"]["instruments"]) if plans else 5
+    n_instruments = len(plan["solve_inputs"]["instruments"])
     preset = select_preset(
         feedback,
         performance,
@@ -529,7 +535,7 @@ def review(service, body):
                 "automatic": False,
             }
         ],
-        "plan_context_id": plans[0]["analysis_id"] if plans else None,
+        "plan_context_id": plan["analysis_id"],
         "activation": {
             "status": "proposal_only",
             "required": "explicit reviewed strategy activation after fresh forward validation",

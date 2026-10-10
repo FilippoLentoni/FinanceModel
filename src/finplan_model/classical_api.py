@@ -354,9 +354,9 @@ def weekly_handler(event, context=None):
             "weekly research is beta only", reason="research_disabled"
         )
     # Refresh the proposal context from approved completed data; this issues no trade.
-    service.recommend({})
+    plan = service.recommend({})
     # Reuse an immutable week claim even if Scheduler's event identity changes on a retry.
-    result = review(service, {})
+    result = review(service, {}, plan_context_id=plan["analysis_id"])
     try:
         return run_review(
             service,
