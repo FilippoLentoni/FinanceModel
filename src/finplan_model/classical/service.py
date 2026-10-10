@@ -11,6 +11,7 @@ from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.clock import utc_iso
 from finplan_model.core.errors import FinplanError
 from finplan_model.jobs.market_loader import load_market
+from finplan_model.portfolio_decisions import persist_proposal
 from finplan_model.rl.serving_context import (
     completed_date,
     raw_market,
@@ -87,6 +88,7 @@ class ClassicalService:
 
         from . import math as solver_module
 
+        current_weights = {row["instrument_id"]: row["weight"] for row in holdings["weights"]}
         inputs = {
             "implementation": {
                 "version": "finplan-classical/1",
@@ -98,7 +100,7 @@ class ClassicalService:
             "algorithm": algorithm,
             "instruments": instruments,
             "settings": cfg,
-            "current_weights": [r["weight"] for r in holdings["weights"]],
+            "current_weights": [current_weights.get(instrument, 0.) for instrument in instruments],
             "expected_returns": estimate_mean(returns, "historical_mean").tolist(),
             "covariance": estimate_covariance(returns, "ledoit_wolf").tolist(),
             "scenarios": returns.tolist(),
@@ -187,6 +189,17 @@ class ClassicalService:
             "portfolio_state": metadata,
             "idempotency_key": body.get("idempotency_key"),
         }
+        aid = analysis_id({"kind": "recommendation", "identity": identity})
+        decision_id = persist_proposal(
+            self, rec, saved,
+            {"implementation": inputs["implementation"], "settings": cfg,
+             "decision_time": inputs["decision_time"],
+             "snapshot_checksum": content.snapshot.manifest_checksum,
+             "paper_execution_cost_bps": 2.0},
+            source_analysis_id=aid, idempotency_key=body.get("idempotency_key"),
+        )
+        if decision_id:
+            payload["decision_id"] = decision_id
         return self.issue(
             "recommendation",
             payload,

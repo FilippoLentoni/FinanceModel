@@ -51,6 +51,30 @@ mode uses caller-supplied holdings and high watermark. The current historical un
 hindsight-selection bias. Data dates are displayed; a recommendation uses the latest approved
 completed data available, which can lag the current calendar date.
 
+Every saved-book recommendation now creates an immutable Platform paper proposal before returning
+its optional top-level `decision_id` (`pd_`). Proposal creation is deterministic and idempotent for
+the same snapshot, holdings revision and frozen policy inputs; an explicit `idempotency_key` can
+request a fresh proposal. The record retains the exact recommendation, feature-price window,
+holdings, policy bundle reference/checksum, source/configuration/export IDs and snapshot identity.
+Explicit hypothetical holdings produce no acceptable proposal. Recommendation cannot update the
+book or approve a decision. The separate human-confirmed Platform acceptance workflow applies
+cost-consistent fractional paper fills and saves the next immutable holdings revision. The recorded
+execution assumption is completed-close reference prices and 2 basis points of traded-notional
+costs, with the real acceptance timestamp retained; no broker order is submitted.
+
+`explain_portfolio_decision` replays the frozen actor against the recorded inputs and verifies the
+issued target weights within 1e-8. Inference, observation/action and constraint source checksums
+and the NumPy version are retained and must still match before replay. Actual input features, ensemble member outputs and constraints
+are reported without pretending to have causal attribution or a calibrated return forecast.
+`compare_portfolio_decisions` distinguishes changes in snapshot, holdings revision, policy inputs
+and model identity. `evaluate_portfolio_decision` reads complete dated holdings revisions and linked
+paper resolutions; future acceptance is never backdated into historical observations. It reports
+unavailable actual accounting for incomplete history, operator edits/unrecorded flows, or corporate
+actions lacking an accounting ledger. A baseline created after the observation cutoff cannot
+claim historical actuals, and every included resolution must match its committed holdings revision
+and timestamp. These analyses are retained by the Model evidence service;
+market-event research can investigate their dated windows for either family.
+
 The four-pipeline lifecycle and future bounded research controller are described in the
 FinanceAgent repository's `docs/strategy-lifecycle.md`. Supported artifact changes do not require
 releasing Agent/Tools again; new algorithm implementations or feature transforms do require a

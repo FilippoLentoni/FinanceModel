@@ -246,6 +246,7 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
         {"Sid": "ReadFrozenStrategy", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
         {"Sid": "ReadApprovedSnapshots", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*")},
         {"Sid": "ReadSavedPortfolio", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/plans/*", "v1/portfolios/*/state")},
+        {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
         {"Sid": "DenyTrainingAndWrites", "Effect": "Deny", "Action": ["sagemaker:*", "s3:PutObject", "s3:DeleteObject", "ssm:PutParameter", "ssm:DeleteParameter", "dynamodb:*"], "Resource": "*"},
     ]}
 
@@ -264,6 +265,9 @@ def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, par
         {"Sid": "ClassicalBoundedLookup", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": ["classical/claims/*.json", "classical/records/ca_*.json"]}, "NumericLessThanEquals": {"s3:max-keys": 1}}},
         {"Sid": "DenyClassicalEvidenceOverwrite", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": [research+"/classical/*"], "Condition": {"Null": {"s3:if-none-match": "true"}}},
         {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/plans/*", "v1/portfolios/*/state")},
+        {"Sid": "ReadPaperLifecycle", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/portfolios/*/history", "v1/portfolios/*/decisions", "v1/portfolio-decisions/*")},
+        {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
+        {"Sid": "ReadFrozenPolicyEvidence", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [research+"/artifacts/policy_inference/*"]},
         {"Sid": "GuardedSandboxApi", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [own_api+"/POST/v1/jobs", own_api+"/GET/v1/jobs", own_api+"/GET/v1/jobs/*"]},
         {"Sid": "ReadProjectBudget", "Effect": "Allow", "Action": ["budgets:ViewBudget", "sts:GetCallerIdentity"], "Resource": "*"},
         {"Sid": "DenyDirectComputeAndFinancialWrites", "Effect": "Deny", "Action": ["sagemaker:*", "ssm:PutParameter", "ssm:DeleteParameter", "s3:DeleteObject*", "dynamodb:*"], "Resource": "*"},

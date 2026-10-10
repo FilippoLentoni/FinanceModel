@@ -9,12 +9,34 @@ from typing import Any
 
 import numpy as np
 
+from finplan_model.core.artifacts import sha256_checksum
 from finplan_model.core.errors import FinplanError
 from finplan_model.sim.config import SimulationConfig
 from finplan_model.sim.constraints import apply_constraints
 from .spec import EnvSpec, allocation_action, build_observation
 
 FORMAT = "finplan-actor/1"
+
+
+def implementation_identity():
+    """Identify the inference transforms as well as the separately frozen actor weights."""
+    from pathlib import Path
+
+    from finplan_model.sim import constraints
+    from . import spec
+
+    return {
+        "version": "finplan-policy-inference/1",
+        "numpy_version": np.__version__,
+        "source_checksums": {
+            name: sha256_checksum(Path(module_path).read_bytes())
+            for name, module_path in (
+                ("inference", __file__),
+                ("observation_and_actions", spec.__file__),
+                ("constraints", constraints.__file__),
+            )
+        },
+    }
 
 
 def export_actor(data: bytes, algorithm: str = "ppo") -> dict[str, Any]:
@@ -111,7 +133,22 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
         raise FinplanError.precondition("the exported policy has no members", reason="policy_members_missing")
     obs = build_observation(spec, prices, current, cash, drawdown=1 - value / peak)
     targets = [allocation_action(spec, actor_action(m["actor"], obs), current, cash) for m in bundle["members"]]
-    return allocation_response(bundle, holdings, np.mean([t[0] for t in targets], axis=0), float(np.mean([t[1] for t in targets])))
+    return allocation_response(
+        bundle, holdings, np.mean([t[0] for t in targets], axis=0),
+        float(np.mean([t[1] for t in targets])),
+        diagnostics={
+            "input_features": list(spec.features),
+            "observation_dimension": int(obs.size),
+            "observation_checksum": sha256_checksum(obs.tobytes()),
+            "feature_window_sessions": spec.window,
+            "observed_drawdown": 1 - value / peak,
+            "member_target_weights": [
+                {"seed": m["seed"], "weights": target[0].tolist(), "cash_weight": float(target[1])}
+                for m, target in zip(bundle["members"], targets)
+            ],
+            "interpretation": "Actual frozen actor outputs and constraint transform; not causal attribution or a return forecast",
+        },
+    )
 
 
 def recommend_baseline(bundle, market, as_of, holdings):

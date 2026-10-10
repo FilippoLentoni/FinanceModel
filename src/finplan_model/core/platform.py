@@ -61,6 +61,14 @@ class PlatformClient(Protocol):
 
     def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]: ...
 
+    def create_portfolio_decision(self, portfolio_id: str, body: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def get_portfolio_decision(self, portfolio_id: str, decision_id: str) -> dict[str, Any]: ...
+
+    def list_portfolio_decisions(self, portfolio_id: str, *, limit: int = 20, next_token: str | None = None) -> dict[str, Any]: ...
+
+    def get_portfolio_history(self, portfolio_id: str, *, limit: int = 20, next_token: str | None = None) -> dict[str, Any]: ...
+
     def get_snapshot(self, input_snapshot_id: str, *, download: bool = False) -> dict[str, Any]: ...
 
     def read_snapshot_observations(self, input_snapshot_id: str, *, instrument_id: str | None = None, start_date: str | None = None, end_date: str | None = None, page_size: int = 100, next_token: str | None = None) -> dict[str, Any]: ...
@@ -282,6 +290,8 @@ class FixturePlatformClient:
         self.staged_outputs: dict[str, dict[str, Any]] = {}
         self.plans: dict[str, dict[str, Any]] = {}
         self.portfolio_states: dict[str, dict[str, Any]] = {}
+        self.portfolio_decisions: dict[str, dict[str, Any]] = {}
+        self.portfolio_history: dict[str, list[dict[str, Any]]] = {}
         self.calls: list[tuple[str, str]] = []
 
     def get_latest_snapshot(self, dataset_id: str) -> dict[str, Any]:
@@ -308,6 +318,42 @@ class FixturePlatformClient:
         self.snapshots[sid] = dict(record)
         self.blobs.update(blobs)
         return sid
+
+    def create_portfolio_decision(self, portfolio_id, body):
+        import hashlib
+
+        # Deterministic synthetic identifier; production IDs are issued by Platform.
+        alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+        number = int(hashlib.sha256(body["idempotency_key"].encode()).hexdigest(), 16) % (1 << 128)
+        suffix = ""
+        for _ in range(26):
+            suffix = alphabet[number & 31] + suffix
+            number >>= 5
+        did = "pd_" + suffix
+        self.calls.append(("create_portfolio_decision", portfolio_id))
+        if did not in self.portfolio_decisions:
+            doc = {k: json.loads(json.dumps(v)) for k, v in body.items() if k != "idempotency_key"}
+            doc.update(decision_id=did, portfolio_id=portfolio_id, status="proposed", created_at=utc_iso(self.clock.now()), synthetic=True)
+            doc["checksum"] = sha256_checksum(canonical_json_bytes(doc))
+            self.portfolio_decisions[did] = doc
+        return {"decision": json.loads(json.dumps(self.portfolio_decisions[did])), "synthetic": True}
+
+    def get_portfolio_decision(self, portfolio_id, decision_id):
+        doc = self.portfolio_decisions.get(decision_id)
+        if doc is None or doc["portfolio_id"] != portfolio_id:
+            raise FinplanError(ErrorCode.NOT_FOUND, "portfolio decision not found")
+        return {"decision": json.loads(json.dumps(doc))}
+
+    def list_portfolio_decisions(self, portfolio_id, *, limit=20, next_token=None):
+        rows = sorted((d for d in self.portfolio_decisions.values() if d["portfolio_id"] == portfolio_id), key=lambda d: (d["created_at"], d["decision_id"]), reverse=True)
+        start = int(next_token or 0)
+        return {"portfolio_id": portfolio_id, "decisions": json.loads(json.dumps(rows[start:start + limit])), "next_token": str(start + limit) if start + limit < len(rows) else None}
+
+    def get_portfolio_history(self, portfolio_id, *, limit=20, next_token=None):
+        rows = self.portfolio_history.get(portfolio_id, [self.portfolio_states[portfolio_id]])
+        rows = sorted(rows, key=lambda r: r["revision"], reverse=True)
+        start = int(next_token or 0)
+        return {"portfolio_id": portfolio_id, "history": json.loads(json.dumps(rows[start:start + limit])), "next_token": str(start + limit) if start + limit < len(rows) else None}
 
     def corrupt(self, artifact_id: str, data: bytes = b"{}") -> None:
         """Replace an artifact's bytes (models storage corruption for WS-04 tests)."""
@@ -380,7 +426,7 @@ class HttpPlatformClient:
             opener = urllib.request.urlopen
         self._open = opener
 
-    def _request(self, method: str, path: str, query: Mapping[str, Any] | None = None, *, signed: bool = True, url: str | None = None) -> tuple[int, bytes]:
+    def _request(self, method: str, path: str, query: Mapping[str, Any] | None = None, *, signed: bool = True, url: str | None = None, body: Mapping[str, Any] | None = None) -> tuple[int, bytes]:
         import urllib.error
         import urllib.parse
         import urllib.request
@@ -388,22 +434,25 @@ class HttpPlatformClient:
         qs = urllib.parse.urlencode({k: v for k, v in (query or {}).items() if v is not None})
         full = url or f"{self.endpoint}{path}" + (f"?{qs}" if qs else "")
         headers: dict[str, str] = {"Accept": "application/json"}
+        data = canonical_json_bytes(body) if body is not None else None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
         if signed:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
 
-            req = AWSRequest(method=method, url=full, headers=headers)
+            req = AWSRequest(method=method, url=full, headers=headers, data=data)
             SigV4Auth(self.credentials, "execute-api", self.region).add_auth(req)
             headers = dict(req.headers.items())
         try:
-            with self._open(urllib.request.Request(full, method=method, headers=headers), timeout=self.timeout) as resp:
+            with self._open(urllib.request.Request(full, method=method, headers=headers, data=data), timeout=self.timeout) as resp:
                 return int(resp.status), resp.read()
         except urllib.error.HTTPError as exc:
             return int(exc.code), exc.read()
 
-    def _json(self, method: str, path: str, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        status, body = self._request(method, path, query)
-        doc = json.loads(body or b"{}")
+    def _json(self, method: str, path: str, query: Mapping[str, Any] | None = None, *, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        status, response = self._request(method, path, query, body=body)
+        doc = json.loads(response or b"{}")
         if 200 <= status < 300:
             return doc
         err = doc.get("error", doc) if isinstance(doc, dict) else {}
@@ -427,6 +476,26 @@ class HttpPlatformClient:
     def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]:
         require_id("portfolio_id", portfolio_id)
         return self._json("GET", f"/v1/portfolios/{portfolio_id}/state")
+
+    def create_portfolio_decision(self, portfolio_id, body):
+        require_id("portfolio_id", portfolio_id)
+        return self._json("POST", f"/v1/portfolios/{portfolio_id}/decisions", body=body)
+
+    def get_portfolio_decision(self, portfolio_id, decision_id):
+        require_id("portfolio_id", portfolio_id)
+        require_id("decision_id", decision_id)
+        result = self._json("GET", f"/v1/portfolio-decisions/{decision_id}")
+        if result.get("decision", {}).get("portfolio_id") != portfolio_id:
+            raise FinplanError(ErrorCode.NOT_FOUND, "portfolio decision not found for this portfolio")
+        return result
+
+    def list_portfolio_decisions(self, portfolio_id, *, limit=20, next_token=None):
+        require_id("portfolio_id", portfolio_id)
+        return self._json("GET", f"/v1/portfolios/{portfolio_id}/decisions", {"page_size": limit, "next_token": next_token})
+
+    def get_portfolio_history(self, portfolio_id, *, limit=20, next_token=None):
+        require_id("portfolio_id", portfolio_id)
+        return self._json("GET", f"/v1/portfolios/{portfolio_id}/history", {"page_size": limit, "next_token": next_token})
 
     def read_snapshot_observations(self, input_snapshot_id: str, *, instrument_id: str | None = None, start_date: str | None = None, end_date: str | None = None, page_size: int = 100, next_token: str | None = None) -> dict[str, Any]:
         return self._json("GET", f"/v1/snapshots/{input_snapshot_id}/observations", {"instrument_id": instrument_id, "start_date": start_date, "end_date": end_date, "page_size": page_size, "next_token": next_token})

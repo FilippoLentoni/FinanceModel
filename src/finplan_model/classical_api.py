@@ -16,6 +16,7 @@ from finplan_model.core.clock import SystemClock
 from finplan_model.core.config import load_config
 from finplan_model.core.errors import ErrorCode, FinplanError, as_finplan_error
 from finplan_model.core.outcome import require_valid
+from finplan_model.decision_analysis import compare_decisions, evaluate_decision, explain_decision
 
 log = logging.getLogger("finplan_model.classical")
 log.setLevel(logging.INFO)
@@ -31,6 +32,9 @@ OPS = (
     "run_portfolio_research",
     "submit_portfolio_feedback",
     "research_market_events",
+    "explain_portfolio_decision",
+    "compare_portfolio_decisions",
+    "evaluate_portfolio_decision",
 )
 
 
@@ -98,6 +102,7 @@ def build_service():
 
     from finplan_model.control.production_strategy import SsmStrategyParameter
     from finplan_model.core.aws_clients import s3_client
+    from finplan_model.core.artifacts import S3ArtifactStore
     from finplan_model.core.platform import HttpPlatformClient
 
     env = os.environ["FINPLAN_ENVIRONMENT"]
@@ -133,6 +138,7 @@ def build_service():
         ),
         job_api=JobApi(job_endpoint, session, cfg.region),
         project_budget=project_budget,
+        artifacts=S3ArtifactStore(s3_client(cfg.region, session=session), bucket),
     )
     return ClassicalService(
         env=env,
@@ -269,13 +275,19 @@ def handle(event, service):
             }
             for d in rows
         ]
-        result = {"analyses": summaries, "contract_version": "1.4.0", "synthetic": True}
+        result = {"analyses": summaries, "contract_version": "1.5.0", "synthetic": True}
     elif op == "research_portfolio_models":
         result = review(service, body)
     elif op == "run_portfolio_research":
         result = run_review(service, body)
     elif op == "research_market_events":
         result = market_events(service, body)
+    elif op == "explain_portfolio_decision":
+        result = explain_decision(service, body)
+    elif op == "compare_portfolio_decisions":
+        result = compare_decisions(service, body)
+    elif op == "evaluate_portfolio_decision":
+        result = evaluate_decision(service, body)
     else:
         doc = service.store.get(body["analysis_id"])
         result = service.issue(

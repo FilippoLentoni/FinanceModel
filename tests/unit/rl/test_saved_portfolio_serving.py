@@ -40,7 +40,11 @@ def context(monkeypatch):
     def latest(dataset):
         calls.append(("latest", dataset))
         return {"snapshot": {"input_snapshot_id": SID, "status": "approved"}}
-    platform = SimpleNamespace(get_plan=get_plan, get_portfolio_state=get_state, get_latest_snapshot=latest)
+    proposals = []
+    def persist(portfolio, proposal):
+        proposals.append(copy.deepcopy(proposal))
+        return {"decision": {"portfolio_id": portfolio, "decision_id": "pd_" + UID}}
+    platform = SimpleNamespace(get_plan=get_plan, get_portfolio_state=get_state, get_latest_snapshot=latest, create_portfolio_decision=persist)
     bundle = {"format": "finplan-strategy-bundle/1", "mode": "advisory_paper", "strategy_id": "ppo",
               "source_run_id": "run_" + UID, "configuration_id": "cfg_" + "a" * 64,
               "instruments": ["A", "B"], "available_after": "2026-01-01", "constraints": {},
@@ -56,7 +60,7 @@ def context(monkeypatch):
         captured.append((px.copy(), copy.deepcopy(holdings)))
         return allocation_response(frozen, holdings, [.25, .25], .5)
     monkeypatch.setattr("finplan_model.rl.advisory.recommend", recommend)
-    return SimpleNamespace(service=svc, book=book, market=market, content=content, calls=calls, captured=captured, days=days)
+    return SimpleNamespace(service=svc, book=book, market=market, content=content, calls=calls, captured=captured, days=days, proposals=proposals)
 
 
 def request(ctx, body):
@@ -93,12 +97,26 @@ def test_repeated_recommendations_do_not_change_state_or_selection(context):
     assert context.book == before
     assert context.service.d.advisory_parameter.read() == pointer
     assert not hasattr(context.service.d, "sagemaker") and not hasattr(context.service.d, "run_io")
+    assert len(context.proposals) == 2
+    assert context.proposals[0] == context.proposals[1]
+    assert context.proposals[0]["portfolio_revision"] == before["revision"]
+    assert context.proposals[0]["execution"]["transaction_cost_bps"] == 2.
+
+
+def test_saved_recommendation_fails_closed_if_decision_cannot_be_persisted(context):
+    def unavailable(*_):
+        raise FinplanError.dependency_unavailable("decision storage unavailable")
+    context.service.d.platform.create_portfolio_decision = unavailable
+    with pytest.raises(FinplanError):
+        request(context, {})
+    assert context.book["revision"] == 1
 
 
 def test_explicit_holdings_keep_experiment_mode(context):
     rec = request(context, {"input_snapshot_id": SID, "as_of": "2026-10-09",
                             "holdings": {"weights": [], "cash_weight": 1., "portfolio_value": 10000., "high_watermark": 10000.}})["recommendation"]
     assert context.calls == []
+    assert context.proposals == []
     assert rec["portfolio_state"]["source"] == "supplied"
     assert rec["decisions"][0]["delta_quantity"] == pytest.approx(2500 / 110)
 

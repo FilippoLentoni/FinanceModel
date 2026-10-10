@@ -7,7 +7,8 @@ from finplan_model.core.errors import ErrorCode, FinplanError
 from finplan_model.core.outcome import require_valid
 from finplan_model.core.ids import require_id
 from finplan_model.jobs.market_loader import load_market
-from .inference import recommend, recommend_baseline
+from finplan_model.portfolio_decisions import persist_proposal
+from .inference import implementation_identity, recommend, recommend_baseline
 from .serving_context import completed_date, raw_market, resolve_inputs, value_holdings, with_quantities
 
 
@@ -63,4 +64,19 @@ def recommendation(service, body):
     rec=recommend(bundle,px,holdings) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
-    return {'recommendation':rec,'synthetic':bool(market.synthetic or saved is not None)}
+    provenance = {
+        'implementation': implementation_identity(),
+        'policy_artifact': pinned['artifact'],
+        'export_run_id': pinned['export_run_id'],
+        'policy_source_run_id': bundle['source_run_id'],
+        'configuration_id': bundle['configuration_id'],
+        'policy_inputs': {'prices': px.tolist(), 'holdings': holdings, 'environment': bundle.get('environment'), 'instruments': bundle['instruments']},
+        'snapshot_checksum': content.snapshot.manifest_checksum,
+        'decision_time': market.decision_time(as_of).isoformat(),
+        'paper_execution_cost_bps': 2.0,
+    }
+    decision_id = persist_proposal(service, rec, saved, provenance, idempotency_key=body.get('idempotency_key'))
+    result = {'recommendation':rec,'synthetic':bool(market.synthetic or saved is not None)}
+    if decision_id:
+        result['decision_id'] = decision_id
+    return result

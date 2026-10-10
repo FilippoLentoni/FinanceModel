@@ -48,7 +48,7 @@ def public(doc):
         if k not in ("solve_inputs", "request_fingerprint", "internal")
     }
     out.update(
-        {"analysis_ref": reference(doc), "contract_version": "1.4.0", "synthetic": True}
+        {"analysis_ref": reference(doc), "contract_version": "1.5.0", "synthetic": True}
     )
     return out
 

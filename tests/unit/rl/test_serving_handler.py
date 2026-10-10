@@ -81,6 +81,8 @@ def test_inference_iam_has_no_training_selection_or_storage_write_permission():
     assert allowed('execute-api:Invoke', root+'GET/v1/portfolios/pf_example/state')
     assert allowed('execute-api:Invoke', root+'GET/v1/plans/pl_example')
     assert allowed('execute-api:Invoke', root+'GET/v1/snapshots/latest')
+    assert allowed('execute-api:Invoke', root+'POST/v1/portfolios/pf_example/decisions')
+    assert not allowed('execute-api:Invoke', root+'POST/v1/portfolio-decisions/pd_example/accept')
     assert not allowed('execute-api:Invoke', root+'PUT/v1/portfolios/pf_example/state')
     assert not allowed('execute-api:Invoke', root+'POST/v1/ingestions')
     param = f'arn:aws:ssm:us-east-2:{account}:parameter/finplan/beta/financialplanning/config/research-plan-ref'

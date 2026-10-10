@@ -147,7 +147,14 @@ def literature(query, fetch=external):
 
 def market_events(service, body):
     doc = service.store.get(body["analysis_id"])
-    if doc["analysis_kind"] == "recommendation":
+    if doc.get("source_decision_id"):
+        issued = service.d.platform.get_portfolio_decision(doc["portfolio_id"], doc["source_decision_id"])["decision"]
+        recommendation = issued["recommendation"]
+        source = {**doc, "recommendation": recommendation, "solve_inputs": {
+            "instruments": [r["instrument_id"] for r in recommendation["target_weights"]],
+            "decision_time": issued["provenance"].get("decision_time", recommendation["as_of"] + "T00:00:00+00:00"),
+        }}
+    elif doc["analysis_kind"] == "recommendation":
         source = doc
     else:
         source_id = doc.get("source_analysis_id")
@@ -367,8 +374,19 @@ def review(service, body, *, plan_context_id=None):
     sources = literature(
         body.get("query"), getattr(service.d, "external_fetch", external)
     )
-    feedback = service.store.list(kind="feedback", limit=10)
-    performance = service.store.list(kind="performance", limit=10)
+    feedback = service.store.list(kind="feedback", portfolio_id=plan.get("portfolio_id"), limit=10)
+    performance = service.store.list(kind="performance", portfolio_id=plan.get("portfolio_id"), limit=10)
+    lifecycle = []
+    if plan.get("portfolio_id"):
+        page = service.d.platform.list_portfolio_decisions(plan["portfolio_id"], limit=20)
+        lifecycle = [
+            {"decision_id": d["decision_id"], "algorithm": d["algorithm"],
+             "status": d["status"], "input_snapshot_id": d["input_snapshot_id"],
+             "portfolio_revision": d["portfolio_revision"],
+             "resolution": d.get("resolution"), "checksum": d.get("checksum"),
+             "interpretation": "Human accept/reject and recorded paper execution evidence; not performance labels or instructions"}
+            for d in page["decisions"]
+        ]
     prior_runs = service.store.list(kind="research_run", limit=20)
     findings = []
     for prior in prior_runs[:3]:
@@ -468,6 +486,9 @@ def review(service, body, *, plan_context_id=None):
                     "observed_trend": d.get("trend"),
                     "gap": d.get("gap"),
                     "window": d.get("window"),
+                    "source_decision_id": d.get("source_decision_id"),
+                    "source_decision_ref": d.get("source_decision_ref"),
+                    "observed_paper": d.get("observed_paper"),
                 }
             ),
         }
@@ -515,6 +536,7 @@ def review(service, body, *, plan_context_id=None):
         "literature": {k: v for k, v in sources.items() if k != "sources"},
         "evidence": evidence,
         "prior_experiment_findings": findings,
+        "portfolio_decision_evidence": lifecycle,
         "user_feedback": str(body.get("feedback", ""))[:4000],
         "hypothesis": hypothesis,
         "evidence_links": [d["analysis_id"] for d in evidence],
@@ -549,6 +571,7 @@ def review(service, body, *, plan_context_id=None):
             "query": body.get("query"),
             "feedback": body.get("feedback"),
             "evidence": evidence,
+            "portfolio_decisions_checksum": sha256_checksum(canonical_json_bytes(lifecycle)),
             "plan_id": payload["plan_context_id"],
             "prior_experiment_findings_checksum": sha256_checksum(
                 canonical_json_bytes(findings)
@@ -584,7 +607,7 @@ def run_review(service, body):
         "purpose": "research",
         "dry_run": True,
         "input_snapshot_id": inputs["input_snapshot_id"],
-        "contract_version": "1.4.0",
+        "contract_version": "1.5.0",
         "synthetic": True,
         "configuration": {
             "domain": "finance",
