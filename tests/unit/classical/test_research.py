@@ -250,6 +250,49 @@ def test_paid_controller_fails_closed_before_submission(context, reason):
     assert all(c["dry_run"] for c in context.service.d.job_api.calls)
 
 
+def test_unapproved_proposal_does_not_block_or_get_changed_by_weekly_research(context):
+    r = issue_review(context)
+    old_proposal = {
+        "run_id": "run_01KDVDP88REHGPBXFX6CHX92KR",
+        "state": "awaiting_approval",
+        "elapsed_seconds": 0,
+        "wait_reason": "awaiting_human_approval",
+    }
+    context.service.d.job_api.jobs = [dict(old_proposal)]
+    result = run_review(
+        context.service,
+        {
+            "review_id": r["analysis_id"],
+            "dry_run": False,
+            "confirmed_by_user": True,
+        },
+    )
+    assert result["job"]["state"] == "queued"
+    assert context.service.d.job_api.jobs == [old_proposal]
+    assert sum(not c["dry_run"] for c in context.service.d.job_api.calls) == 1
+    assert len(context.service.store.claims) == 1
+
+
+@pytest.mark.parametrize(
+    "state", ["queued", "starting", "running", "stopping", "unknown", None]
+)
+def test_weekly_overlap_blocks_compute_candidates_and_unknown_states(context, state):
+    r = issue_review(context)
+    context.service.d.job_api.jobs = [{"state": state}]
+    with pytest.raises(FinplanError) as exc:
+        run_review(
+            context.service,
+            {
+                "review_id": r["analysis_id"],
+                "dry_run": False,
+                "confirmed_by_user": True,
+            },
+        )
+    assert exc.value.details["reason"] == "research_job_overlap"
+    assert all(c["dry_run"] for c in context.service.d.job_api.calls)
+    assert context.service.store.claims == {}
+
+
 def test_weekly_budget_skip_retains_review_and_reason(context, monkeypatch):
     context.service.recommend({})
     monkeypatch.setattr("finplan_model.classical_api._SERVICE", context.service)

@@ -640,7 +640,17 @@ def run_review(service, body):
         active = [
             r
             for r in runs
-            if r.get("state") not in ("succeeded", "failed", "cancelled", "timed_out")
+            # Unapproved proposals cannot consume a compute lease. Keep queued
+            # and unknown states blocking; the shared dispatcher serializes any
+            # proposal approved after this check through its CPU lease.
+            if r.get("state")
+            not in (
+                "awaiting_approval",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "timed_out",
+            )
         ]
         if active and existing_claim is None:
             raise FinplanError.precondition(
