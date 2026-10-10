@@ -205,6 +205,36 @@ def test_requested_literature_topic_is_used_in_bounded_provider_query():
     assert parsed["max_results"] == ["5"]
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "Portfolio covariance portfolio shrinkage",
+            "all:portfolio AND (all:covariance OR all:shrinkage)",
+        ),
+        ("portfolio PORTFOLIO", "all:portfolio"),
+        ("?!", "all:portfolio"),
+        (
+            None,
+            "all:portfolio AND (all:optimization OR all:reinforcement OR all:learning OR all:covariance OR all:transaction OR all:costs)",
+        ),
+    ],
+)
+def test_literature_topics_constrain_portfolio_search_with_safe_empty_fallback(
+    query, expected
+):
+    requested = []
+    literature(
+        query,
+        lambda url: (
+            requested.append(url) or b'<feed xmlns="http://www.w3.org/2005/Atom"/>'
+        ),
+    )
+    parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(requested[0]).query)
+    assert parsed["search_query"] == [expected]
+    assert parsed["max_results"] == ["5"]
+
+
 def test_evidence_changes_actual_bounded_experiment_configuration(context):
     context.service.recommend({})
     r = review(context.service, {"feedback": "Reduce transaction costs and drawdown"})

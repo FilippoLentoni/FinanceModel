@@ -87,11 +87,15 @@ def literature(query, fetch=external):
         query
         or "portfolio optimization reinforcement learning covariance transaction costs",
     )[:300]
+    # Keep the portfolio requirement outside the topic disjunction; including it
+    # inside would make every additional topic optional by Boolean absorption.
+    topics = [term for term in q.split() if term.lower() != "portfolio"][:12]
+    search_query = "all:portfolio"
+    if topics:
+        search_query += " AND (" + " OR ".join("all:" + term for term in topics) + ")"
     url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(
         {
-            "search_query": "all:portfolio AND ("
-            + " OR ".join("all:" + term for term in q.split()[:12])
-            + ")",
+            "search_query": search_query,
             "sortBy": "submittedDate",
             "sortOrder": "descending",
             "max_results": 5,
