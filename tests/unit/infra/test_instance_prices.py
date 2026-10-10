@@ -26,7 +26,7 @@ def ssm():
 
 
 def test_instance_types_cover_every_deployed_job_type():
-    assert instance_types(load_config("beta")) == ["ml.m5.xlarge"]
+    assert instance_types(load_config("beta")) == ["ml.g6.12xlarge", "ml.m5.xlarge"]
 
 
 def test_fetch_uses_the_processing_component_in_the_deployment_region():
@@ -54,7 +54,7 @@ def test_missing_price_writes_nothing(ssm):
 
 def test_absent_or_stale_prices_are_written_current_ones_kept(ssm):
     cfg = load_config("beta")
-    current = json.dumps({"retrieved_at": "2026-10-01T00:00:00Z", "currency": "USD", "usd_per_hour": {"ml.m5.xlarge": 0.3}})
+    current = json.dumps({"retrieved_at": "2026-10-01T00:00:00Z", "currency": "USD", "usd_per_hour": {"ml.m5.xlarge": 0.3, "ml.g6.12xlarge": 1.0}})
     ssm.put_parameter(Name=parameter_name("beta"), Value=current, Type="String")
     stale = json.dumps({"retrieved_at": (NOW - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%SZ"), "usd_per_hour": {"ml.m5.xlarge": 0.3}})
     ssm.put_parameter(Name=parameter_name("gamma"), Value=stale, Type="String")
@@ -65,7 +65,7 @@ def test_absent_or_stale_prices_are_written_current_ones_kept(ssm):
     for env in ("gamma", "prod"):
         assert json.loads(ssm.get_parameter(Name=parameter_name(env))["Parameter"]["Value"])["usd_per_hour"] == {"ml.m5.xlarge": SYNTHETIC_PRICE}
     assert decide(cfg, current, now=NOW, force=True).action == "write"
-    assert decide(cfg, json.dumps({"retrieved_at": "2026-10-07T00:00:00Z", "usd_per_hour": {}}), now=NOW).reason == "no price for ml.m5.xlarge"
+    assert decide(cfg, json.dumps({"retrieved_at": "2026-10-07T00:00:00Z", "usd_per_hour": {}}), now=NOW).reason == "no price for ml.g6.12xlarge, ml.m5.xlarge"
     assert decide(cfg, "not json", now=NOW).reason == "unreadable"
 
 
@@ -73,6 +73,13 @@ def test_dry_run_writes_nothing(ssm):
     out: list[str] = []
     ensure_instance_prices(ssm, _Pricing(), envs=["beta"], write=False, now=NOW, out=out.append)
     assert ssm.describe_parameters()["Parameters"] == [] and out[0].startswith("[DRY-RUN]")
+
+
+def test_gpu_prices_use_training_and_disclose_the_component():
+    pricing = _Pricing()
+    doc = fetch_prices(pricing, "us-east-2", ["ml.g6.12xlarge"], now=NOW)
+    assert doc["components_by_instance"] == {"ml.g6.12xlarge": "Training"}
+    assert any(f == {"Type": "TERM_MATCH", "Field": "component", "Value": "Training"} for f in pricing.calls[0]["Filters"])
 
 
 def test_bootstrap_writes_the_shared_role_names_idempotently(ssm):

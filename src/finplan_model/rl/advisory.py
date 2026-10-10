@@ -8,6 +8,7 @@ from finplan_model.core.outcome import require_valid
 from finplan_model.core.ids import require_id
 from finplan_model.jobs.market_loader import load_market
 from finplan_model.portfolio_decisions import persist_proposal
+from finplan_model.horizon_evaluation import evaluation_contract, evaluation_implementation
 from .inference import implementation_identity, recommend, recommend_baseline
 from .serving_context import completed_date, raw_market, resolve_inputs, value_holdings, with_quantities
 
@@ -74,6 +75,8 @@ def recommendation(service, body):
         'snapshot_checksum': content.snapshot.manifest_checksum,
         'decision_time': market.decision_time(as_of).isoformat(),
         'paper_execution_cost_bps': 2.0,
+        'evaluation_contract': evaluation_contract(bundle['strategy_id'], bundle=bundle),
+        'evaluation_implementation': evaluation_implementation(),
     }
     decision_id = persist_proposal(service, rec, saved, provenance, idempotency_key=body.get('idempotency_key'))
     result = {'recommendation':rec,'synthetic':bool(market.synthetic or saved is not None)}

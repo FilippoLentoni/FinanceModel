@@ -200,6 +200,8 @@ def planned_parameters(env: str, info: ReleaseInfo, outputs: Mapping[str, str], 
         uri = image_uri(account, info.region, info.image_repository, info.image_digest)
         for jt in deployed_job_types:
             doc = {"job_type": jt, "image_uri": uri, "image_digest": info.image_digest, "release_id": info.release_id, "deployed": True}
+            if jt == "swarm_mode_a":
+                doc.update({"offline_code_release": info.release_id, "serving_mode": "offline_vllm_training", "external_image_parameter": _name(env, "config", "vllm-image")})
             add(f"job-{jt.replace('_', '-')}", "job", jt.replace("_", "-"), json.dumps(doc, sort_keys=True, separators=(",", ":")))
     add("budget-enforced-role-names", "config", "budget-enforced-role-names", ",".join(enforced_role_names(env, outputs)))
     return plan
@@ -319,6 +321,17 @@ def publish_release(
         seed(outputs)
     types = job_types if job_types is not None else deployed_job_types(env)
     plan = planned_parameters(env, info, outputs, account=account, deployed_job_types=types)
+    if "swarm_mode_a" in types and s3 is not None:
+        from scripts.qwen_code import publish as publish_qwen_code
+        code_file = ROOT / "cdk.out" / "qwen-code.zip"
+        if not code_file.is_file():
+            raise ManifestError("Qwen code channel is missing from the immutable assembly")
+        code = publish_qwen_code(s3, outputs["ResearchStorageRef"], info.release_id, code_file.read_bytes())
+        name = _name(env, "job", "swarm-mode-a")
+        key = "job-swarm-mode-a"
+        doc = json.loads(plan[key][1])
+        doc.update(code)
+        plan[key] = (name, json.dumps(doc, sort_keys=True, separators=(",", ":")))
     for _key, (name, value) in sorted(plan.items()):
         _put(ssm, env, name, value)
     pointer = _name(env, "release", "current-release-id")

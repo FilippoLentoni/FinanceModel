@@ -11,6 +11,7 @@ from finplan_model.classical.storage import reference
 from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.errors import FinplanError
 from finplan_model.jobs.market_loader import load_market
+from finplan_model.horizon_evaluation import evaluate_horizons
 from finplan_model.rl.serving_context import DATASET_ID, completed_date, raw_market
 
 
@@ -221,4 +222,11 @@ def evaluate_decision(service, body):
             "instrument_contributions": [{"instrument_id": name, "raw_price_return": float(returns[k]), "issued_allocation_pnl": float(nav * target_weights[k] * returns[k]), "unchanged_holding_pnl": float(held[k] * (prices[end_i, k] - prices[start_i, k]))} for k, name in enumerate(instruments)],
             "whys": [{"level": 1, "answer": "Compare observed paper value with the recorded target-allocation hold benchmark"}, {"level": 2, "answer": "Recorded costs and allocation/execution timing reconcile the gap; full dated paper revisions and fills are linked"}, {"level": 3, "status": "unresolved", "answer": "A market-cause explanation needs dated external evidence; news is context, not causal proof"}],
         })
-    return service.issue("performance", payload, {"decision": decision_ref(doc), "snapshot": snapshot_id, "end": end.isoformat(), "history": [{"revision": r["revision"], "checksum": r.get("checksum"), "paper_state": r["paper_state"]} for r in visible]}, portfolio_id=pid)
+    horizons = evaluate_horizons(service, doc, market, raw, content, end)
+    trajectories = horizons.pop("sequential_evidence", None)
+    if trajectories:
+        # Persist complete audit evidence, while keeping the MCP response bounded.
+        payload["internal"] = {"horizon_replay": trajectories}
+        horizons["replay_evidence"] = {"status": "persisted_in_analysis", "checksum": sha256_checksum(canonical_json_bytes(trajectories)), "strategy_count": len(trajectories)}
+    payload["horizon_evaluation"] = horizons
+    return service.issue("performance", payload, {"evaluation_version": horizons["version"], "protocol_checksum": horizons["protocol_checksum"], "decision": decision_ref(doc), "snapshot": snapshot_id, "end": end.isoformat(), "history": [{"revision": r["revision"], "checksum": r.get("checksum"), "paper_state": r["paper_state"]} for r in visible]}, portfolio_id=pid)

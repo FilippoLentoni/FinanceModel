@@ -363,6 +363,41 @@ def select_preset(feedback, performance, sources, user_feedback, n_instruments):
     }
 
 
+def horizon_evidence_summary(performance):
+    """Count only prospective, mature, nonoverlapping windows of one protocol.
+
+    Multiple daily observations or overlapping recommendations are dependent
+    evidence, not independent proof of skill or model error.
+    """
+    grouped = {}
+    excluded = 0
+    for row in performance:
+        horizon = row.get("horizon_evaluation") or {}
+        assessment = horizon.get("evidence_assessment") or {}
+        if not horizon.get("primary_horizon_mature") or not assessment.get("eligible_for_prospective_skill_evidence"):
+            excluded += 1
+            continue
+        protocol = horizon.get("protocol") or {}
+        primary = next((w for w in horizon.get("windows", []) if w.get("horizon_sessions") == protocol.get("primary_horizon_sessions") and w.get("status") == "mature"), None)
+        start = (horizon.get("replay_window") or {}).get("start")
+        end = primary.get("end_date") if primary else None
+        source = horizon.get("source") or {}
+        if not start or not end or not source.get("configuration_id") or not horizon.get("protocol_checksum"):
+            excluded += 1
+            continue
+        key = (row.get("portfolio_id"), source["configuration_id"], horizon["protocol_checksum"])
+        grouped.setdefault(key, []).append({"analysis_id": row["analysis_id"], "start": start, "end": end, "underperformed_unchanged": bool(assessment.get("primary_return_underperformed_unchanged"))})
+    groups = []
+    for (portfolio, configuration, checksum), rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        selected, last_end = [], None
+        for row in sorted(rows, key=lambda r: (r["end"], r["start"], r["analysis_id"])):
+            if last_end is None or row["start"] > last_end:
+                selected.append(row)
+                last_end = row["end"]
+        groups.append({"portfolio_id": portfolio, "configuration_id": configuration, "protocol_checksum": checksum, "independent_mature_windows": len(selected), "underperforming_windows": sum(r["underperformed_unchanged"] for r in selected), "windows": selected, "overlapping_windows_excluded": len(rows) - len(selected)})
+    return {"status": "review_triggered" if any(g["independent_mature_windows"] >= 3 and g["underperforming_windows"] >= 3 for g in groups) else "preliminary", "groups": groups, "immature_retrospective_or_unidentified_excluded": excluded, "model_error_proven": False, "interpretation": "Repeated mature independent underperformance triggers a research hypothesis; daily losses and historical replays do not establish model failure or justify automatic activation."}
+
+
 def review(service, body, *, plan_context_id=None):
     # Creation order is not decision freshness: immutable default plans replay
     # their original timestamp, and historical scenarios may be created later.
@@ -489,6 +524,7 @@ def review(service, body, *, plan_context_id=None):
                     "source_decision_id": d.get("source_decision_id"),
                     "source_decision_ref": d.get("source_decision_ref"),
                     "observed_paper": d.get("observed_paper"),
+                    "horizon_evaluation": d.get("horizon_evaluation"),
                 }
             ),
         }
@@ -535,6 +571,7 @@ def review(service, body, *, plan_context_id=None):
         "sources": sources["sources"],
         "literature": {k: v for k, v in sources.items() if k != "sources"},
         "evidence": evidence,
+        "horizon_evidence": horizon_evidence_summary(performance),
         "prior_experiment_findings": findings,
         "portfolio_decision_evidence": lifecycle,
         "user_feedback": str(body.get("feedback", ""))[:4000],
@@ -603,7 +640,7 @@ def run_review(service, body):
     request = {
         "domain": "finance",
         "domain_schema_version": "1.0",
-        "job_type": "run_benchmark",
+        "job_type": proposal.get("job_type", "run_benchmark"),
         "purpose": "research",
         "dry_run": True,
         "input_snapshot_id": inputs["input_snapshot_id"],
@@ -614,12 +651,12 @@ def run_review(service, body):
             "domain_schema_version": "1.0",
             "synthetic": True,
             "payload": {
-                "strategy": "min_variance",
-                "objective": "classical_weekly_review",
+                "strategy": "model_selection" if proposal.get("job_type") == "recursive_evaluate" else "min_variance",
+                "objective": proposal.get("objective", "classical_weekly_review"),
                 "universe": inputs["instruments"],
                 "lookback_days": proposal["lookback_days"],
                 "risk_aversion": proposal["risk_aversion"],
-                "rebalance_frequency": proposal["rebalance_frequency"],
+                "rebalance_frequency": "daily" if proposal.get("job_type") == "recursive_evaluate" else proposal["rebalance_frequency"],
                 "constraints": {
                     "long_only": True,
                     "max_weight": proposal["max_weight"],

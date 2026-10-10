@@ -259,12 +259,217 @@
       "max_instance_count": 1,
       "budget_category": "cpu_research",
       "deployed": true
+    },
+    "recursive_evaluate": {
+      "entry_point": "recursive_evaluate",
+      "compute_class": "cpu",
+      "sagemaker_job": "training",
+      "default_runtime_seconds": 900,
+      "max_runtime_seconds": 900,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true,
+      "auto_approve_usd": 0.25,
+      "protocol": {
+        "protocol_version": "finplan-model-selection/1",
+        "data_start": "2025-01-01",
+        "splits": {
+          "train": {
+            "start": "2025-01-01",
+            "end": "2025-12-31"
+          },
+          "validation": {
+            "start": "2026-01-01",
+            "end": "2026-06-30"
+          },
+          "test": {
+            "start": "2026-07-01",
+            "end": null
+          }
+        },
+        "selection": {
+          "metric": "sharpe",
+          "split": "validation"
+        },
+        "traditional": {
+          "min_variance": {
+            "grid": {
+              "lookback": [
+                20,
+                60,
+                120
+              ]
+            },
+            "fixed": {}
+          },
+          "mean_variance": {
+            "grid": {
+              "lookback": [
+                20,
+                60,
+                120
+              ],
+              "risk_aversion": [
+                1.0,
+                5.0,
+                20.0
+              ]
+            },
+            "fixed": {}
+          },
+          "scenario_cvar": {
+            "grid": {
+              "lookback": [
+                60,
+                120
+              ],
+              "alpha": [
+                0.9,
+                0.95
+              ]
+            },
+            "fixed": {
+              "n_scenarios": 500,
+              "scenario_method": "bootstrap",
+              "seed": 0
+            }
+          }
+        },
+        "rl": {
+          "algorithms": [
+            "ppo"
+          ],
+          "seeds": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "env": {
+            "window": 60,
+            "return_scale": 50.0,
+            "obs_clip": 5.0,
+            "action_scale": 1.0,
+            "step_sessions": 1,
+            "decision_frequency": "daily",
+            "reward": {
+              "risk_penalty": 1.0,
+              "drawdown_penalty": 0.5,
+              "turnover_penalty": 0.001,
+              "reward_scale": 100.0
+            },
+            "version": "finplan-rl-env/2",
+            "features": [
+              "market_summary",
+              "current_weights",
+              "portfolio_drawdown"
+            ],
+            "episode_sessions": 64,
+            "rebalance_fraction": 0.25
+          },
+          "grid": {
+            "risk_penalty": [
+              0.5,
+              2.0
+            ]
+          },
+          "ppo": {
+            "total_timesteps": 30000,
+            "learning_rate": 0.0003,
+            "n_steps": 256,
+            "batch_size": 64,
+            "n_epochs": 10,
+            "gamma": 0.99,
+            "gae_lambda": 0.95,
+            "clip_range": 0.2,
+            "ent_coef": 0.0,
+            "net_arch": [
+              64,
+              64
+            ],
+            "eval_every": 2048,
+            "patience": 5
+          },
+          "sac": {
+            "total_timesteps": 8000,
+            "learning_rate": 0.0003,
+            "buffer_size": 50000,
+            "learning_starts": 500,
+            "batch_size": 128,
+            "tau": 0.005,
+            "gamma": 0.99,
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "net_arch": [
+              64,
+              64
+            ],
+            "eval_every": 1000,
+            "patience": 4
+          },
+          "policy_selection": "ensemble"
+        },
+        "runtime": {
+          "reserve_seconds": 600
+        },
+        "incumbent_fallback": "buy_and_hold"
+      }
+    },
+    "rl_weight_staging": {
+      "entry_point": "rl_weight_staging",
+      "compute_class": "cpu",
+      "sagemaker_job": "processing",
+      "default_runtime_seconds": 900,
+      "max_runtime_seconds": 900,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true,
+      "auto_approve_usd": 0
+    },
+    "jev_backtest": {
+      "entry_point": "jev_backtest",
+      "compute_class": "cpu",
+      "sagemaker_job": "processing",
+      "default_runtime_seconds": 900,
+      "max_runtime_seconds": 900,
+      "instance_types": [
+        "ml.m5.xlarge"
+      ],
+      "default_instance_type": "ml.m5.xlarge",
+      "max_instance_count": 1,
+      "budget_category": "cpu_research",
+      "deployed": true,
+      "auto_approve_usd": 0
+    },
+    "swarm_mode_a": {
+      "entry_point": "swarm_mode_a",
+      "compute_class": "gpu",
+      "sagemaker_job": "training",
+      "default_runtime_seconds": 900,
+      "max_runtime_seconds": 900,
+      "instance_types": [
+        "ml.g6.12xlarge"
+      ],
+      "default_instance_type": "ml.g6.12xlarge",
+      "max_instance_count": 1,
+      "budget_category": "gpu",
+      "deployed": true,
+      "auto_approve_usd": 0
     }
   },
   "lease": {
     "max_holders": {
       "cpu": 1,
-      "gpu": 0
+      "gpu": 1
     },
     "ttl_seconds": 900,
     "heartbeat_seconds": 120
@@ -328,5 +533,25 @@
     "infeasible_fallback": "hold_current",
     "reconciliation_tolerance": 1e-06,
     "weight_tolerance": 1e-09
+  },
+  "llm_benchmarks": {
+    "qwen": {
+      "model_id": "Qwen/Qwen3.6-27B",
+      "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+      "license": "Apache-2.0",
+      "mode": "offline_vllm_training",
+      "max_decisions": 32,
+      "max_role_calls": 224,
+      "max_tokens_per_response": 256,
+      "startup_allowance_seconds": 600
+    },
+    "jev": {
+      "model": "jev-latest",
+      "max_calls": 64,
+      "max_input_tokens": 200000,
+      "external_vendor_cost_cap_usd": 0.01,
+      "secret_name": "finplan/shared/financemodel/jev-api-key",
+      "manual_approval_required": true
+    }
   }
 }

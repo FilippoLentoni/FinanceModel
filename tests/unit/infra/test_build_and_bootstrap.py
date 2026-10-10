@@ -258,7 +258,8 @@ class _Pricing:
         self.calls.append(kw)
         if kw.get("ServiceCode") != "AmazonSageMaker" or self.sagemaker_price is None:
             return {"PriceList": []}
-        return {"PriceList": [_price_item("Hosting", self.sagemaker_price / 10), _price_item("Processing", self.sagemaker_price)]}
+        component = next(f["Value"] for f in kw["Filters"] if f["Field"] == "component")
+        return {"PriceList": [_price_item("Hosting", self.sagemaker_price / 10), _price_item(component, self.sagemaker_price)]}
 
 
 @pytest.fixture
@@ -300,7 +301,10 @@ def test_bootstrap_reuses_the_platform_connection_and_deploys_only_tooling(boot)
     # instance prices fetched from the Price List API (Processing component), one per environment
     for env in ("beta", "gamma", "prod"):
         doc = json.loads(boot.ssm.get_parameter(Name=f"/finplan/{env}/financemodel/config/instance-prices")["Parameter"]["Value"])
-        assert doc["usd_per_hour"] == {"ml.m5.xlarge": SYNTHETIC_PRICE} and doc["source"] == "AWS Price List API" and doc["component"] == "Processing"
+        expected = {"ml.m5.xlarge": SYNTHETIC_PRICE}
+        if env == "beta":
+            expected["ml.g6.12xlarge"] = SYNTHETIC_PRICE
+        assert doc["usd_per_hour"] == expected and doc["source"] == "AWS Price List API" and doc["component"] == "Processing"
     # integration-snapshot-id is the operator's: reported, never written
     assert not [n for n in names if n.endswith("/integration-snapshot-id")]
     assert any("[ACTION] /finplan/beta/financemodel/config/integration-snapshot-id" in line for line in out)

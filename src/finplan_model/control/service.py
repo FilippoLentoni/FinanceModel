@@ -71,6 +71,7 @@ class ServiceDeps:
     ids: IdMinter
     artifacts: Any = None
     advisory_parameter: Any = None
+    offline_batch: Any = None
     platform: PlatformClient | None = None
     model_version_resolver: Callable[[str | None, str | None], str | None] | None = None
     kick: Callable[[str], None] | None = None
@@ -285,7 +286,7 @@ class JobService:
             policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'))
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
         selection: dict[str, Any] = {}
-        if sub.job_type.name == "model_selection":
+        if sub.job_type.name in ("model_selection", "recursive_evaluate"):
             selection = self._selection_fields(sub, dataset_id, all_runs)
         est = costs.estimate(self.cfg, sub.job_type, instance_type=sub.instance_type, instance_count=sub.instance_count, max_runtime_seconds=sub.max_runtime_seconds, prices=self.d.settings.instance_prices(), now=self.now())
         if all_runs is None:
@@ -311,11 +312,16 @@ class JobService:
             f"finplan-{self.env}-financemodel-job-api-handler-research-role",
         )
         if weekly_controller:
-            if (
+            external_proposal = sub.job_type.name in ("swarm_mode_a", "jev_backtest")
+            if external_proposal:
+                if self.env != "beta" or sub.purpose != "research" or sub.max_runtime_seconds > 900 or sub.instance_count != 1 or not str(body.get("idempotency_key", "")).startswith("recursive-benchmark-"):
+                    raise FinplanError(ErrorCode.FORBIDDEN, "the research controller may only propose bounded identified benchmarks")
+                threshold = 0.
+            elif (
                 self.env != "beta"
-                or sub.job_type.name != "run_benchmark"
+                or sub.job_type.name not in ("run_benchmark", "recursive_evaluate")
                 or sub.purpose != "research"
-                or payload.get("objective") != "classical_weekly_review"
+                or payload.get("objective") not in ("classical_weekly_review", "recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon")
                 or sub.max_runtime_seconds > 900
                 or sub.instance_count != 1
                 or not str(body.get("idempotency_key", "")).startswith(
@@ -327,8 +333,9 @@ class JobService:
                     ErrorCode.FORBIDDEN,
                     "weekly controller may submit only its bounded research benchmark",
                 )
-            threshold = 0.50
-        needs_approval = gpu or est.estimated_usd_upper_bound > threshold + 1e-12
+            else:
+                threshold = 0.50
+        needs_approval = gpu or sub.job_type.name in ("jev_backtest", "rl_weight_staging") or est.estimated_usd_upper_bound > threshold + 1e-12
         state = "awaiting_approval" if needs_approval else "queued"
         now = self.ts()
         run_id = self.d.ids.run_id()
@@ -421,7 +428,10 @@ class JobService:
         from finplan_model.selection.protocol import validate_protocol
 
         protocol = validate_protocol(sub.job_type.protocol or {})
-        prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") == "model_selection" and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
+        if sub.job_type.name == "recursive_evaluate":
+            from finplan_model.selection.recursive_profiles import profile_protocol
+            protocol = validate_protocol(profile_protocol(protocol, sub.body["configuration"]["payload"].get("objective")))
+        prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") in ("model_selection", "recursive_evaluate") and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
         incumbent = None
         raw = self.d.settings.production_strategy()
         if raw:
@@ -741,6 +751,16 @@ class JobService:
             kind, request = build_job_request(run, attempt=attempt, image_uri=image_uri, role_arn=str(self.d.settings.job_role_arn() or ""), run_spec_checksum="pending", output_bucket=self.d.settings.research_storage() if kind == "training" else None)
             checksum = self.d.run_io.put_spec(run["run_id"], spec)
             request["Environment"]["FINPLAN_RUN_SPEC_SHA256"] = checksum
+            if run["job_type"] == "swarm_mode_a":
+                if self.d.offline_batch is None:
+                    raise FinplanError.precondition("isolated Qwen batch hand-off is not configured", reason="qwen_offline_handoff_missing")
+                handoff = self.d.offline_batch.prepare(run, spec, jd)
+                request["InputDataConfig"] = [{"ChannelName": name, "DataSource": {"S3DataSource": {"S3DataType": "S3Prefix", "S3Uri": uri, "S3DataDistributionType": "FullyReplicated"}}, "InputMode": "File"} for name, uri in handoff["channels"].items()]
+                request["AlgorithmSpecification"]["ContainerEntrypoint"] = ["python", "/opt/ml/input/data/code/bootstrap.py"]
+                request["AlgorithmSpecification"].pop("ContainerArguments", None)
+                request["ResourceConfig"]["VolumeSizeInGB"] = 200
+                request["EnableNetworkIsolation"] = True
+                request["Environment"].update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", FINPLAN_OFFLINE_BUNDLE_SHA256=handoff["bundle_checksum"], FINPLAN_OFFLINE_CODE_SHA256=handoff["code_checksum"])
         except FinplanError as err:
             self._fail(run, err, reason="start_precondition")
             return "failed"
@@ -869,6 +889,8 @@ class JobService:
         job_doc = None
         try:
             job_doc = self.d.run_io.get_result(run["run_id"])
+            if job_doc is None and run["job_type"] == "swarm_mode_a" and self.d.offline_batch is not None and (desc.get("ModelArtifacts") or {}).get("S3ModelArtifacts"):
+                job_doc = self.d.offline_batch.import_result(run, desc)
         except FinplanError:
             job_doc = None
         outcome, result, error = self._final_result(run, outcome, job_doc)
@@ -1000,6 +1022,12 @@ class JobService:
             self._log("event_kind_mismatch_ignored", run, job_name=name, sagemaker_job=kind)
             return {"ignored": "job_kind_mismatch"}
         status = str(job_status(detail, kind) or "")
+        if run["job_type"] == "swarm_mode_a" and status in SAGEMAKER_TERMINAL:
+            # EventBridge's compact terminal event may omit the model artifact location.
+            # Read the authoritative Training Job description before importing isolated output.
+            description = self._describe(name, kind)
+            if description is not None:
+                detail = {**detail, **description}
         new = self._apply_status(run, status, detail, source="event")
         # A run that is still active needs lease heartbeats: re-arm the tick (a deploy may have reset
         # the schedule to its deployed DISABLED state while the job was running).

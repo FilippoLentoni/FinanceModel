@@ -226,6 +226,7 @@ HANDLERS: dict[str, Handler] = {
     "daily_recommendation": run_daily_recommendation,
     "report": report,
     "model_selection": model_selection,
+    "recursive_evaluate": model_selection,
 }
 
 
@@ -235,3 +236,6 @@ def register_handler(job_type: str, handler: Handler) -> None:
 
 from .policy_export import run_prepare_policy
 HANDLERS["prepare_policy"] = run_prepare_policy
+
+from finplan_model.benchmarks.jobs import jev_backtest, rl_weight_staging, swarm_mode_a
+HANDLERS.update(jev_backtest=jev_backtest, rl_weight_staging=rl_weight_staging, swarm_mode_a=swarm_mode_a)

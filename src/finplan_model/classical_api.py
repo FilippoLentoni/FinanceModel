@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from finplan_model.classical.research import market_events, review, run_review
+from finplan_model.classical.recursive import run_recursive_improvement, scheduled_recursive_review
 from finplan_model.classical.service import ClassicalService
 from finplan_model.classical.storage import S3Store, public, reference
 from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
@@ -35,6 +36,7 @@ OPS = (
     "explain_portfolio_decision",
     "compare_portfolio_decisions",
     "evaluate_portfolio_decision",
+    "run_recursive_improvement",
 )
 
 
@@ -129,6 +131,27 @@ def build_service():
             "limit": float(budget["BudgetLimit"]["Amount"]),
         }
 
+    def benchmark_capabilities():
+        from finplan_model.benchmarks.qwen import MODEL_ID, REVISION
+        from finplan_model.benchmarks.weights import PREFIX
+        from finplan_model.benchmarks.jev import SECRET
+        from finplan_model.control.settings import SsmSettings
+        settings = SsmSettings(ssm, cfg)
+        qwen = {"configured": settings.job_definition("swarm_mode_a") is not None, "model_id": MODEL_ID, "revision": REVISION,
+            "compute": "run_scoped_network_isolated_gpu_training", "gpu_approval_required": True, "weights_ready": False}
+        try:
+            staged = json.loads(s3_client(cfg.region, session=session).get_object(Bucket=bucket, Key=PREFIX + "STAGED.json")["Body"].read())
+            qwen["weights_ready"] = staged.get("model_id") == MODEL_ID and staged.get("revision") == REVISION
+        except Exception:
+            qwen["reason"] = "exact_weights_not_staged_or_status_unavailable"
+        jev = {"configured": settings.job_definition("jev_backtest") is not None, "model_alias": "jev-latest", "external_vendor_approval_required": True, "secret_configured": False}
+        try:
+            session.client("secretsmanager").describe_secret(SecretId=SECRET)
+            jev["secret_configured"] = True
+        except Exception:
+            jev["reason"] = "vendor_secret_not_configured_or_status_unavailable"
+        return {"swarm_mode_a": qwen, "jev_backtest": jev, "recursive_evaluate": {"configured": settings.job_definition("recursive_evaluate") is not None, "released_profiles": ["recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon"]}}
+
     deps = SimpleNamespace(
         research_plan_parameter=SsmStrategyParameter(
             ssm, f"/finplan/{env}/financialplanning/config/research-plan-ref"
@@ -138,6 +161,7 @@ def build_service():
         ),
         job_api=JobApi(job_endpoint, session, cfg.region),
         project_budget=project_budget,
+        benchmark_capabilities=benchmark_capabilities,
         artifacts=S3ArtifactStore(s3_client(cfg.region, session=session), bucket),
     )
     return ClassicalService(
@@ -207,7 +231,7 @@ def handle(event, service):
     )
     idem_key = (
         body.get("idempotency_key")
-        if op in ("recommend_classical_portfolio", "submit_portfolio_feedback")
+        if op in ("recommend_classical_portfolio", "submit_portfolio_feedback", "run_recursive_improvement")
         else None
     )
     idem_claim = (
@@ -288,6 +312,8 @@ def handle(event, service):
         result = compare_decisions(service, body)
     elif op == "evaluate_portfolio_decision":
         result = evaluate_decision(service, body)
+    elif op == "run_recursive_improvement":
+        result = run_recursive_improvement(service, body)
     else:
         doc = service.store.get(body["analysis_id"])
         result = service.issue(
@@ -365,6 +391,9 @@ def weekly_handler(event, context=None):
         raise FinplanError.precondition(
             "weekly research is beta only", reason="research_disabled"
         )
+    resumed = scheduled_recursive_review(service)
+    if resumed is not None:
+        return resumed
     # Refresh the proposal context from approved completed data; this issues no trade.
     plan = service.recommend({})
     # Reuse an immutable week claim even if Scheduler's event identity changes on a retry.

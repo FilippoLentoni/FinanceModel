@@ -203,6 +203,8 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
                 "Resource": [param(f"/finplan/{env}/financemodel/config/*"), param(f"/finplan/{env}/financialplanning/api/plan-endpoint"), param(f"/finplan/{env}/financialplanning/config/run-staging-ref")],
             },
             {"Sid": "PullImage", "Effect": "Allow", "Action": ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": [repo]},
+            {"Sid": "PullValidatedVllmDlc", "Effect": "Allow", "Action": ["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": [_arn("ecr", "repository/vllm", partition=partition, region=region, account="*")]},
+            {"Sid": "ReadIdentifiedJevSecret", "Effect": "Allow", "Action": ["secretsmanager:GetSecretValue"], "Resource": [_arn("secretsmanager", "secret:finplan/shared/financemodel/jev-api-key-*", partition=partition, region=region, account=account)]},
             {"Sid": "EcrToken", "Effect": "Allow", "Action": ["ecr:GetAuthorizationToken"], "Resource": ["*"]},
             {
                 "Sid": "ProcessingJobLogs",
@@ -254,7 +256,7 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
 def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
     """Independent numerical evidence store; paid work only through the guarded job API."""
     research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
-    params = [f"/finplan/{env}/financemodel/config/research-storage-ref", f"/finplan/{env}/financemodel/api/job-endpoint",
+    params = [f"/finplan/{env}/financemodel/config/research-storage-ref", f"/finplan/{env}/financemodel/api/job-endpoint", f"/finplan/{env}/financemodel/config/vllm-image", f"/finplan/{env}/financemodel/job/*",
               f"/finplan/{env}/financialplanning/api/plan-endpoint", f"/finplan/{env}/financialplanning/config/research-plan-ref"]
     own_api = f"arn:{partition}:execute-api:{region}:{account}:*/api"
     return {"Version": "2012-10-17", "Statement": [
@@ -268,6 +270,8 @@ def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, par
         {"Sid": "ReadPaperLifecycle", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/portfolios/*/history", "v1/portfolios/*/decisions", "v1/portfolio-decisions/*")},
         {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
         {"Sid": "ReadFrozenPolicyEvidence", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [research+"/artifacts/policy_inference/*"]},
+        {"Sid": "ReadQwenStagingStatus", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [research+"/scratch/qwen-weights/*/STAGED.json", research+"/scratch/qwen-weights/*/MANIFEST.sha256"]},
+        {"Sid": "DescribeIdentifiedJevSecret", "Effect": "Allow", "Action": ["secretsmanager:DescribeSecret"], "Resource": [_arn("secretsmanager", "secret:finplan/shared/financemodel/jev-api-key-*", partition=partition, region=region, account=account)]},
         {"Sid": "GuardedSandboxApi", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [own_api+"/POST/v1/jobs", own_api+"/GET/v1/jobs", own_api+"/GET/v1/jobs/*"]},
         {"Sid": "ReadProjectBudget", "Effect": "Allow", "Action": ["budgets:ViewBudget", "sts:GetCallerIdentity"], "Resource": "*"},
         {"Sid": "DenyDirectComputeAndFinancialWrites", "Effect": "Deny", "Action": ["sagemaker:*", "ssm:PutParameter", "ssm:DeleteParameter", "s3:DeleteObject*", "dynamodb:*"], "Resource": "*"},
@@ -303,6 +307,8 @@ def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, regi
         {"Sid": "PassJobRoleToSageMaker", "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": [job_role], "Condition": {"StringEquals": {"iam:PassedToService": "sagemaker.amazonaws.com"}}},
         {"Sid": "ReadSettings", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [param(f"/finplan/{env}/*"), param("/finplan/shared/*")]},
         {"Sid": "RunHandOff", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{research}/runs/*"]},
+        {"Sid": "OfflineBatchInputsAndOutputs", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{research}/scratch/offline/*", f"{research}/scratch/training-output/*", f"{research}/artifacts/run_artifact/*"]},
+        {"Sid": "ReadQwenWeightReadiness", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/scratch/qwen-weights/*/STAGED.json", f"{research}/scratch/qwen-weights/*/MANIFEST.sha256"]},
         {"Sid": "ListRunHandOff", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": ["runs/*"]}}},
         {"Sid": "ModelRegistry", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{registry}/identity/*", f"{registry}/versions/*", f"{registry}/events/*", f"{registry}/runs/*"]},
         {"Sid": "ListModelRegistry", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [registry]},
@@ -482,6 +488,7 @@ def stage_role_statements(env: str, store_bucket_arn: str, *, partition: str = P
     own = f"/finplan/{env}/{n.REPO}"
     param = lambda p: _ssm_param(p, partition=partition, region=region, account=account)  # noqa: E731
     registry = _bucket_arn(n.bucket_name(env, n.REGISTRY_BUCKET, account), partition)
+    research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
     return [
         {
             "Sid": "PublishOwnReferences",
@@ -492,6 +499,7 @@ def stage_role_statements(env: str, store_bucket_arn: str, *, partition: str = P
         {"Sid": "ReadEnvAndShared", "Effect": "Allow", "Action": list(contract_iam.SSM_READ_ACTIONS), "Resource": [param(f"/finplan/{env}"), param(f"/finplan/{env}/*"), param("/finplan/shared"), param("/finplan/shared/*")]},
         {"Sid": "ReadStackOutputs", "Effect": "Allow", "Action": ["cloudformation:DescribeStacks"], "Resource": [_arn("cloudformation", f"stack/finplan-{env}-{n.REPO}-*/*", partition=partition, region=region, account=account)]},
         {"Sid": "ReleaseLedger", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{store_bucket_arn}/releases/*"]},
+        {"Sid": "PublishOfflineQwenCode", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": [f"{research}/scratch/qwen-code/*"]},
         {"Sid": "SeedModelRegistry", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{registry}/identity/*", f"{registry}/versions/*", f"{registry}/events/*"]},
         {"Sid": "ListModelRegistry", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [registry]},
         {"Sid": "ApprovalRecord", "Effect": "Allow", "Action": ["codepipeline:ListActionExecutions", "codepipeline:GetPipelineExecution"], "Resource": [_arn("codepipeline", n.PIPELINE_NAME, partition=partition, region=region, account=account)]},

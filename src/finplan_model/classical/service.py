@@ -12,6 +12,7 @@ from finplan_model.core.clock import utc_iso
 from finplan_model.core.errors import FinplanError
 from finplan_model.jobs.market_loader import load_market
 from finplan_model.portfolio_decisions import persist_proposal
+from finplan_model.horizon_evaluation import evaluation_contract, evaluation_implementation
 from finplan_model.rl.serving_context import (
     completed_date,
     raw_market,
@@ -193,7 +194,9 @@ class ClassicalService:
             {"implementation": inputs["implementation"], "settings": cfg,
              "decision_time": inputs["decision_time"],
              "snapshot_checksum": content.snapshot.manifest_checksum,
-             "paper_execution_cost_bps": 2.0},
+             "paper_execution_cost_bps": 2.0,
+             "evaluation_contract": evaluation_contract(algorithm, optimizer_settings=cfg),
+             "evaluation_implementation": evaluation_implementation()},
             source_analysis_id=aid, idempotency_key=body.get("idempotency_key"),
         )
         if decision_id:
