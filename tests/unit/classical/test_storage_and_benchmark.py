@@ -1,16 +1,99 @@
 import copy
+import io
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 from moto import mock_aws
 
 from finplan_model.classical.storage import S3Store, analysis_id, public
-from finplan_model.core.artifacts import InMemoryArtifactStore
+from finplan_model.core.artifacts import InMemoryArtifactStore, canonical_json_bytes, sha256_checksum
 from finplan_model.core.clock import FrozenClock
 from finplan_model.core.context import RunContext
 from finplan_model.core.errors import FinplanError
 from finplan_model.jobs.handlers import JobInputs, run_benchmark
 from finplan_model.jobs.market_loader import load_market
+
+
+def claim_client():
+    return boto3.client(
+        "s3", region_name="us-east-1", aws_access_key_id="testing", aws_secret_access_key="testing"
+    )
+
+
+@pytest.mark.parametrize("kind", ["claim", "record"])
+@pytest.mark.parametrize("prefix_sibling", [False, True])
+def test_missing_object_403_uses_exact_bounded_probe(kind, prefix_sibling):
+    s3 = claim_client()
+    store = S3Store(s3, "example-bucket")
+    aid, claim = "ca_" + "a" * 32, "idempotency/submit_portfolio_feedback/" + "a" * 64
+    key = "classical/" + ("claims/" + claim if kind == "claim" else "records/" + aid) + ".json"
+    with Stubber(s3) as stub:
+        stub.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403, expected_params={"Bucket": store.bucket, "Key": key})
+        stub.add_response("list_objects_v2", {"Contents": [{"Key": key + ".other"}] if prefix_sibling else []}, {"Bucket": store.bucket, "Prefix": key, "MaxKeys": 1})
+        if kind == "claim":
+            assert store.get_claim(claim) is None
+        else:
+            with pytest.raises(FinplanError) as exc:
+                store.get(aid)
+            assert exc.value.code == "NOT_FOUND"
+        stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize("probe_denied", [False, True])
+def test_actual_s3_authorization_failure_is_never_claim_absence(probe_denied):
+    s3 = claim_client()
+    store = S3Store(s3, "example-bucket")
+    claim = "weekly/2026_w41"
+    key = "classical/claims/" + claim + ".json"
+    with Stubber(s3) as stub:
+        stub.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403, expected_params={"Bucket": store.bucket, "Key": key})
+        if probe_denied:
+            stub.add_client_error("list_objects_v2", service_error_code="AccessDenied", http_status_code=403, expected_params={"Bucket": store.bucket, "Prefix": key, "MaxKeys": 1})
+        else:
+            stub.add_response("list_objects_v2", {"Contents": [{"Key": key}]}, {"Bucket": store.bucket, "Prefix": key, "MaxKeys": 1})
+        with pytest.raises(ClientError) as exc:
+            store.get_claim(claim)
+        assert exc.value.response["Error"]["Code"] == "AccessDenied"
+        assert exc.value.operation_name == ("ListObjectsV2" if probe_denied else "GetObject")
+        stub.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_existing_claim_get_verifies_checksum_without_listing(corrupt):
+    s3 = claim_client()
+    store = S3Store(s3, "example-bucket")
+    claim, doc = "weekly/2026_w41", {"analysis_id": "ca_" + "a" * 32}
+    data = canonical_json_bytes(doc)
+    with Stubber(s3) as stub:
+        stub.add_response("get_object", {"Body": io.BytesIO(data), "Metadata": {"checksum": "sha256:" + "0" * 64 if corrupt else sha256_checksum(data)}}, {"Bucket": store.bucket, "Key": "classical/claims/" + claim + ".json"})
+        if corrupt:
+            with pytest.raises(FinplanError, match="checksum"):
+                store.get_claim(claim)
+        else:
+            assert store.get_claim(claim) == doc
+        stub.assert_no_pending_responses()
+
+
+def test_s3_feedback_claim_replay_and_conflict(context):
+    from finplan_model.classical_api import handle
+
+    plan = context.service.recommend({})
+    private = context.service.store.get(plan["analysis_id"])
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket="example-bucket")
+        context.service.store = S3Store(s3, "example-bucket")
+        context.service.store.put(private)
+        body = {"analysis_id": plan["analysis_id"], "text": "Investigate turnover costs.", "idempotency_key": "feedback-s3-replay"}
+        event = {"environment": "beta", "operation": "submit_portfolio_feedback", "request": body}
+        issued = handle(event, context.service)
+        assert handle(event, context.service) == issued
+        assert public(context.service.store.get(issued["analysis_id"])) == issued
+        with pytest.raises(FinplanError) as exc:
+            handle({**event, "request": {**body, "text": "Changed feedback."}}, context.service)
+        assert exc.value.code == "IDEMPOTENCY_KEY_REUSED"
 
 
 def test_s3_write_once_checksum_and_newest_index(context):

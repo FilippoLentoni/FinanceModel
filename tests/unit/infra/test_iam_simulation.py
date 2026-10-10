@@ -237,3 +237,24 @@ def test_pss03_only_the_selection_role_writes_the_production_strategy_key(api):
     assert check_write(path, Writer("financemodel", "runtime", principal="strategy-selection")).allowed
     for repo in ("financelambdastool", "financeagent", "financialplanning"):
         assert not check_write(path, Writer(repo, "runtime", principal="strategy-selection")).allowed
+
+
+@pytest.mark.parametrize("logical", [n.CLASSICAL_INFERENCE, n.RESEARCH_CONTROLLER])
+def test_classical_missing_key_probe_is_one_key_and_own_evidence_only(logical):
+    env = "beta"
+    role = {"identity": [pol.classical_role_policy(env, logical, **C)], "boundary": cb.env_permission_boundary(env, **C)}
+    bucket = _s3(n.bucket_name(env, n.RESEARCH_BUCKET, ACCT))
+    for prefix in ("classical/claims/idempotency/submit_portfolio_feedback/abc.json", "classical/claims/weekly/2026_w41.json", "classical/records/ca_" + "a" * 32 + ".json"):
+        assert allowed(role, "s3:ListBucket", bucket, **{"s3:prefix": prefix, "s3:max-keys": 1})
+        assert not allowed(role, "s3:ListBucket", bucket, **{"s3:prefix": prefix, "s3:max-keys": 2})
+        assert not allowed(role, "s3:ListBucket", bucket, **{"s3:prefix": prefix})
+    for prefix in ("", "classical/", "classical/claims/", "classical/records/", "runs/", "artifacts/", "unrelated/claims/"):
+        assert not allowed(role, "s3:ListBucket", bucket, **{"s3:prefix": prefix, "s3:max-keys": 1})
+    for other in ("gamma", "prod"):
+        assert decision(role, "s3:ListBucket", _s3(n.bucket_name(other, n.RESEARCH_BUCKET, ACCT)), **{"s3:prefix": "classical/claims/abc.json", "s3:max-keys": 1}) == "explicitDeny"
+    assert allowed(role, "s3:ListBucket", bucket, **{"s3:prefix": "classical/index/", "s3:max-keys": 100})
+    record = bucket + "/classical/records/ca_" + "a" * 32 + ".json"
+    assert allowed(role, "s3:PutObject", record, **{"s3:if-none-match": "*"})
+    assert decision(role, "s3:PutObject", record) == "explicitDeny"
+    assert decision(role, "s3:DeleteObject", record) == "explicitDeny"
+    assert decision(role, "sagemaker:CreateProcessingJob", "*") == "explicitDeny"

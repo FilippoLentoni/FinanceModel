@@ -261,6 +261,7 @@ def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, par
         {"Sid": "ReadClassicalConfiguration", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
         {"Sid": "ClassicalWriteOnceEvidence", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": [research+"/classical/*"]},
         {"Sid": "ClassicalBoundedIndex", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "classical/index/*"}}},
+        {"Sid": "ClassicalBoundedLookup", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": ["classical/claims/*.json", "classical/records/ca_*.json"]}, "NumericLessThanEquals": {"s3:max-keys": 1}}},
         {"Sid": "DenyClassicalEvidenceOverwrite", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": [research+"/classical/*"], "Condition": {"Null": {"s3:if-none-match": "true"}}},
         {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/plans/*", "v1/portfolios/*/state")},
         {"Sid": "GuardedSandboxApi", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [own_api+"/POST/v1/jobs", own_api+"/GET/v1/jobs", own_api+"/GET/v1/jobs/*"]},

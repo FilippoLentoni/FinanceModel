@@ -113,7 +113,23 @@ class S3Store:
             )
             return json.loads(data)
         except Exception as exc:
-            if getattr(exc, "response", {}).get("Error", {}).get("Code") in (
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+            if code in ("AccessDenied", "AccessDeniedException", "403"):
+                # S3 also returns 403 for a missing key when ListBucket is
+                # prefix-constrained. Probe only this exact key under the
+                # bounded listing grant; an existing key or denied probe must
+                # preserve the real authorization failure.
+                object_key = "classical/" + key
+                page = self.client.list_objects_v2(
+                    Bucket=self.bucket, Prefix=object_key, MaxKeys=1
+                )
+                if not any(
+                    item["Key"] == object_key for item in page.get("Contents", [])
+                ):
+                    raise FinplanError(
+                        ErrorCode.NOT_FOUND, "classical record not found"
+                    ) from None
+            if code in (
                 "NoSuchKey",
                 "404",
                 "NotFound",
@@ -194,6 +210,8 @@ class S3Store:
         )
 
     def get_claim(self, key):
+        if not re.fullmatch(r"[a-z0-9_/-]{1,180}", key):
+            raise ValueError("invalid claim key")
         try:
             return self._get("claims/" + key + ".json")
         except FinplanError as exc:
