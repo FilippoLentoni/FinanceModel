@@ -217,6 +217,11 @@ class SsmSettings:
 
     def job_definition(self, job_type: str) -> Mapping[str, Any] | None:
         doc = self._json(job_definition_parameter(self.cfg.env, job_type))
+        if isinstance(doc, Mapping) and job_type == "swarm_mode_a":
+            image = self._get(self.cfg.ssm_name("config", "vllm-image"))
+            if not image:
+                return None
+            doc = {**doc, "image_uri": image, "image_digest": image.rsplit("@", 1)[-1]}
         return doc if isinstance(doc, Mapping) else None
 
     def job_role_arn(self) -> str | None:

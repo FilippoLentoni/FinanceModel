@@ -163,6 +163,9 @@ def run_daily_recommendation(inp: JobInputs) -> dict[str, Any]:
 
 
 def run_benchmark(inp: JobInputs) -> dict[str, Any]:
+    if inp.spec["configuration"]["payload"].get("objective") == "classical_weekly_review":
+        from finplan_model.classical.benchmark import run_weekly_benchmark
+        return run_weekly_benchmark(inp)
     section = _bias(inp)
     main = str(inp.spec["strategy"])
     names = [main, *[c for c in CONTROLS if c != main]]
@@ -223,9 +226,16 @@ HANDLERS: dict[str, Handler] = {
     "daily_recommendation": run_daily_recommendation,
     "report": report,
     "model_selection": model_selection,
+    "recursive_evaluate": model_selection,
 }
 
 
 def register_handler(job_type: str, handler: Handler) -> None:
     """Later task groups or changes register additional job types here."""
     HANDLERS[job_type] = handler
+
+from .policy_export import run_prepare_policy
+HANDLERS["prepare_policy"] = run_prepare_policy
+
+from finplan_model.benchmarks.jobs import jev_backtest, rl_weight_staging, swarm_mode_a
+HANDLERS.update(jev_backtest=jev_backtest, rl_weight_staging=rl_weight_staging, swarm_mode_a=swarm_mode_a)

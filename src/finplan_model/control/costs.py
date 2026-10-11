@@ -78,7 +78,14 @@ def estimate(cfg: EnvConfig, job_type: JobTypeConfig, *, instance_type: str, ins
     if now - retrieved > max_age:
         raise FinplanError.precondition("the configured instance price is older than the allowed age", reason="instance_price_stale", instance_type=instance_type, max_age_days=float(cfg.cost.get("price_max_age_days", 30)))
     storage = float(cfg.cost.get("storage_estimate_usd", 0.0))
-    total = _ceil6(float(price) * (max_runtime_seconds / 3600.0) * instance_count + storage)
+    billable_seconds = max_runtime_seconds
+    if job_type.name == "swarm_mode_a":
+        # Loading the exact large checkpoint is billable work. The 600-second allowance is
+        # explicit planning headroom, not a promise that cloud startup is perfectly bounded.
+        billable_seconds += int((cfg.raw.get("llm_benchmarks", {}).get("qwen") or {}).get("startup_allowance_seconds", 600))
+    if job_type.name == "rl_weight_staging":
+        storage = max(storage, .70)  # conservative scratch-retention planning allowance, disclosed
+    total = _ceil6(float(price) * (billable_seconds / 3600.0) * instance_count + storage)
     return CostEstimate(total, utc_iso(retrieved), job_type.budget_category, float(price), int(max_runtime_seconds), int(instance_count), instance_type, storage)
 
 

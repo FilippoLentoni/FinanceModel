@@ -28,13 +28,18 @@ Reward (per decision step ``t``, from the decision close ``d_t`` to the next dec
     V = simulated net asset value (fees, spread and slippage paid), DD[s] = 1 - V[s] / max_{u <= s} V[u]
     within the episode, turnover_t = traded notional at the execution session / value at the decision close.
 
+Version 2 optionally adds market summaries and observed drawdown, randomized fixed-length training
+episodes and partial rebalances. The declared feature order is the observation order. Defaults retain
+the legacy behavior; beta opts into these additions (``docs/rl-environment.md``).
+
 The reward is a training signal only: it is reported in the training-reward section and never as
 portfolio performance (RL-06); portfolio metrics come from the common evaluator.
 
 Episode
     training: one pass over the training window, all cash at the start, first decision at a random
-    offset in ``[window, window + step_sessions)`` sessions into the window (seeded), then a decision
-    every ``step_sessions`` sessions (about one month); evaluation (validation checkpoints): the
+    offset in ``[window, window + step_sessions)`` sessions into the window (seeded), or uniformly
+    sampled fixed-length episodes when ``episode_sessions > 0``; then a decision
+    every ``step_sessions`` sessions; evaluation (validation checkpoints): the
     calendar rebalance sessions of the window (``decision_frequency``), exactly as the common evaluator.
 """
 
@@ -56,13 +61,16 @@ __all__ = [
     "EnvSpec",
     "RewardSpec",
     "build_observation",
+    "allocation_action",
     "policy_configuration",
     "softmax_weights",
 ]
 
-ENV_SPEC_VERSION = "finplan-rl-env/1"
+ENV_SPEC_VERSION = "finplan-rl-env/2"
 #: Features the environment implements; a specification may declare only these.
-STATE_FEATURES = ("log_return_window", "current_weights")
+STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown")
+# Preserve the original observation unless a released experiment opts into new features.
+DEFAULT_FEATURES = ("log_return_window", "current_weights")
 ACTION_TRANSFORMS = ("softmax",)
 REWARD_FORMULA = (
     "reward_t = reward_scale * (ln(V[d_t+1]/V[d_t]) - risk_penalty * sum_s ln(V[s]/V[s-1])^2 "
@@ -108,13 +116,15 @@ class RewardSpec:
 @dataclass(frozen=True)
 class EnvSpec:
     window: int = 20
-    features: tuple[str, ...] = STATE_FEATURES
+    features: tuple[str, ...] = DEFAULT_FEATURES
     return_scale: float = 50.0
     obs_clip: float = 5.0
     action_transform: str = "softmax"
     action_scale: float = 5.0
     step_sessions: int = 1
     decision_frequency: str = "daily"
+    episode_sessions: int = 0  # 0 preserves the original full-window episode
+    rebalance_fraction: float = 1.0
     reward: RewardSpec = field(default_factory=RewardSpec)
     version: str = ENV_SPEC_VERSION
 
@@ -125,9 +135,10 @@ class EnvSpec:
         unknown = sorted(set(d) - allowed)
         if unknown:
             raise FinplanError.validation("unknown environment specification field", pointer=f"{ptr}/{unknown[0]}")
-        if d.get("version", ENV_SPEC_VERSION) != ENV_SPEC_VERSION:
+        version = d.get("version", ENV_SPEC_VERSION)
+        if version not in ("finplan-rl-env/1", ENV_SPEC_VERSION):
             raise FinplanError.validation("unsupported environment specification version", pointer=f"{ptr}/version")
-        features = tuple(d.get("features", STATE_FEATURES))
+        features = tuple(d.get("features", DEFAULT_FEATURES))
         bad = [f for f in features if f not in STATE_FEATURES]
         if bad or not features or len(set(features)) != len(features):
             raise FinplanError.validation("state features must be distinct implemented features", pointer=f"{ptr}/features", known=list(STATE_FEATURES))
@@ -137,6 +148,8 @@ class EnvSpec:
         freq = d.get("decision_frequency", "daily")
         if freq not in ("daily", "weekly", "monthly", "quarterly"):
             raise FinplanError.validation("decision_frequency must be a rebalance frequency", pointer=f"{ptr}/decision_frequency")
+        if "portfolio_drawdown" in features and (freq != "daily" or d.get("step_sessions", 1) != 1):
+            raise FinplanError.validation("drawdown observations require daily decisions in training and evaluation", pointer=f"{ptr}/decision_frequency")
         return cls(
             window=_int(d, "window", 20, lo=2, hi=252, ptr=ptr),
             features=features,
@@ -146,7 +159,10 @@ class EnvSpec:
             action_scale=_num(d, "action_scale", 5.0, lo=0.1, hi=50.0, ptr=ptr),
             step_sessions=_int(d, "step_sessions", 1, lo=1, hi=252, ptr=ptr),
             decision_frequency=str(freq),
+            episode_sessions=_int(d, "episode_sessions", 0, lo=0, hi=5000, ptr=ptr),
+            rebalance_fraction=_num(d, "rebalance_fraction", 1.0, lo=0.01, hi=1.0, ptr=ptr),
             reward=RewardSpec.from_dict(d.get("reward"), ptr=f"{ptr}/reward"),
+            version=version,
         )
 
     def with_reward(self, **changes: float) -> EnvSpec:
@@ -176,6 +192,10 @@ class EnvSpec:
             size += self.window * n_instruments
         if "current_weights" in self.features:
             size += n_instruments + 1
+        if "market_summary" in self.features:
+            size += 6 * n_instruments
+        if "portfolio_drawdown" in self.features:
+            size += 1
         return size
 
 
@@ -193,20 +213,41 @@ def softmax_weights(action: Any, n_instruments: int, action_scale: float) -> tup
     return weights, cash
 
 
-def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float) -> np.ndarray:
+def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None) -> np.ndarray:
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
-    parts: list[np.ndarray] = []
+    parts: dict[str, np.ndarray] = {}
     if "log_return_window" in spec.features:
         spec.require("log_return_window")
         px = np.asarray(closes, dtype=np.float64)
         if px.shape[0] != spec.window + 1:
             raise FinplanError.validation("the observation needs window + 1 closes", pointer="/rl/env/window", window=spec.window)
         r = np.log(px[1:] / px[:-1]) * spec.return_scale
-        parts.append(np.clip(r, -spec.obs_clip, spec.obs_clip).reshape(-1))
+        parts["log_return_window"] = np.clip(r, -spec.obs_clip, spec.obs_clip).reshape(-1)
     if "current_weights" in spec.features:
         spec.require("current_weights")
-        parts.append(np.append(np.asarray(weights, dtype=np.float64), float(cash_weight)))
-    return np.concatenate(parts).astype(np.float32)
+        parts["current_weights"] = np.append(np.asarray(weights, dtype=np.float64), float(cash_weight))
+    if "market_summary" in spec.features:
+        px = np.asarray(closes, dtype=np.float64)
+        if px.shape[0] != spec.window + 1:
+            raise FinplanError.validation("market summaries need window + 1 visible closes", pointer="/rl/env/window")
+        returns = np.log(px[1:] / px[:-1])
+        # Per-session mean return and volatility at three horizons; no fitted normalizer or future data.
+        summaries = [f(returns[-min(h, spec.window):], axis=0) * spec.return_scale
+                     for h in (5, 20, 60) for f in (np.mean, np.std)]
+        parts["market_summary"] = np.clip(np.concatenate(summaries), -spec.obs_clip, spec.obs_clip)
+    if "portfolio_drawdown" in spec.features:
+        if drawdown is None or not math.isfinite(drawdown) or not 0 <= drawdown <= 1:
+            raise FinplanError.validation("drawdown must be supplied from observed portfolio values", pointer="/observation/drawdown")
+        parts["portfolio_drawdown"] = np.array([drawdown], dtype=np.float64)
+    return np.concatenate([parts[f] for f in spec.features]).astype(np.float32)
+
+
+def allocation_action(spec: EnvSpec, action: Any, current_weights: np.ndarray, cash_weight: float) -> tuple[np.ndarray, float]:
+    """Blend a proposed target with the current allocation before the shared constraint policy."""
+    weights, cash = softmax_weights(action, len(current_weights), spec.action_scale)
+    fraction = spec.rebalance_fraction
+    return (fraction * weights + (1 - fraction) * current_weights,
+            fraction * cash + (1 - fraction) * cash_weight)
 
 
 def policy_configuration(algo: str, hyperparameters: Mapping[str, Any], env_spec: EnvSpec, *, simulation_configuration_id: str, training_range: Mapping[str, str], instruments: tuple[str, ...]) -> dict[str, Any]:

@@ -182,7 +182,8 @@ class Simulator:
         return math.copysign(min(abs(qty), limit), qty)
 
     # ------------------------------------------------------------------ run
-    def run(self, strategy: Strategy, *, start: date | None = None, end: date | None = None) -> SimulationResult:
+    def run(self, strategy: Strategy, *, start: date | None = None, end: date | None = None,
+            initial_book: HoldingsView | None = None) -> SimulationResult:
         cfg = self.cfg
         sessions = [s for s in self.market.sessions if (start is None or s >= start) and (end is None or s <= end)]
         if len(sessions) < 2:
@@ -192,7 +193,23 @@ class Simulator:
         exec_field = self._exec_field()
         tol = cfg.reconciliation_tolerance
 
-        book = _Book(float(cfg.initial_cash), {i: 0.0 for i in self.universe})
+        if initial_book is None:
+            book = _Book(float(cfg.initial_cash), {i: 0.0 for i in self.universe})
+        else:
+            # Decision evaluation starts from the original shares, without charging a
+            # fictitious liquidation and purchase merely to initialize the simulation.
+            shares_in = dict(initial_book.shares)
+            quantities = [shares_in.get(i, 0.0) for i in self.universe]
+            if (set(shares_in) - set(self.universe) or not math.isfinite(initial_book.cash)
+                    or initial_book.cash < 0 or any(not math.isfinite(q) or q < 0 for q in quantities)):
+                raise FinplanError.validation("invalid initial paper book", pointer="/initial_book")
+            bars_in = [self.market.bar(i, sessions[0]) for i in self.universe]
+            if any(b is None for b in bars_in):
+                raise FinplanError.precondition("initial book lacks raw marks", reason="initial_book_marks_missing")
+            initial_value = initial_book.cash + sum(q * b.close for q, b in zip(quantities, bars_in))
+            if abs(initial_value - cfg.initial_cash) > cfg.reconciliation_tolerance:
+                raise FinplanError.precondition("initial paper book and simulation value differ", reason="initial_book_value_mismatch")
+            book = _Book(float(initial_book.cash), dict(zip(self.universe, quantities)))
         shares = book.shares
         cash = book.cash
         marks: dict[str, float] = {}
@@ -208,7 +225,7 @@ class Simulator:
         carry: dict[str, tuple[str, float]] = {}  # instrument -> (decision_session, remaining qty)
         cum = {"fees": 0.0, "spread": 0.0, "slippage": 0.0, "traded_notional": 0.0}
         max_err = 0.0
-        prev_value = cash
+        prev_value = float(cfg.initial_cash)
 
         for k, s in enumerate(sessions):
             s_iso = s.isoformat()

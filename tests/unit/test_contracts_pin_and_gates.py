@@ -33,7 +33,7 @@ def test_pin_is_exact_and_matches_installed_version():
     import finplan_contracts
 
     pin = json.loads((ROOT / "contracts-pin.json").read_text(encoding="utf-8"))
-    assert pin["version"] == finplan_contracts.__version__ == "1.1.0"
+    assert pin["version"] == finplan_contracts.__version__ == "1.6.0"
     assert pin["served_environments"] == ["beta", "gamma", "prod"]
     assert "registry-ref" in pin["registry"]
 
@@ -50,7 +50,7 @@ def test_tampered_wheel_fails_with_digest_mismatch(tmp_path):
 def test_version_range_is_refused(tmp_path):
     root = _copy_pin_tree(tmp_path)
     py = root / "pyproject.toml"
-    py.write_text(py.read_text(encoding="utf-8").replace('"finplan-contracts==1.1.0"', '"finplan-contracts>=1.0"'), encoding="utf-8")
+    py.write_text(py.read_text(encoding="utf-8").replace('"finplan-contracts==1.6.0"', '"finplan-contracts>=1.0"'), encoding="utf-8")
     assert any("exactly" in p for p in check(root, check_installed=False))
 
 
@@ -67,8 +67,9 @@ def test_planted_zero_x_pin_is_still_beta_only(tmp_path, env):
     pin_path = root / "contracts-pin.json"
     pin = json.loads(pin_path.read_text(encoding="utf-8"))
     old = pin["artifact"]
+    old_version = pin["version"]
     pin["version"] = "0.9.0"
-    pin["artifact"] = old.replace("1.1.0", "0.9.0")
+    pin["artifact"] = old.replace(old_version, "0.9.0")
     (root / old).rename(root / pin["artifact"])
     pin_path.write_text(json.dumps(pin), encoding="utf-8")
     assert not any("beta only" in p for p in check(root, env="beta", check_installed=False))
@@ -103,11 +104,11 @@ def test_repin_rewrites_pin_and_pyproject(tmp_path):
 
     root = _copy_pin_tree(tmp_path)
     pin = json.loads((root / "contracts-pin.json").read_text(encoding="utf-8"))
-    src = tmp_path / "incoming" / "finplan_contracts-1.1.0-py3-none-any.whl"
+    src = tmp_path / "incoming" / "finplan_contracts-1.4.0-py3-none-any.whl"
     src.parent.mkdir()
     src.write_bytes((root / pin["artifact"]).read_bytes())
     out = repin(src, root)
-    assert out["version"] == "1.1.0" and out["artifact"].endswith("finplan_contracts-1.1.0-py3-none-any.whl")
-    assert '"finplan-contracts==1.1.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert out["version"] == "1.4.0" and out["artifact"].endswith("finplan_contracts-1.4.0-py3-none-any.whl")
+    assert '"finplan-contracts==1.4.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
     with pytest.raises(ValueError):
         repin(tmp_path / "incoming" / "not-a-wheel.whl", root)

@@ -96,7 +96,11 @@ def build_service(env: str | None = None, *, session: Any = None) -> Any:
 
     s3 = s3_client(cfg.region, session=session)
     ids = IdMinter(clock)
+    from finplan_model.core.artifacts import S3ArtifactStore
+    from .production_strategy import SsmStrategyParameter
     deps = ServiceDeps(
+        artifacts=S3ArtifactStore(s3, bucket),
+        advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
         cfg=cfg,
         store=DynamoRunStore(session.client("dynamodb"), os.environ["FINPLAN_RUNS_TABLE"]),
         settings=settings,
@@ -108,6 +112,8 @@ def build_service(env: str | None = None, *, session: Any = None) -> Any:
         kick=kick,
         wakeup=wakeup,
     )
+    from finplan_model.benchmarks.offline import OfflineBatchIO
+    deps.offline_batch = OfflineBatchIO(s3, bucket, platform, deps.run_io, deps.artifacts)
     _wire_registry_and_staging(deps, cfg, ssm, s3, platform)
     return JobService(deps)
 
