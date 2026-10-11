@@ -164,6 +164,7 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
         "Version": "2012-10-17",
         "Statement": [
             {"Sid": "ReadRunSpecs", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/runs/*/spec.json"]},
+            {"Sid": "ReadOfflineQwenReleaseCode", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/releases/qwen-code/*"]},
             {
                 "Sid": "WriteRunOutputs",
                 "Effect": "Allow",
@@ -175,7 +176,7 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
                 "Effect": "Allow",
                 "Action": ["s3:ListBucket"],
                 "Resource": [research],
-                "Condition": {"StringLike": {"s3:prefix": ["runs/*", "artifacts/*", "dataset-catalog/*", "scratch/*"]}},
+                "Condition": {"StringLike": {"s3:prefix": ["runs/*", "artifacts/*", "dataset-catalog/*", "scratch/*", "releases/qwen-code/*"]}},
             },
             {"Sid": "RecordRunLineage", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{registry}/runs/*"]},
             {"Sid": "ReadRegistry", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{registry}/versions/*", f"{registry}/identity/*", f"{registry}/events/*"]},
@@ -499,7 +500,7 @@ def stage_role_statements(env: str, store_bucket_arn: str, *, partition: str = P
         {"Sid": "ReadEnvAndShared", "Effect": "Allow", "Action": list(contract_iam.SSM_READ_ACTIONS), "Resource": [param(f"/finplan/{env}"), param(f"/finplan/{env}/*"), param("/finplan/shared"), param("/finplan/shared/*")]},
         {"Sid": "ReadStackOutputs", "Effect": "Allow", "Action": ["cloudformation:DescribeStacks"], "Resource": [_arn("cloudformation", f"stack/finplan-{env}-{n.REPO}-*/*", partition=partition, region=region, account=account)]},
         {"Sid": "ReleaseLedger", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{store_bucket_arn}/releases/*"]},
-        {"Sid": "PublishOfflineQwenCode", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": [f"{research}/scratch/qwen-code/*"]},
+        {"Sid": "PublishOfflineQwenCode", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": [f"{research}/releases/qwen-code/*"]},
         {"Sid": "SeedModelRegistry", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{registry}/identity/*", f"{registry}/versions/*", f"{registry}/events/*"]},
         {"Sid": "ListModelRegistry", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [registry]},
         {"Sid": "ApprovalRecord", "Effect": "Allow", "Action": ["codepipeline:ListActionExecutions", "codepipeline:GetPipelineExecution"], "Resource": [_arn("codepipeline", n.PIPELINE_NAME, partition=partition, region=region, account=account)]},

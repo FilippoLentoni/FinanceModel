@@ -12,6 +12,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGES = ("finplan_contracts", "rfc8785", "ulid", "jsonschema", "jsonschema_specifications", "referencing", "rpds", "attrs", "attr", "typing_extensions")
+RELEASE_PREFIX = "releases/qwen-code/"
 BOOTSTRAP = '''import hashlib, os, pathlib, runpy, sys, zipfile
 p = pathlib.Path('/opt/ml/input/data/code/code.zip')
 expected = os.environ['FINPLAN_OFFLINE_CODE_SHA256']
@@ -48,7 +49,8 @@ def build(root: Path, output: Path):
 
 def publish(s3, bucket, release_id, data):
     from finplan_model.core.artifacts import sha256_checksum
-    prefix = "scratch/qwen-code/" + release_id + "/"
+    # Referenced release code must outlive the temporary scratch retention window.
+    prefix = RELEASE_PREFIX + release_id + "/"
     s3.put_object(Bucket=bucket, Key=prefix + "code.zip", Body=data, ContentType="application/zip")
     s3.put_object(Bucket=bucket, Key=prefix + "bootstrap.py", Body=BOOTSTRAP.encode(), ContentType="text/x-python")
     return {"code_prefix": prefix, "code_checksum": sha256_checksum(data)}

@@ -21,6 +21,9 @@ original tag `0.29.0-gpu-py312-cu130-ubuntu24.04-sagemaker-v1.2`.
 The operator supplies this digest in
 `/finplan/beta/financemodel/config/vllm-image`. The release publishes an immutable small
 code channel built with CPython 3.12 validation dependencies; it does not rebuild the DLC.
+Referenced code is retained under `releases/qwen-code/<release_id>/` in research storage,
+outside the expiring `scratch/` prefix. Temporary weights and run hand-off files retain
+their separate scratch lifecycle; an old release's code remains available after that window.
 
 `rl_weight_staging` stages only the exact revision into FinanceModel's own short-lived
 S3 scratch prefix, bounded to 60 GiB. It verifies pinned metadata, LFS digests and license,
@@ -49,10 +52,12 @@ forget to delete.
 The verified interface is `POST https://api.typesafe.ai/v1/systemone` with `{state,model,
 questions}`. Each named question requests `type:"choice"` and buy/hold/sell criteria.
 Responses contain named choices, probabilities, confidence, returned model and token usage.
-Read-only authenticated `/v1/models` discovery returned `jev-latest` and `jev-preview`;
-the earlier proposed `jev-1.13.0` identifier was not exposed and is **not** fabricated or
-silently substituted as an exact version. Requests use the available `jev-latest` alias
-and retain the returned model/version and drift status in artifacts.
+Read-only authenticated `/v1/models` discovery returned `jev-latest` and `jev-preview`.
+The [vendor model documentation](https://docs.typesafe.ai/models), checked on 2026-10-10,
+also documents `jev-1.13.0` and says explicit version IDs are accepted even when discovery
+omits them. This beta configuration uses `jev-latest` and retains the returned model/version
+and drift status in artifacts; it does not claim an immutable vendor model pin. A paid
+request with either identity has not been validated in this release.
 
 `jev_backtest` reads `finplan/shared/financemodel/jev-api-key` in memory. Only bucketed text
 descriptors of point-in-time trend, volatility and exposure leave AWS. The shared outbound
@@ -85,7 +90,9 @@ runtime plus disclosed 600-second startup allowance and $.01 storage estimates $
 Staging includes a conservative $.70 scratch-storage planning allowance, giving $.7575.
 These are planning estimates, not hard cloud billing caps; startup/storage must be reconciled.
 
-Jev's independent vendor planning rate is $.042/million input tokens, output free; the
+Jev's independent vendor planning rate, checked against the
+[vendor model documentation](https://docs.typesafe.ai/models) on 2026-10-10, is
+$.042/million input tokens, output free; the
 200,000 token bound implies $.0084 vendor credits, separately from the $.0675 AWS CPU/storage
 estimate. Vendor pricing/credits must be verified before approval. The external cap is
 disclosed; this charge is not counted as AWS spend.

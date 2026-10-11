@@ -17,9 +17,10 @@ def archive(files, *, manifest=None):
     files["MANIFEST.json"] = canonical_json_bytes(manifest if manifest is not None else {k: sha256_checksum(v) for k, v in files.items()})
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode="w:gz") as tar:
-        directory = tarfile.TarInfo("./artifacts")
-        directory.type = tarfile.DIRTYPE
-        tar.addfile(directory)
+        for name in ("./", "./artifacts/", "./artifacts/run_artifact/"):
+            directory = tarfile.TarInfo(name)
+            directory.type = tarfile.DIRTYPE
+            tar.addfile(directory)
         for name, value in files.items():
             member = tarfile.TarInfo("./" + name)
             member.size = len(value)
@@ -44,8 +45,30 @@ def setup_output(files, manifest=None):
 
 def test_verified_offline_archive_accepts_normal_tar_directories_and_writes_result_last():
     run, expected, backend, description = setup_output({})
+    data = canonical_json_bytes({"synthetic": True, "messages": []})
+    ref = InMemoryArtifactStore().put(data, kind="run_artifact", synthetic=True, domain="finance")
+    expected["artifacts"] = [ref.to_dict()]
+    output = archive({"result.json": canonical_json_bytes(expected), "artifacts/run_artifact/" + ref.artifact_id: data})
+    backend.s3 = SimpleNamespace(get_object=lambda **kwargs: {"Body": io.BytesIO(output)})
     result = backend.import_result(run, description)
     assert result == expected and backend.run_io.get_result(run["run_id"]) == result
+    assert backend.artifacts.get(ref) == data
+
+
+@pytest.mark.parametrize("member_type", [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE, tarfile.FIFOTYPE])
+def test_offline_archive_rejects_links_and_devices(member_type):
+    run, _, backend, description = setup_output({})
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as tar:
+        member = tarfile.TarInfo("./artifacts/unsafe")
+        member.type = member_type
+        member.linkname = "../../outside"
+        tar.addfile(member)
+    backend.s3 = SimpleNamespace(get_object=lambda **kwargs: {"Body": io.BytesIO(output.getvalue())})
+    with pytest.raises(FinplanError) as caught:
+        backend.import_result(run, description)
+    assert caught.value.details["reason"] == "offline_output_invalid"
+    assert backend.run_io.get_result(run["run_id"]) is None
 
 
 @pytest.mark.parametrize("case", ["manifest_list", "missing_artifact", "unsafe_path", "wrong_identity"])
