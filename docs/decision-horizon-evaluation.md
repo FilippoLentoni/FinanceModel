@@ -83,8 +83,9 @@ evidence, incomplete 64-session horizons remained partial, and latest-snapshot r
 correctly returned no forward observations. No holdings were accepted or changed.
 
 All Model beta pipeline actions passed for source
-`3b95f8dffd549a4df297fcc24811f12aad9c07a4`, execution
-`38b333be-9986-4825-b047-4c66eb5f05e9`, release
-`rel_01M4M56RP6FZNARQ26EVNK1WEJ`. Raw acceptance evidence is retained locally at
+`d6edabee2a8abc18d0876bd84cde45d404db6d86`, execution
+`87929817-49cf-484f-974a-5e9fe5a46ed2`, release
+`rel_01M4M6Q83GFWVT2VSDA0J7NHNP`. This also includes the daily research-pilot correction.
+Raw acceptance evidence is retained locally at
 `.worktmp/finplan-horizon-recursive/live-acceptance/` in the shared workspace; the
 analyses and activity receipts are persisted in the beta services.

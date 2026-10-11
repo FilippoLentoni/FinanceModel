@@ -7,9 +7,10 @@ configuration, usage and outcomes are sealed in run artifacts. Pretraining cutof
 unknown, so all historical LLM performance carries a leakage disclosure and requires
 prospective paper validation. No strategy is automatically activated.
 
-The daily-protocol correction described below is implemented and tested in source and
-awaits beta redeployment. The previously recorded beta release used monthly LLM previews;
-those frozen previews must be refreshed before approval and are rejected without launching.
+The daily-protocol correction is deployed in beta release `rel_01M4M6Q83GFWVT2VSDA0J7NHNP`
+from source `d6edabee2a8abc18d0876bd84cde45d404db6d86`. Build/deploy/integration gates and
+live daily Qwen/Jev dry-run requests passed. Older monthly previews must be refreshed
+before approval and are rejected without launching. Real paid inference remains unvalidated.
 
 ## Daily pilot scope
 

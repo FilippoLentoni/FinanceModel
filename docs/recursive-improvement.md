@@ -61,8 +61,10 @@ advanced experiment. GPU/vendor approval is a further control-plane step.
 These requests freeze a limited 21-decision daily pilot over 22 aligned saved market sessions,
 retaining earlier history for features. They are not full-year or untouched-holdout results.
 Frozen previews from the older monthly protocol fail closed and require a fresh review;
-approval never silently changes their configuration or dates. This daily correction awaits
-beta redeployment; the previous release record remains evidence for its earlier source.
+approval never silently changes their configuration or dates. This correction is deployed
+in beta release `rel_01M4M6Q83GFWVT2VSDA0J7NHNP`, source
+`d6edabee2a8abc18d0876bd84cde45d404db6d86`. All beta pipeline gates and live daily
+PPO/Qwen/Jev dry-run requests passed. Paid inference remains separately approval-gated.
 
 ## Deliberate remaining work
 

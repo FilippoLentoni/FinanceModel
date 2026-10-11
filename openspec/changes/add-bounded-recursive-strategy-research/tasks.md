@@ -24,4 +24,10 @@ Hosted/direct research acceptance is recorded by the cross-repository beta verif
 
 - [x] 4.1 Align displayed/submitted PPO and classical research candidates and Qwen/Jev pilots to daily decisions; freeze 22 aligned sessions/21 decisions, retain warmup, bound preflight/runtime before inference, and reject obsolete monthly previews.
 - [x] 4.2 Disclose limited-pilot scope separately from full-year/holdout comparisons and Jev forecast horizon; verify focused recursive, benchmark and control tests plus release gates.
-- [ ] 4.3 Redeploy the daily correction to beta and verify live dry-run requests without paid inference. The earlier release record above does not claim this new correction is deployed.
+- [x] 4.3 Redeploy the daily correction to beta and verify live dry-run requests without paid inference.
+
+The daily correction passed every beta pipeline gate for source
+`d6edabee2a8abc18d0876bd84cde45d404db6d86`, execution
+`87929817-49cf-484f-974a-5e9fe5a46ed2`, release
+`rel_01M4M6Q83GFWVT2VSDA0J7NHNP`. Live PPO, Qwen and Jev requests verified daily
+cadence; LLM pilots froze 22 sessions/21 decisions with warmup retained. No paid inference ran.
