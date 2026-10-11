@@ -91,9 +91,10 @@ def test_malformed_offline_output_is_a_safe_contract_error(case):
     assert backend.run_io.get_result(run["run_id"]) is None
 
 
-def test_swarm_backend_teardown_on_evaluation_failure():
+def test_swarm_backend_teardown_on_evaluation_failure(monkeypatch):
     closed = []
     backend = SimpleNamespace(close=lambda: closed.append(True))
+    monkeypatch.setattr("finplan_model.benchmarks.jobs._scope", lambda inp: {"decision_count": 21})
     with pytest.raises(AttributeError):
         swarm_mode_a(SimpleNamespace(), backend=backend)
     assert closed == [True]

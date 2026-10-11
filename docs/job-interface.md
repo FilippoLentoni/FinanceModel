@@ -60,6 +60,13 @@ fixtures' `fixture_optimizer` is **not** a FinanceModel job type, so submitting 
 `DEPENDENCY_UNAVAILABLE` with `retryable` false until they are deployed. A configured job type
 whose job definition is not published in the environment gives the same error.
 
+The source correction for `jev_backtest` and `swarm_mode_a` requires daily decisions and an
+explicit window of at most 32 decisions, checked against the saved snapshot before inference
+and during submission preflight when the platform is available. Generated previews use
+exactly 22 aligned sessions for a 21-decision pilot and preserve earlier feature history.
+This is limited research, not a full-year/untouched-holdout comparison. Beta redeployment of
+this correction is pending; [LLM benchmark scope](llm-benchmarks.md) records the distinction.
+
 ### Strategy comparison in results (`payload.benchmark`)
 
 `run_backtest` and `run_benchmark` results carry `payload.benchmark`, so callers of

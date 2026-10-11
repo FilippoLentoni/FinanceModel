@@ -12,7 +12,7 @@ from finplan_model.core.artifacts import (
     sha256_checksum,
     verify_checksum,
 )
-from finplan_model.core.errors import ErrorCode, FinplanError
+from finplan_model.core.errors import ErrorCode, FinplanError, contract_version
 
 ID = re.compile(r"^ca_[0-9a-f]{32}$")
 
@@ -48,7 +48,7 @@ def public(doc):
         if k not in ("solve_inputs", "request_fingerprint", "internal")
     }
     out.update(
-        {"analysis_ref": reference(doc), "contract_version": "1.5.0", "synthetic": True}
+        {"analysis_ref": reference(doc), "contract_version": contract_version(), "synthetic": True}
     )
     return out
 

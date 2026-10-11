@@ -126,8 +126,11 @@ def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: 
             raise FinplanError.validation("benchmark configuration does not name its identified strategy", pointer="/configuration/payload/strategy")
         if body["purpose"] not in ("research", "holdout_evaluation"):
             raise FinplanError.validation("identified benchmarks accept research purposes only", pointer="/purpose")
-        if name in ("swarm_mode_a", "jev_backtest") and payload.get("rebalance_frequency") != "monthly":
-            raise FinplanError.validation("the initial bounded LLM benchmark decides monthly", pointer="/configuration/payload/rebalance_frequency")
+        if name in ("swarm_mode_a", "jev_backtest"):
+            if payload.get("rebalance_frequency") != "daily":
+                raise FinplanError.validation("all benchmark families must decide daily", pointer="/configuration/payload/rebalance_frequency")
+            if not body.get("evaluation_window"):
+                raise FinplanError.validation("daily LLM benchmarks require an explicit bounded window", pointer="/evaluation_window")
     if body.get("compute_class") not in (None, jt.compute_class):
         raise FinplanError.validation("compute_class does not match the job type", pointer="/compute_class")
     runtime = int(body.get("max_runtime_seconds") or jt.default_runtime_seconds)

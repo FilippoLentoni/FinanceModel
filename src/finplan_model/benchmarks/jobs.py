@@ -14,9 +14,14 @@ from finplan_model.jobs.strategy_resolver import CONTROLS, resolve_strategy
 
 from .jev import JevClient, JevStrategy, SECRET, calibration_report
 from .qwen import QwenSwarm, VllmBackend
+from .protocol import daily_scope
 
 
-def _finish(inp, strategy, *, provider_evidence, started):
+def _scope(inp):
+    return daily_scope(inp.market, inp.universe, *inp.window, frequency=inp.sim_config.rebalance_frequency)
+
+
+def _finish(inp, strategy, *, provider_evidence, started, scope):
     from finplan_model.jobs.handlers import _bias, _with_bias
     start, end = inp.window
     results = [evaluate(strategy, inp.market, inp.sim_config, ctx=inp.ctx, start=start, end=end, universe=inp.universe)]
@@ -24,7 +29,7 @@ def _finish(inp, strategy, *, provider_evidence, started):
         results.append(evaluate(resolve_strategy(name, constraints=inp.sim_config.constraints), inp.market, inp.sim_config, ctx=inp.ctx, start=start, end=end, universe=inp.universe))
     assert_comparable(results)
     evidence = provider_evidence()
-    evidence.update({"protocol": "finplan-llm-benchmark/1", "evaluation": results[0].to_dict(), "controls": [r.to_dict() for r in results[1:]],
+    evidence.update({"protocol": "finplan-llm-benchmark/2", "evaluation_scope": scope, "evaluation": results[0].to_dict(), "controls": [r.to_dict() for r in results[1:]],
         "historical_pretraining_leakage_risk": True, "model_pretraining_cutoff": "not_verified", "prospective_paper_validation_required": True,
         "selection": "no strategy activation; request fixes horizon and parameters before evaluation", "bias_section": _bias(inp)})
     ref = inp.artifacts.put_json(evidence, kind="run_artifact", synthetic=True if inp.ctx.synthetic else None, domain="finance")
@@ -40,6 +45,7 @@ def jev_backtest(inp, *, client=None):
     if inp.spec["purpose"] not in ("research", "tuning", "holdout_evaluation"):
         raise FinplanError.not_permitted("Jev benchmark accepts research purposes only", reason="outbound_purpose_not_permitted")
     started = time.monotonic()
+    scope = _scope(inp)
     if client is None:
         import boto3
         session = boto3.session.Session(region_name=os.environ.get("AWS_REGION", "us-east-2"))
@@ -56,15 +62,16 @@ def jev_backtest(inp, *, client=None):
         return {"provider": "typesafe_systemone", "usage": client.usage, "responses": strategy.records,
             "calibration": calibration_report(strategy.records, inp.market, observed_end=inp.window[1]), "decision_horizon_sessions": 21,
             "sizing": {"threshold": strategy.threshold, "max_delta": strategy.max_delta, "confidence_minimum": .5}, "raw_series_egress": False}
-    return _finish(inp, strategy, provider_evidence=evidence, started=started)
+    return _finish(inp, strategy, provider_evidence=evidence, started=started, scope=scope)
 
 
 def swarm_mode_a(inp, *, backend=None, weights_root="/opt/ml/input/data/weights"):
     started = time.monotonic()
+    scope = _scope(inp)
     engine = backend or VllmBackend(weights_root)
     try:
         strategy = QwenSwarm(engine, run_id=inp.ctx.run_id)
-        return _finish(inp, strategy, provider_evidence=lambda: strategy.evidence, started=started)
+        return _finish(inp, strategy, provider_evidence=lambda: strategy.evidence, started=started, scope=scope)
     finally:
         close = getattr(engine, "close", None)
         if close:

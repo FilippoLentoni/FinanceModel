@@ -19,3 +19,9 @@ Beta publication and all pipeline build/integration gates passed on 2026-10-11 f
 lifecycle and read/image permissions were verified. Real paid staging/GPU/vendor inference
 is explicitly unvalidated and remains separately approval-gated; no such run is claimed.
 Hosted/direct research acceptance is recorded by the cross-repository beta verification.
+
+## 4. Daily protocol correction (after the release above)
+
+- [x] 4.1 Align displayed/submitted PPO and classical research candidates and Qwen/Jev pilots to daily decisions; freeze 22 aligned sessions/21 decisions, retain warmup, bound preflight/runtime before inference, and reject obsolete monthly previews.
+- [x] 4.2 Disclose limited-pilot scope separately from full-year/holdout comparisons and Jev forecast horizon; verify focused recursive, benchmark and control tests plus release gates.
+- [ ] 4.3 Redeploy the daily correction to beta and verify live dry-run requests without paid inference. The earlier release record above does not claim this new correction is deployed.

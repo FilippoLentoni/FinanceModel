@@ -32,6 +32,9 @@ ensemble against traditional optimizers and cash, buy-and-hold and equal-weight 
 Fresh cost/turnover/horizon feedback and the previous experiment's metrics select the next
 profile. These are bounded ablations, not automatically invented neural architectures.
 Traditional cycles retain the released covariance/lookback/risk presets.
+All displayed and submitted candidate configurations rebalance daily. Weekly scheduling
+controls how often research runs, not the investment decision frequency. Turnover feedback
+changes PPO rewards or classical covariance/risk hypotheses while retaining daily decisions.
 
 The controller stops for failed jobs, no improvement on the declared return/drawdown gate,
 reused holdout evidence, the iteration bound, or budget restrictions. A passing gate yields
@@ -55,6 +58,11 @@ Qwen/Jev queries return a matching typed `submit_experiment` dry-run request rat
 an unrelated classical benchmark. A hosted confirmed launch resumes the recursive cycle,
 which owns the run lineage; a standalone direct `submit_experiment` remains an independent
 advanced experiment. GPU/vendor approval is a further control-plane step.
+These requests freeze a limited 21-decision daily pilot over 22 aligned saved market sessions,
+retaining earlier history for features. They are not full-year or untouched-holdout results.
+Frozen previews from the older monthly protocol fail closed and require a fresh review;
+approval never silently changes their configuration or dates. This daily correction awaits
+beta redeployment; the previous release record remains evidence for its earlier source.
 
 ## Deliberate remaining work
 

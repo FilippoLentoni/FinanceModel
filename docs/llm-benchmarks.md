@@ -7,6 +7,26 @@ configuration, usage and outcomes are sealed in run artifacts. Pretraining cutof
 unknown, so all historical LLM performance carries a leakage disclosure and requires
 prospective paper validation. No strategy is automatically activated.
 
+The daily-protocol correction described below is implemented and tested in source and
+awaits beta redeployment. The previously recorded beta release used monthly LLM previews;
+those frozen previews must be refreshed before approval and are rejected without launching.
+
+## Daily pilot scope
+
+Every family makes decisions daily, as required by user decision 28. Qwen and Jev previews
+freeze the latest **22 actual aligned completed market sessions**, giving **21 daily
+decisions** and a final session to fill the last decision. The saved snapshot remains whole:
+earlier point-in-time observations still supply trailing features, including the 60-return
+lookback when available. Missing/late bars, insufficient warmup and windows above 32
+decisions are rejected before inference; the submission control also checks the approved
+snapshot before recording a paid run. Calendar holidays are taken from the snapshot.
+
+Cash, buy-and-hold and equal-weight controls use that exact daily window, simulator and
+cost model. Results label this a **limited daily pilot**, not the full 2026 benchmark or an
+untouched PPO/optimizer holdout comparison. Comparing it with old metrics from different
+dates or decision frequencies is invalid. A broader aligned benchmark remains a separately
+approved experiment with reviewed runtime/call bounds; this pilot cannot justify promotion.
+
 ## Qwen swarm
 
 The read-only AWS example identified `Qwen/Qwen3.6-27B`, revision
@@ -37,9 +57,10 @@ Five fixed roles run sequentially: market analyst, risk analyst, allocator, crit
 The allocator proposes a complete long-only simplex; bounded retries and critic revision
 are allowed, and the arbiter chooses only among validated proposals. Invalid messages
 hold the existing book. The released caps are 32 decisions, 224 role calls and 256 output
-tokens per response, deterministic sampling and disabled thinking. The monthly benchmark
-uses a one-year requested window. These caps are recorded, not a claim that all such runs
-fit within the runtime limit.
+tokens per response, deterministic sampling and disabled thinking. The 21-decision daily
+pilot needs at most 147 role calls, including retries/revisions. The 32-decision/224-call
+hard bounds are unchanged. These caps do not guarantee that model loading plus inference
+fits within the runtime limit.
 
 The existing dispatcher controls provisioning, GPU lease, quota retry, cancellation,
 runtime stop, terminal result import and lease release. Output imports enforce run identity,
@@ -75,7 +96,10 @@ Calibration is measured separately with next-21-session buy/hold/sell labels: mu
 Brier, negative log likelihood and classification accuracy. Portfolio profitability is
 not inferred from classification accuracy or vendor calibration claims. Current sizing
 thresholds are fixed, not tuned on test; validation-only calibration/threshold fitting is
-still a separate research task. Overlapping labels reduce independent evidence.
+still a separate research task. This 21-session forecast horizon is distinct from the daily
+decision frequency. Within the 22-session pilot only the first decision's full forecast
+horizon can mature; calibration is correspondingly thin or unavailable and excludes labels
+beyond the requested end. Overlapping labels reduce independent evidence.
 
 Primary API references: [vendor documentation index](https://docs.typesafe.ai/llms.txt),
 [vendor OpenAPI](https://api.typesafe.ai/openapi.json). AWS lifecycle reference:

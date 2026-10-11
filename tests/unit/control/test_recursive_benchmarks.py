@@ -11,7 +11,7 @@ from tests.unit.control.support import APPROVER, Harness, PRICES, request
 
 def configuration(strategy, objective="llm_benchmark"):
     cfg = request()["configuration"]
-    cfg["payload"].update(strategy=strategy, objective=objective)
+    cfg["payload"].update(strategy=strategy, objective=objective, rebalance_frequency="daily")
     return cfg
 
 
@@ -66,3 +66,32 @@ def test_missing_weights_fail_before_create_and_release_gpu_lease():
     h.service.dispatch()
     assert h.run(result["run_id"])["state"] == "failed"
     assert not h.sagemaker.calls and h.service.leases.holders("gpu") == []
+
+
+@pytest.mark.parametrize("job_type,strategy", [("swarm_mode_a", "qwen_swarm"), ("jev_backtest", "jev")])
+def test_llm_monthly_or_unbounded_request_is_rejected_before_run(job_type, strategy):
+    h = Harness()
+    cfg = configuration(strategy)
+    cfg["payload"]["rebalance_frequency"] = "monthly"
+    with pytest.raises(FinplanError):
+        h.submit(job_type=job_type, configuration=cfg)
+    with pytest.raises(FinplanError):
+        h.submit(job_type=job_type, configuration=configuration(strategy), evaluation_window=None)
+    assert not h.sagemaker.calls
+
+
+@pytest.mark.parametrize("job_type,strategy", [("swarm_mode_a", "qwen_swarm"), ("jev_backtest", "jev")])
+def test_snapshot_preflight_rejects_over_cap_and_accepts_aligned_daily_pilot(job_type, strategy):
+    from tests.unit.jobs.support import SID, platform_with_snapshot
+    from finplan_model.jobs.market_loader import load_market
+    platform = platform_with_snapshot()
+    market, _ = load_market(platform, SID)
+    h = Harness(platform=platform, prices={**PRICES, "usd_per_hour": {"ml.m5.xlarge": .25, "ml.g6.12xlarge": 6.}})
+    cfg = configuration(strategy)
+    with pytest.raises(FinplanError) as caught:
+        h.submit(job_type=job_type, configuration=cfg, input_snapshot_id=SID, dry_run=True)
+    assert caught.value.details["requested_decisions"] == 59
+    _, preview = h.submit(job_type=job_type, configuration=cfg, input_snapshot_id=SID, dry_run=True,
+        evaluation_window={"start": market.sessions[-22].isoformat(), "end": market.sessions[-1].isoformat()})
+    assert preview["dry_run"] and preview["run_id"] is None
+    assert not h.sagemaker.calls and not h.store.runs

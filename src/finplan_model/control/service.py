@@ -285,6 +285,13 @@ class JobService:
             source_spec = self.d.run_io.get_spec(source_id, None)
             policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'))
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
+        if sub.job_type.name in ("swarm_mode_a", "jev_backtest") and self.d.platform is not None:
+            from datetime import date
+            from finplan_model.benchmarks.protocol import daily_scope
+            from finplan_model.jobs.market_loader import load_market
+            market, _ = load_market(self.d.platform, str(body["input_snapshot_id"]))
+            window = body["evaluation_window"]
+            daily_scope(market, payload.get("universe"), date.fromisoformat(window["start"]), date.fromisoformat(window["end"]), frequency=simulation["rebalance_frequency"])
         selection: dict[str, Any] = {}
         if sub.job_type.name in ("model_selection", "recursive_evaluate"):
             selection = self._selection_fields(sub, dataset_id, all_runs)

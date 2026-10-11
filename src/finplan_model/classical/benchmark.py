@@ -103,12 +103,12 @@ def run_weekly_benchmark(inp):
             k: {"start": a.isoformat(), "end": b.isoformat()}
             for k, (a, b) in windows.items()
         },
-        "hypothesis": "Evidence-selected bounded covariance history, rebalance cadence and risk trade-off sensitivity after transaction costs",
+        "hypothesis": "Evidence-selected bounded covariance history and risk trade-off sensitivity after transaction costs with daily decisions",
         "candidate_configuration": {
             "lookbacks": list(lookbacks),
             "risk_aversion": risk_aversion,
             "max_weight": max_weight,
-            "rebalance_frequency": payload.get("rebalance_frequency", "weekly"),
+            "rebalance_frequency": inp.sim_config.rebalance_frequency,
         },
         "common_warmup": {
             "required_completed_returns": warmup,

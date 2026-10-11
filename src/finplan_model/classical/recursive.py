@@ -8,7 +8,7 @@ executes generated code, approves GPU/vendor work, activates a strategy or chang
 from __future__ import annotations
 
 import copy
-from datetime import date, timedelta
+from datetime import date
 
 from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.errors import FinplanError
@@ -149,20 +149,27 @@ def run_recursive_improvement(service, body, *, scheduled=False):
     if cycle["family"] in ("qwen", "jev"):
         plan = service.plan(cycle["plan_context_id"])
         inputs = plan["solve_inputs"]
-        end = date.fromisoformat(inputs["as_of"])
+        from finplan_model.benchmarks.protocol import pilot_window
+        from finplan_model.jobs.market_loader import load_market
+        market, _ = load_market(service.d.platform, inputs["input_snapshot_id"])
+        window, scope = pilot_window(market, inputs["instruments"], as_of=date.fromisoformat(inputs["as_of"]))
         request = {"domain": "finance", "domain_schema_version": "1.0", "job_type": "swarm_mode_a" if cycle["family"] == "qwen" else "jev_backtest", "purpose": "research", "dry_run": True,
             "input_snapshot_id": inputs["input_snapshot_id"], "contract_version": "1.6.0", "synthetic": True,
             "configuration": {"domain": "finance", "domain_schema_version": "1.0", "synthetic": True, "payload": {
                 "strategy": "qwen_swarm" if cycle["family"] == "qwen" else "jev", "objective": "llm_benchmark", "universe": inputs["instruments"], "lookback_days": 60,
-                "rebalance_frequency": "monthly", "constraints": {"long_only": True, "max_weight": .6}, "fees": {"transaction_cost_bps": 2}}},
-            "evaluation_window": {"start": (end - timedelta(days=365)).isoformat(), "end": end.isoformat()},
+                "rebalance_frequency": "daily", "constraints": {"long_only": True, "max_weight": .6}, "fees": {"transaction_cost_bps": 2}}},
+            "evaluation_window": window,
             "idempotency_key": "recursive-benchmark-" + cycle["analysis_id"] + "-" + str(iteration + 1)}
         proposal.update(job_type=request["job_type"], objective="llm_benchmark", candidate_profile="exact_qwen_swarm" if cycle["family"] == "qwen" else "typesafe_jev_choice",
             benchmark_family=request["job_type"], budget_category="gpu" if cycle["family"] == "qwen" else "cpu_research",
             tool_request={"name": "submit_experiment", "arguments": request}, manual_compute_approval_required=True,
+            evaluation_scope=scope,
             external_vendor_cost_cap_usd=.01 if cycle["family"] == "jev" else 0.)
     if frozen_preview:
         proposal = copy.deepcopy(frozen_preview["proposed_experiment"])
+        frequency = ((proposal.get("tool_request") or {}).get("arguments") or {}).get("configuration", {}).get("payload", {}).get("rebalance_frequency", proposal.get("rebalance_frequency"))
+        if frequency != "daily":
+            raise FinplanError.precondition("preview predates the required daily benchmark protocol; request a new review with fresh feedback", reason="research_preview_obsolete")
     lineage = (previous.get("lineage", []) if previous else []) + ([{"analysis_id": previous["analysis_id"], "iteration": previous["iteration"], "job_run_id": (previous.get("job") or {}).get("run_id")}] if previous else [])
     payload = {"summary": "Recursive evidence review with bounded, reproducible experiment proposals", "cycle_id": cycle["analysis_id"], "state": "evidence_review", "iteration": iteration,
         "max_iterations": cycle["max_iterations"], "evidence": evidence, "proposed_experiment": None if stop else proposal,

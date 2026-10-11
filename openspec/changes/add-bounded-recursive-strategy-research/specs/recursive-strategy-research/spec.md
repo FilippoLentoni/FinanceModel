@@ -14,6 +14,20 @@ The system SHALL persist immutable cycles and lineage-linked iterations, freeze 
 - **WHEN** a user requests a dry run or a budget, iteration or evidence bound is exhausted
 - **THEN** no paid job SHALL start and the response SHALL record the specific stopping or approval condition
 
+### Requirement: Daily bounded benchmark protocol
+
+Every released research family and its controls SHALL decide daily. Generated Qwen/Jev previews SHALL freeze 22 aligned completed sessions for 21 decisions, retaining feature warmup and disclosing limited-pilot scope. Explicit window, alignment, warmup and 32-decision bounds SHALL be checked before inference and against available snapshots at submission. Cost and approval bounds SHALL remain unchanged.
+
+#### Scenario: A daily pilot is evaluated
+
+- **WHEN** an approved Qwen or Jev pilot runs
+- **THEN** the strategy and controls SHALL share the exact daily window and costs, record the actual decision count and retained warmup, and exclude out-of-window forecast labels
+
+#### Scenario: An incompatible or oversized preview is submitted
+
+- **WHEN** a frozen monthly preview or a window above the decision cap is submitted
+- **THEN** no inference SHALL occur and an incompatible frozen preview SHALL require a fresh review without silently changing its approved configuration
+
 ### Requirement: Identified self-hosted Qwen benchmark
 
 The system SHALL use the discovered exact Qwen3.6-27B checkpoint in a run-scoped offline vLLM batch, verify staged manifests, log fixed-role messages, arbitrate typed target weights and evaluate through the shared simulator. GPU work SHALL require approval, a concurrency lease and a hard runtime; no always-on endpoint SHALL exist.

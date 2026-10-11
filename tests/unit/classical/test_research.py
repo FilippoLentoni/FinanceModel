@@ -443,7 +443,8 @@ def test_evidence_changes_actual_bounded_experiment_configuration(context):
     }
     out = run_review(context.service, {"review_id": r["analysis_id"]})
     cfg = out["experiment_configuration"]["payload"]
-    assert cfg["lookback_days"] == 120 and cfg["rebalance_frequency"] == "monthly"
+    assert cfg["lookback_days"] == 120 and cfg["rebalance_frequency"] == "daily"
+    assert cfg["rebalance_frequency"] == proposal["rebalance_frequency"]
     assert cfg["risk_aversion"] == 5 and cfg["constraints"]["max_weight"] == 0.4
     assert context.service.d.job_api.calls[-1]["configuration"]["payload"] == cfg
 

@@ -67,13 +67,16 @@ def test_jev_common_simulator_has_costs_and_separate_calibration():
     market = synthetic_market(n_sessions=100, instruments=("SPY", "AGG"))
     client = JevClient("fixture-key", transport=response, sleep=lambda _: None)
     strategy = JevStrategy(client, ctx=RunContext.for_tests())
-    cfg = SimulationConfig.from_dict({"rebalance_frequency": "monthly", "fees": {"proportional_bps": 10.}})
-    result = evaluate(strategy, market, cfg, start=market.sessions[21], end=market.sessions[-1])
+    cfg = SimulationConfig.from_dict({"rebalance_frequency": "daily", "fees": {"proportional_bps": 10.}})
+    result = evaluate(strategy, market, cfg, start=market.sessions[-22], end=market.sessions[-1])
     assert result.metrics["total_fees"] > 0
-    assert client.calls <= 6 and strategy.records
-    report = calibration_report(strategy.records, market)
+    assert client.calls <= 21 and len(strategy.records) == 21
+    assert [r["decision_date"] for r in strategy.records] == [s.isoformat() for s in market.sessions[-22:-1]]
+    assert result.metrics["n_decisions"] == 21
+    report = calibration_report(strategy.records, market, observed_end=market.sessions[-1])
     assert report["status"] == "available" and report["samples"] > 0
     assert report["vendor_calibration_claim_verified"] is False
+    assert report["samples"] == len(market.instruments)  # Only the first 21-session forecast matures.
 
 
 def test_real_five_asset_descriptor_payload_passes_guard_without_raw_series():

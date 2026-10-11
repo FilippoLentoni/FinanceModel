@@ -355,7 +355,7 @@ def select_preset(feedback, performance, sources, user_feedback, n_instruments):
         "selection_method": "deterministic bounded signal rules; metadata topics suggest hypotheses, never paper instructions",
         "lookbacks": [60, 120, 252] if lower_turnover else [20, 60, 120],
         "lookback_days": 120 if lower_turnover else 60,
-        "rebalance_frequency": "monthly" if lower_turnover else "weekly",
+        "rebalance_frequency": "daily",
         "risk_aversion": 5.0 if defensive else 2.0,
         "max_weight": max(1 / max(1, n_instruments), 0.4)
         if defensive
@@ -637,6 +637,8 @@ def run_review(service, body):
     end = date.fromisoformat(inputs["as_of"])
     start = end - timedelta(days=365)
     proposal = doc["proposed_experiment"]
+    if proposal.get("rebalance_frequency") != "daily":
+        raise FinplanError.precondition("preview predates the required daily benchmark protocol; request a new review", reason="research_preview_obsolete")
     request = {
         "domain": "finance",
         "domain_schema_version": "1.0",
@@ -656,7 +658,7 @@ def run_review(service, body):
                 "universe": inputs["instruments"],
                 "lookback_days": proposal["lookback_days"],
                 "risk_aversion": proposal["risk_aversion"],
-                "rebalance_frequency": "daily" if proposal.get("job_type") == "recursive_evaluate" else proposal["rebalance_frequency"],
+                "rebalance_frequency": proposal["rebalance_frequency"],
                 "constraints": {
                     "long_only": True,
                     "max_weight": proposal["max_weight"],

@@ -65,6 +65,15 @@ def test_ws03_job_role_reads_snapshots_and_never_writes_them(job):
     assert allowed(job, "execute-api:Invoke", f"arn:aws:execute-api:us-east-2:{ACCT}:api1/v1/GET/v1/snapshots/snap_x")
 
 
+@pytest.mark.parametrize("env", ["beta", "gamma", "prod"])
+def test_daily_benchmark_preflight_uses_existing_snapshot_grants_without_raw_s3_access(env):
+    role = {"identity": [pol.control_role_policy(env, "api", **C)], "boundary": cb.env_permission_boundary(env, **C)}
+    # download=true uses this same GET; its presigned grant is fetched unsigned.
+    assert allowed(role, "execute-api:Invoke", f"arn:aws:execute-api:us-east-2:{ACCT}:api1/v1/GET/v1/snapshots/snap_x")
+    assert not allowed(role, "s3:GetObject", _s3(f"finplan-{env}-financialplanning-snapshots-{ACCT}", "snapshots/snap_x/payload.json"))
+    assert not allowed(role, "s3:GetObject", _s3(f"finplan-{env}-financialplanning-raw-{ACCT}", "any"))
+
+
 # ----------------------------------------------------------------- WS-05 / ENV-04: no authoritative plan state
 def test_ws05_job_and_api_roles_cannot_write_plan_state(job, api):
     table = f"arn:aws:dynamodb:us-east-2:{ACCT}:table/finplan-{ENV}-financialplanning-plan-version"

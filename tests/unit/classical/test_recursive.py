@@ -6,12 +6,15 @@ import pytest
 from finplan_model.classical.recursive import run_recursive_improvement, scheduled_recursive_review
 from finplan_model.classical.research import horizon_evidence_summary
 from finplan_model.core.errors import FinplanError
+from finplan_contracts.validate import validate
+from finplan_model.core.errors import contract_version
 
 
 def test_recursive_dry_preview_freezes_portfolio_bounds_and_real_ppo_profile(context):
     s = context.service
     result = run_recursive_improvement(s, {"query": "PPO missing state features", "max_iterations": 2})
     assert result["state"] == "awaiting_experiment_approval" and result["iteration"] == 0
+    assert result["contract_version"] == contract_version()
     assert result["proposed_experiment"]["job_type"] == "recursive_evaluate"
     assert result["proposed_experiment"]["candidate_profile"] == "recursive_ppo_features"
     assert all(r["dry_run"] for r in s.d.job_api.calls)
@@ -62,8 +65,46 @@ def test_identified_benchmark_preview_targets_actual_matching_job(context, query
     assert args["job_type"] == kind and args["dry_run"]
     assert "compute_class" not in args and "max_runtime_seconds" not in args
     assert args["configuration"]["payload"]["strategy"] == strategy
-    assert args["configuration"]["payload"]["rebalance_frequency"] == "monthly"
+    assert args["configuration"]["payload"]["rebalance_frequency"] == "daily"
+    assert validate(args, "tools/submit-experiment-request").valid
+    market = context.market
+    assert args["evaluation_window"] == {"start": market.sessions[-22].isoformat(), "end": market.sessions[-1].isoformat()}
+    scope = result["proposed_experiment"]["evaluation_scope"]
+    assert scope["decision_count"] == 21 and scope["market_sessions"] == 22
+    assert scope["history_prices_at_first_decision"] > 60
+    assert scope["full_2026_benchmark"] is False and scope["untouched_holdout_comparison"] is False
     assert all(r["dry_run"] for r in context.service.d.job_api.calls)
+
+
+def test_daily_benchmark_approval_retains_exact_reviewed_window(context):
+    s = context.service
+    preview = run_recursive_improvement(s, {"query": "Qwen swarm"})
+    launched = run_recursive_improvement(s, {"cycle_id": preview["cycle_id"], "dry_run": False, "confirmed_by_user": True, "idempotency_key": "daily-pilot-approved"})
+    assert launched["proposed_experiment"] == preview["proposed_experiment"]
+    assert s.d.job_api.calls[-1]["evaluation_window"] == preview["proposed_experiment"]["tool_request"]["arguments"]["evaluation_window"]
+
+
+@pytest.mark.parametrize("query", ["Qwen swarm", "PPO", "traditional optimizer"])
+def test_incompatible_frozen_preview_is_never_silently_changed_or_launched(context, query):
+    s = context.service
+    preview = run_recursive_improvement(s, {"query": query})
+    stored = s.store.docs[preview["analysis_id"]]
+    proposal = stored["proposed_experiment"]
+    proposal["rebalance_frequency"] = "monthly"
+    if proposal.get("tool_request"):
+        proposal["tool_request"]["arguments"]["configuration"]["payload"]["rebalance_frequency"] = "monthly"
+    before = len(s.d.job_api.calls)
+    with pytest.raises(FinplanError) as caught:
+        run_recursive_improvement(s, {"cycle_id": preview["cycle_id"], "dry_run": False, "confirmed_by_user": True, "idempotency_key": "old-preview"})
+    assert caught.value.details["reason"] == "research_preview_obsolete"
+    assert len(s.d.job_api.calls) == before and not s.store.claims
+
+
+@pytest.mark.parametrize("query", ["PPO", "traditional optimizer turnover"])
+def test_cpu_displayed_frequency_matches_submitted_daily_configuration(context, query):
+    out = run_recursive_improvement(context.service, {"query": query})
+    assert out["proposed_experiment"]["rebalance_frequency"] == "daily"
+    assert context.service.d.job_api.calls[-1]["configuration"]["payload"]["rebalance_frequency"] == "daily"
 
 
 def test_scheduler_resumes_at_most_one_cycle_without_activating(context):
