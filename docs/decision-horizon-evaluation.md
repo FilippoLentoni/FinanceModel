@@ -75,5 +75,16 @@ by the release coordinator; they are not implied by offline tests.
 Offline verification on 2026-10-10: 11 focused horizon tests passed; the combined
 classical, RL and simulator suite passed 245 tests in 58.44 seconds using the final
 contracts 1.6.0 wheel. Strict OpenSpec validation and source diff checks passed.
-The beta deployment and live MCP verification task remains open until release-coordinator
-confirmation.
+Beta verification on 2026-10-11 passed through both direct MCP and hosted AgentCore
+using an isolated paper book. The hosted PPO result exactly matched the direct six-path
+horizon evidence; immutable retrieval preserved it. Traditional min-variance replay also
+passed. Backdated requests were explicitly retrospective/ineligible for prospective skill
+evidence, incomplete 64-session horizons remained partial, and latest-snapshot requests
+correctly returned no forward observations. No holdings were accepted or changed.
+
+All Model beta pipeline actions passed for source
+`3b95f8dffd549a4df297fcc24811f12aad9c07a4`, execution
+`38b333be-9986-4825-b047-4c66eb5f05e9`, release
+`rel_01M4M56RP6FZNARQ26EVNK1WEJ`. Raw acceptance evidence is retained locally at
+`.worktmp/finplan-horizon-recursive/live-acceptance/` in the shared workspace; the
+analyses and activity receipts are persisted in the beta services.

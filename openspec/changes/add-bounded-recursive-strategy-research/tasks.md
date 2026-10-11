@@ -9,9 +9,13 @@
 
 ## 3. Release and evidence
 
-- [ ] 3.1 Publish beta job configurations and documented invocation examples; validate focused OpenSpec and required unit/build checks, retaining explicit real-GPU and vendor validation status.
+- [x] 3.1 Publish beta job configurations and documented invocation examples; validate focused OpenSpec and required unit/build checks, retaining explicit real-GPU and vendor validation status.
 
-Implementation, local configurations, invocation and paid-validation-status documentation are complete.
-Focused unit/infra checks and strict OpenSpec validation pass. Release/build checks and deployed
-beta verification are coordinated by the parent rollout agent. No paid staging, GPU or vendor
-inference is claimed complete; these remain explicit separately approved validation steps.
+
+Beta publication and all pipeline build/integration gates passed on 2026-10-11 for source
+`3b95f8dffd549a4df297fcc24811f12aad9c07a4`, execution
+`38b333be-9986-4825-b047-4c66eb5f05e9`, release
+`rel_01M4M56RP6FZNARQ26EVNK1WEJ`. Qwen release code is retained outside the scratch
+lifecycle and read/image permissions were verified. Real paid staging/GPU/vendor inference
+is explicitly unvalidated and remains separately approval-gated; no such run is claimed.
+Hosted/direct research acceptance is recorded by the cross-repository beta verification.

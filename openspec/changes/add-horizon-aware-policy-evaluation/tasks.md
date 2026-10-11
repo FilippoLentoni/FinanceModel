@@ -6,4 +6,4 @@
 
 ## 2. Integration
 - [x] 2.1 Extend existing decision evaluation with maturity and conservative evidence interpretation; verify evaluator compatibility and unavailable-evidence tests.
-- [ ] 2.2 Verify focused and broader offline suites, strict OpenSpec validation and root-confirmed beta MCP acceptance; retain commands and results in documentation.
+- [x] 2.2 Verify focused and broader offline suites, strict OpenSpec validation and root-confirmed beta MCP acceptance; retain commands and results in documentation.
