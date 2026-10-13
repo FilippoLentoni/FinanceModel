@@ -10,7 +10,7 @@ prospective paper validation. No strategy is automatically activated.
 The daily-protocol correction is deployed in beta release `rel_01M4M6Q83GFWVT2VSDA0J7NHNP`
 from source `d6edabee2a8abc18d0876bd84cde45d404db6d86`. Build/deploy/integration gates and
 live daily Qwen/Jev dry-run requests passed. Older monthly previews must be refreshed
-before approval and are rejected without launching. Real paid inference remains unvalidated.
+before approval and are rejected without launching. Real-market paid benchmark execution remains unvalidated; the October 13 live API and synthetic adapter test is recorded below.
 
 ## Daily pilot scope
 
@@ -78,8 +78,7 @@ Read-only authenticated `/v1/models` discovery returned `jev-latest` and `jev-pr
 The [vendor model documentation](https://docs.typesafe.ai/models), checked on 2026-10-10,
 also documents `jev-1.13.0` and says explicit version IDs are accepted even when discovery
 omits them. This beta configuration uses `jev-latest` and retains the returned model/version
-and drift status in artifacts; it does not claim an immutable vendor model pin. A paid
-request with either identity has not been validated in this release.
+and drift status in artifacts; it does not claim an immutable vendor model pin. A real `jev-latest` request was validated on 2026-10-13 and returned `jev-1.13.0`; real-market benchmark execution remains pending.
 
 `jev_backtest` reads `finplan/shared/financemodel/jev-api-key` in memory. Only bucketed text
 descriptors of point-in-time trend, volatility and exposure leave AWS. The shared outbound
@@ -124,7 +123,34 @@ disclosed; this charge is not counted as AWS spend.
 
 Unit tests verify actual dispatch/approval guards, exact manifest integrity, fixed-role
 arbitration, common evaluation, outbound guards, retry/call/token bounds, calibration and
-failure lease cleanup with fake compute. **No paid GPU, weight-staging, or Jev inference
-benchmark was launched during implementation.** The observed earlier AWS example lasted
+failure lease cleanup with fake compute. **No paid GPU, weight-staging, or real-market Jev inference benchmark was launched during implementation.** The observed earlier AWS example lasted
 about 4,754 seconds; a 900-second run may time out loading or evaluating the exact model.
 Full real-GPU readiness/performance validation remains pending specific budget approval.
+
+
+## Live Jev integration verification — 2026-10-13
+
+The existing Secrets Manager credential authenticated successfully. One production-client
+smoke request using synthetic descriptors returned `jev-1.13.0`, valid mutually exclusive
+buy/hold/sell probabilities, confidence and usage (376 input / 40 output tokens).
+
+A second test exercised the real vendor API, `JevStrategy`, common evaluator and cash,
+buy-and-hold/equal-weight comparisons across 21 synthetic daily decisions and five
+instruments. It passed, using 13 network calls and eight cached responses, with no returned
+model drift. The strategy retained cash throughout this synthetic path; no fills or costs
+were generated for its own portfolio. This verifies inference/adapter integration but does
+not demonstrate trading profitability, validate transaction-fill behavior in this live run,
+or establish calibration on real observations. Five synthetic labels are not calibration
+evidence for financial use.
+
+The client conservatively reserved 33,933 input-token units across both tests, estimating
+USD 0.001425186 at the vendor's published USD 0.042/million input-token rate. This is a
+planning estimate, not an invoice. No key or authorization header was logged.
+
+The deployed beta `jev_backtest` real-market pilot passed a fresh dry run: AWS upper-bound
+estimate USD 0.0675, with available research allocation USD 3.601664 at preflight. No run was
+recorded. AWS denied this development host access to the independent human approver role
+(`AccessDenied`); approval was not bypassed and no managed benchmark job was launched.
+Real-market comparison and managed-job validation therefore remain pending an authorized
+approver session. Local raw receipts are retained under
+`/home/ec2-user/projects/.worktmp/jev-live-20261013/`, outside this public repository.

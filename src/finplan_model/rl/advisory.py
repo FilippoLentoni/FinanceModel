@@ -66,7 +66,7 @@ def recommendation(service, body):
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
     provenance = {
-        'implementation': implementation_identity(),
+        'implementation': implementation_identity(bundle),
         'policy_artifact': pinned['artifact'],
         'export_run_id': pinned['export_run_id'],
         'policy_source_run_id': bundle['source_run_id'],
@@ -76,7 +76,7 @@ def recommendation(service, body):
         'decision_time': market.decision_time(as_of).isoformat(),
         'paper_execution_cost_bps': 2.0,
         'evaluation_contract': evaluation_contract(bundle['strategy_id'], bundle=bundle),
-        'evaluation_implementation': evaluation_implementation(),
+        'evaluation_implementation': evaluation_implementation(bundle),
     }
     decision_id = persist_proposal(service, rec, saved, provenance, idempotency_key=body.get('idempotency_key'))
     result = {'recommendation':rec,'synthetic':bool(market.synthetic or saved is not None)}

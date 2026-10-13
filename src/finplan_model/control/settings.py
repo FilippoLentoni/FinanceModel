@@ -203,6 +203,17 @@ class SsmSettings:
         doc = self._json(self.cfg.ssm["budget_allocation"])
         return dict(contract_budget.DEFAULT_ALLOCATION) if doc is None else dict(doc)
 
+    def cost_ceiling_usd(self) -> float:
+        import math
+        raw = self._get("/finplan/shared/financialplanning/config/cost-ceiling-usd")
+        try:
+            value = float(raw) if raw is not None else float(contract_budget.DEFAULT_CEILING_USD)
+        except (TypeError, ValueError):
+            value = float("nan")
+        if not math.isfinite(value) or value <= 0:
+            raise FinplanError.precondition("invalid project cost ceiling", reason="setting_invalid", setting="cost-ceiling-usd")
+        return value
+
     def budget_state(self) -> Any:
         return self._get(self.cfg.ssm["budget_state"])
 

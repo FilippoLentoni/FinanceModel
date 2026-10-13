@@ -136,6 +136,7 @@ def build_service():
         from finplan_model.benchmarks.weights import PREFIX
         from finplan_model.benchmarks.jev import SECRET
         from finplan_model.control.settings import SsmSettings
+        from finplan_model.selection.recursive_profiles import PROFILES
         settings = SsmSettings(ssm, cfg)
         qwen = {"configured": settings.job_definition("swarm_mode_a") is not None, "model_id": MODEL_ID, "revision": REVISION,
             "compute": "run_scoped_network_isolated_gpu_training", "gpu_approval_required": True, "weights_ready": False}
@@ -150,7 +151,7 @@ def build_service():
             jev["secret_configured"] = True
         except Exception:
             jev["reason"] = "vendor_secret_not_configured_or_status_unavailable"
-        return {"swarm_mode_a": qwen, "jev_backtest": jev, "recursive_evaluate": {"configured": settings.job_definition("recursive_evaluate") is not None, "released_profiles": ["recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon"]}}
+        return {"swarm_mode_a": qwen, "jev_backtest": jev, "recursive_evaluate": {"configured": settings.job_definition("recursive_evaluate") is not None, "released_profiles": list(PROFILES), "state_study": {"seeds": 5, "reward_action_fixed": True, "automatic_activation": False}, "news_training": {"eligible": False, "reason": "no_frozen_historical_news_dataset", "collection": "versioned_market_event_evidence"}}}
 
     deps = SimpleNamespace(
         research_plan_parameter=SsmStrategyParameter(

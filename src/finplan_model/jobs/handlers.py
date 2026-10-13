@@ -216,7 +216,17 @@ def report(inp: JobInputs) -> dict[str, Any]:
 def model_selection(inp: JobInputs) -> dict[str, Any]:
     from finplan_model.selection.job import run_model_selection
 
-    return run_model_selection(inp)
+    result = run_model_selection(inp)
+    from finplan_model.selection.recursive_profiles import STATE_PROFILES
+    profile = inp.spec.get("configuration", {}).get("payload", {}).get("objective")
+    if profile in STATE_PROFILES:
+        result["payload"]["state_ablation"] = {
+            "profile": profile, "feature_additions": list(STATE_PROFILES[profile]),
+            "comparison": "matched PPO state study; reward/action/seeds/splits fixed",
+            "news_training": "not_eligible_without_frozen_point_in_time_coverage",
+            "automatic_activation": False,
+        }
+    return result
 
 
 HANDLERS: dict[str, Handler] = {

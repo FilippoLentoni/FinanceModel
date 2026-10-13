@@ -48,6 +48,9 @@ def _summary(result):
         "selection": selection.get("selection") or classical.get("selection"),
         "promotion_check": gate,
         "test_reused": reused,
+        "state_ablation": payload.get("state_ablation"),
+        "seed_statistics": {name: block.get("seed_statistics", {}) for name, block in selection.get("rl", {}).items()},
+        "comparison": selection.get("comparison", {}),
         "fresh_forward_validation_required": True,
         "objective": "net returns and drawdown on the declared horizon; shaped training reward reported separately",
         "artifacts": result.get("artifacts", [])[:10],
@@ -132,8 +135,12 @@ def run_recursive_improvement(service, body, *, scheduled=False):
     next_index = min(iteration, 2)
     profile = PROFILES[next_index] if cycle["family"] == "ppo" else "classical_weekly_review"
     feedback_text = (cycle.get("feedback", "") + " " + str(body.get("feedback", "")) + " " + str(body.get("query", ""))).lower()
+    if cycle["family"] == "ppo" and "news" in feedback_text and any(w in feedback_text for w in ("state", "train", "feature")):
+        stop = "news_training_coverage_missing"
     if cycle["family"] == "ppo":
-        if any(word in feedback_text for word in ("turnover", "fees", "transaction cost", "trade less")):
+        if any(word in feedback_text for word in ("state", "correlation", "regime", "sequence")):
+            profile = "recursive_ppo_state_combined" if "combined" in feedback_text else "recursive_ppo_state_sequence" if "sequence" in feedback_text else "recursive_ppo_state_regime" if "regime" in feedback_text else "recursive_ppo_state_baseline" if "baseline" in feedback_text else "recursive_ppo_state_risk"
+        elif any(word in feedback_text for word in ("turnover", "fees", "transaction cost", "trade less")):
             profile = "recursive_ppo_turnover"
         elif any(word in feedback_text for word in ("horizon", "long term", "long-term", "episode")):
             profile = "recursive_ppo_horizon"

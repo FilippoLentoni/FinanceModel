@@ -16,7 +16,7 @@ def test_recursive_dry_preview_freezes_portfolio_bounds_and_real_ppo_profile(con
     assert result["state"] == "awaiting_experiment_approval" and result["iteration"] == 0
     assert result["contract_version"] == contract_version()
     assert result["proposed_experiment"]["job_type"] == "recursive_evaluate"
-    assert result["proposed_experiment"]["candidate_profile"] == "recursive_ppo_features"
+    assert result["proposed_experiment"]["candidate_profile"] == "recursive_ppo_state_risk"
     assert all(r["dry_run"] for r in s.d.job_api.calls)
     assert not any(k.startswith("recursive/") for k in s.store.claims)
     with pytest.raises(FinplanError):

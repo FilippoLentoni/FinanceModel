@@ -68,7 +68,8 @@ __all__ = [
 
 ENV_SPEC_VERSION = "finplan-rl-env/2"
 #: Features the environment implements; a specification may declare only these.
-STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown")
+STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown",
+                  "cross_asset_risk", "market_regime", "recent_returns")
 # Preserve the original observation unless a released experiment opts into new features.
 DEFAULT_FEATURES = ("log_return_window", "current_weights")
 ACTION_TRANSFORMS = ("softmax",)
@@ -150,6 +151,8 @@ class EnvSpec:
             raise FinplanError.validation("decision_frequency must be a rebalance frequency", pointer=f"{ptr}/decision_frequency")
         if "portfolio_drawdown" in features and (freq != "daily" or d.get("step_sessions", 1) != 1):
             raise FinplanError.validation("drawdown observations require daily decisions in training and evaluation", pointer=f"{ptr}/decision_frequency")
+        if "recent_returns" in features and d.get("window", 20) < 5:
+            raise FinplanError.validation("recent returns require five visible sessions", pointer=f"{ptr}/window")
         return cls(
             window=_int(d, "window", 20, lo=2, hi=252, ptr=ptr),
             features=features,
@@ -196,6 +199,12 @@ class EnvSpec:
             size += 6 * n_instruments
         if "portfolio_drawdown" in self.features:
             size += 1
+        if "cross_asset_risk" in self.features:
+            size += n_instruments * (n_instruments - 1) // 2 + 1
+        if "market_regime" in self.features:
+            size += 6
+        if "recent_returns" in self.features:
+            size += 5 * n_instruments
         return size
 
 
@@ -216,6 +225,30 @@ def softmax_weights(action: Any, n_instruments: int, action_scale: float) -> tup
 def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None) -> np.ndarray:
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
     parts: dict[str, np.ndarray] = {}
+    enriched = {"cross_asset_risk", "market_regime", "recent_returns"} & set(spec.features)
+    if enriched:
+        px = np.asarray(closes, dtype=np.float64)
+        if px.shape != (spec.window + 1, len(weights)) or not np.all(np.isfinite(px)) or np.any(px <= 0):
+            raise FinplanError.validation("state features require positive aligned visible closes", pointer="/observation/closes")
+        returns = np.log(px[1:] / px[:-1])
+        recent = returns[-min(20, len(returns)):]
+        if "cross_asset_risk" in enriched:
+            centered = recent - recent.mean(axis=0)
+            covariance = centered.T @ centered / max(len(recent), 1)
+            std = np.sqrt(np.maximum(np.diag(covariance), 0.))
+            denom = np.outer(std, std)
+            corr = np.divide(covariance, denom, out=np.zeros_like(covariance), where=denom > 1e-15)
+            pairs = corr[np.triu_indices(len(weights), k=1)]
+            portfolio_vol = np.sqrt(max(0., float(weights @ covariance @ weights))) * np.sqrt(252.)
+            parts["cross_asset_risk"] = np.clip(np.append(pairs, portfolio_vol), -spec.obs_clip, spec.obs_clip)
+        if "market_regime" in enriched:
+            market = returns.mean(axis=1)  # Equal-weight universe proxy, not an external market index.
+            values = [market[-min(h, len(market)):].mean() * spec.return_scale for h in (20, 60)]
+            values += [market[-min(h, len(market)):].std() * spec.return_scale for h in (20, 60)]
+            values += [recent.mean(axis=0).std() * spec.return_scale, float(np.mean(recent.mean(axis=0) > 0))]
+            parts["market_regime"] = np.clip(np.array(values), -spec.obs_clip, spec.obs_clip)
+        if "recent_returns" in enriched:
+            parts["recent_returns"] = np.clip(returns[-5:] * spec.return_scale, -spec.obs_clip, spec.obs_clip).reshape(-1)
     if "log_return_window" in spec.features:
         spec.require("log_return_window")
         px = np.asarray(closes, dtype=np.float64)

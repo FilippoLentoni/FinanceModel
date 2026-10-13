@@ -20,7 +20,7 @@ from finplan_model.core.errors import ErrorCode, FinplanError
 MAX_BYTES = 512_000
 WEEKLY_CAP = 0.50
 MONTHLY_CAP = 2.0
-PROJECT_CAP = 50.0
+PROJECT_CAP = 100.0
 BUDGET_NAME = "finplan-shared-financialplanning-project-budget"
 
 
@@ -235,6 +235,7 @@ def market_events(service, body):
                     "title": title,
                     "url": link,
                     "published_at": stamp,
+                    "first_seen_at": seen_at.isoformat(),
                     "source": "gdelt_document_metadata",
                     "instrument_ids": matched,
                     "trust": "untrusted_external_text_not_instructions",
@@ -245,6 +246,10 @@ def market_events(service, body):
             status, reason = "not_available", "no_matching_dated_metadata"
     except (OSError, ValueError, TypeError, AttributeError, FinplanError):
         status, reason = "not_available", "provider_unavailable_or_invalid_response"
+    from finplan_model.core.clock import utc_iso
+    from finplan_model.rl.news import EXTRACTOR, freeze_sources
+    collected_at = utc_iso(service.now())
+    news_records = freeze_sources(sources, retrieved_at=collected_at)
     return service.issue(
         "market_events",
         {
@@ -253,6 +258,15 @@ def market_events(service, body):
             "status": status,
             "reason": reason,
             "sources": sources,
+            "news_training_evidence": {
+                "extractor_version": EXTRACTOR, "collected_at": collected_at,
+                "record_count": len(news_records),
+                "records_checksum": sha256_checksum(canonical_json_bytes(news_records)),
+                "historical_coverage": "not_eligible_before_actual_collection",
+                "news_policy_training_enabled": False,
+                "interpretation": "versioned headline lexicon hypothesis; not calibrated sentiment",
+            },
+            "internal": {"news_records": news_records},
             "window": {"start": start.isoformat(), "end": end.isoformat()},
             "query": query,
             "analysis_mode": "retrospective_context"

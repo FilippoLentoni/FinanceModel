@@ -41,6 +41,7 @@ from finplan_model.core.outcome import require_valid
 from finplan_model.core.platform import PlatformClient, SnapshotReader
 from finplan_model.jobs.runio import RunIO
 from finplan_model.jobs.spec import build_run_spec, simulation_config_for
+from finplan_model.selection.recursive_profiles import PROFILES as RESEARCH_PROFILES
 
 from . import costs
 from . import production_strategy as ps
@@ -298,7 +299,8 @@ class JobService:
         est = costs.estimate(self.cfg, sub.job_type, instance_type=sub.instance_type, instance_count=sub.instance_count, max_runtime_seconds=sub.max_runtime_seconds, prices=self.d.settings.instance_prices(), now=self.now())
         if all_runs is None:
             all_runs = list(iter_runs(self.store))
-        remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id)
+        ceiling = getattr(self.d.settings, "cost_ceiling_usd", lambda: None)()
+        remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id, ceiling_usd=ceiling)
         block = est.block(remaining, synthetic=synthetic)
         require_valid(block, "cost-estimate")
         if dry_run:
@@ -328,7 +330,7 @@ class JobService:
                 self.env != "beta"
                 or sub.job_type.name not in ("run_benchmark", "recursive_evaluate")
                 or sub.purpose != "research"
-                or payload.get("objective") not in ("classical_weekly_review", "recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon")
+                or payload.get("objective") not in ("classical_weekly_review", *RESEARCH_PROFILES)
                 or sub.max_runtime_seconds > 900
                 or sub.instance_count != 1
                 or not str(body.get("idempotency_key", "")).startswith(

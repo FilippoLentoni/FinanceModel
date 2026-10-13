@@ -54,9 +54,9 @@ def replay(service, doc):
     inputs, artifact = provenance.get("policy_inputs"), provenance.get("policy_artifact")
     if not inputs or not artifact:
         return {"status": "not_available", "reason": "legacy_decision_has_no_frozen_policy_inputs"}
-    if provenance.get("implementation") and provenance["implementation"] != implementation_identity():
-        raise FinplanError.precondition("policy inference implementation differs from issued decision", reason="policy_implementation_mismatch")
     bundle = json.loads(service.d.artifacts.get(artifact))
+    if provenance.get("implementation") and provenance["implementation"] != implementation_identity(bundle):
+        raise FinplanError.precondition("policy inference implementation differs from issued decision", reason="policy_implementation_mismatch")
     result = recommend(bundle, np.asarray(inputs["prices"]), inputs["holdings"])
     original = doc["recommendation"]
     expected = [r["weight"] for r in original["target_weights"]] + [original["cash_weight"]]
