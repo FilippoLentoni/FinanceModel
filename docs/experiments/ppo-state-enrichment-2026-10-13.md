@@ -83,3 +83,11 @@ Evaluator and input identities match exactly across profiles:
   }
 }
 ```
+
+## Release and live verification
+
+All four new OpenSpec changes pass strict validation; all 16 tracked tasks are complete. Full offline Model pre-build gates passed, including unit/contract tests. Model, MCP Lambda targets and Agent passed cloud build and beta integration. Owned releases were stopped before Gamma and original transition settings restored. Final read-only checks confirm the selected advisory policy, production-strategy reference (still absent) and research-plan reference are unchanged.
+
+Post-release direct MCP checks passed legacy frozen-decision explanation, enriched risk-state preview, explicit news-training ineligibility and truthful unavailable news collection. Result retrieval retained the matched profile, five-seed statistics and reused-data warning. Both hosted natural-language checks passed: baseline state preview and news-training refusal. No recommendation was accepted and no holdings were changed by this study.
+
+The generated working paper is at `papers/agentic-financial-planning/main.pdf` in the shared workspace, with LaTeX source, aggregate JSON, figures and an evidence index alongside it. It compiles to 10 pages without LaTeX warnings or unresolved references.
