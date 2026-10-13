@@ -162,3 +162,15 @@ def test_horizon_review_excludes_retrospective_and_overlapping_windows():
     assert result["groups"][0]["independent_mature_windows"] == 3
     assert result["groups"][0]["overlapping_windows_excluded"] == 1
     assert result["immature_retrospective_or_unidentified_excluded"] == 1
+
+
+def test_raising_global_ceiling_does_not_expand_an_old_cycles_frozen_cap(context):
+    s = context.service
+    first = run_recursive_improvement(s, {"query": "PPO state risk features"})
+    s.store.docs[first['cycle_id']]['bounds']['project_usd'] = 50.  # Represents an immutable older release record.
+    s.d.project_budget = lambda: {'spent': 49.99, 'limit': 100.}
+    before = len([r for r in s.d.job_api.calls if not r['dry_run']])
+    stopped = run_recursive_improvement(s, {'cycle_id': first['cycle_id'], 'dry_run': False,
+                                          'confirmed_by_user': True, 'idempotency_key': 'old-cycle-cap'})
+    assert stopped['stopping_reason'] == 'cycle_project_budget_exhausted'
+    assert len([r for r in s.d.job_api.calls if not r['dry_run']]) == before

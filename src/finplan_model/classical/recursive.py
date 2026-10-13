@@ -13,7 +13,7 @@ from datetime import date
 from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.errors import FinplanError
 
-from .research import review, run_review
+from .research import PROJECT_CAP, review, run_review
 
 PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon")
 TERMINAL = ("proposal_ready", "stopped")
@@ -84,7 +84,7 @@ def run_recursive_improvement(service, body, *, scheduled=False):
             "max_iterations": bound, "family": family, "initial_review_id": initial["analysis_id"],
             "plan_context_id": plan["analysis_id"], "portfolio_id": plan.get("portfolio_id"),
             "query": str(body.get("query", ""))[:2000], "feedback": str(body.get("feedback", ""))[:4000],
-            "bounds": {"weekly_usd": .50, "monthly_usd": 2., "project_usd": 50., "max_parallel_jobs": 1, "max_iterations": bound},
+            "bounds": {"weekly_usd": .50, "monthly_usd": 2., "project_usd": PROJECT_CAP, "max_parallel_jobs": 1, "max_iterations": bound},
             "activation": {"status": "proposal_only"},
         }, {"week": service.now().strftime("%G-W%V"), "review_id": initial["analysis_id"], "family": family, "max_iterations": bound, "idempotency_key": body.get("idempotency_key")}, portfolio_id=plan.get("portfolio_id"))
         # Public issue responses carry artifact metadata; always operate on the stored record.
@@ -207,6 +207,15 @@ def run_recursive_improvement(service, body, *, scheduled=False):
         if not dry and not service.store.claim(claim_key, claim):
             raise FinplanError.precondition("another resume owns this iteration", reason="recursive_iteration_conflict")
         try:
+            if not dry:
+                # A larger global authorization must not silently relax an older
+                # cycle's frozen bounds (weekly/monthly limits are independent).
+                budget = service.d.project_budget()
+                frozen_cap = float(cycle.get("bounds", {}).get("project_usd", PROJECT_CAP))
+                preview_amount = (previous or {}).get("cost_estimate", {}).get("estimated_usd_upper_bound")
+                reserve = float(preview_amount) if isinstance(preview_amount, (int, float)) else (5. if cycle["family"] == "qwen" else .50)
+                if float(budget["spent"]) + reserve > min(PROJECT_CAP, float(budget["limit"]), frozen_cap):
+                    raise FinplanError("BUDGET_EXCEEDED", "the frozen research cycle budget is exhausted", details={"reason": "cycle_project_budget_exhausted"})
             if cycle["family"] in ("qwen", "jev"):
                 request = copy.deepcopy(proposal["tool_request"]["arguments"])
                 request.update(max_runtime_seconds=900, compute_class="gpu" if cycle["family"] == "qwen" else "cpu")

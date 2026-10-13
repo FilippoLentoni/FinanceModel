@@ -53,7 +53,7 @@ def freeze_sources(sources, *, retrieved_at):
 
 def features_at(records, instrument, *, decision_time, max_age_hours=72):
     cutoff = parse_utc(decision_time)
-    eligible = []
+    latest = {}
     for record in records:
         content = {k: v for k, v in record.items() if k != "record_checksum"}
         if sha256_checksum(canonical_json_bytes(content)) != record.get("record_checksum"):
@@ -61,13 +61,22 @@ def features_at(records, instrument, *, decision_time, max_age_hours=72):
         if record.get("extractor_version") != EXTRACTOR:
             raise FinplanError.precondition("unknown news extractor", reason="news_extractor_mismatch")
         available = max(parse_utc(record["available_at"]), parse_utc(record["retrieved_at"]), parse_utc(record["first_seen_at"]))
-        if instrument in record["instrument_ids"] and cutoff - timedelta(hours=max_age_hours) <= available <= cutoff:
-            eligible.append(record)
+        seen = parse_utc(record["first_seen_at"])
+        if instrument in record["instrument_ids"] and available <= cutoff and cutoff - timedelta(hours=max_age_hours) <= seen <= cutoff:
+            prior = latest.get(record["url"])
+            if prior is not None:
+                old_available = parse_utc(prior["available_at"])
+                if available == old_available and record["content_checksum"] != prior["content_checksum"]:
+                    raise FinplanError.precondition("conflicting news versions at one availability time", reason="news_revision_conflict")
+                if available < old_available:
+                    continue
+            latest[record["url"]] = record
+    eligible = list(latest.values())
     if not eligible:
         return {"status": "missing", "sentiment": 0., "count": 0, "age_hours": 0., "uncertainty": 0., "earnings_event": 0., "missing": 1.}
     n = len(eligible)
     result = {"status": "available", "sentiment": sum(r["features"]["sentiment"] for r in eligible) / n,
-              "count": n, "age_hours": min((cutoff - parse_utc(r["available_at"])).total_seconds() / 3600 for r in eligible),
+              "count": n, "age_hours": min((cutoff - parse_utc(r["first_seen_at"])).total_seconds() / 3600 for r in eligible),
               "uncertainty": sum(r["features"]["uncertainty"] for r in eligible) / n,
               "earnings_event": max(r["features"]["earnings_event"] for r in eligible), "missing": 0.}
     if not all(math.isfinite(v) for v in result.values() if isinstance(v, (int, float))):

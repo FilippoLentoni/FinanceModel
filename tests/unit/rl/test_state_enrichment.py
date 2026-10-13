@@ -70,3 +70,30 @@ def test_frozen_beta_implementation_identity_survives_enrichment():
     bundle = {"environment": {"features": ["market_summary", "cross_asset_risk"]}}
     assert implementation_identity(bundle)["version"] == "finplan-policy-inference/2"
     assert evaluation_implementation(bundle) != evaluation_implementation()
+
+
+@pytest.mark.parametrize("profile", list(STATE_PROFILES)[1:])
+def test_exported_numpy_actor_matches_sb3_for_enriched_states(profile, tmp_path):
+    from stable_baselines3 import PPO
+    from finplan_model.rl.inference import export_actor, recommend
+    spec = EnvSpec.from_dict(profile_protocol(tiny_protocol(), profile)["rl"]["env"])
+    mkt, cfg = market(), daily_config()
+    arrays = PriceArrays.from_market(mkt)
+    env = PortfolioEnv(arrays, spec, cfg, i0=70, i1=120, mode="eval")
+    model = PPO("MlpPolicy", env, n_steps=16, batch_size=8, seed=0, device="cpu")
+    checkpoint = tmp_path / "synthetic-policy.zip"
+    model.save(checkpoint)
+    prices = arrays.close[10:71]
+    obs = build_observation(spec, prices, np.full(5, .1), .5, drawdown=.1)
+    expected_action = model.predict(obs, deterministic=True)[0]
+    from finplan_model.rl.spec import allocation_action
+    expected, cash = allocation_action(spec, expected_action, np.full(5, .1), .5)
+    environment = spec.document(); environment.pop("reward_formula")
+    bundle = {"environment": environment, "instruments": list(arrays.instruments),
+              "source_run_id": "run_synthetic", "configuration_id": "cfg_synthetic",
+              "members": [{"seed": 0, "actor": export_actor(checkpoint.read_bytes())}], "constraints": {}}
+    holdings = {"weights": [{"instrument_id": i, "weight": .1} for i in arrays.instruments],
+                "cash_weight": .5, "portfolio_value": 900., "high_watermark": 1000.}
+    result = recommend(bundle, prices, holdings)
+    np.testing.assert_allclose([r["weight"] for r in result["target_weights"]], expected, atol=1e-7)
+    assert result["cash_weight"] == pytest.approx(cash, abs=1e-7)
