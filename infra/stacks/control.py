@@ -218,7 +218,7 @@ class ControlStack(ModelStack):
             crypto = scheduler.CfnSchedule(self, "HourlyCryptoResearchSchedule", name=n.env_name(env, "hourly-crypto-research"),
                     description="Hourly synthetic USD 100 crypto portfolios; bounded CPU inference only, no training or live orders",
                     schedule_expression="cron(10 * * * ? *)", schedule_expression_timezone="UTC", state="ENABLED",
-                end_date="2026-10-21T00:00:00Z",
+                end_date="2026-10-21T00:00:00.000Z",
                     flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(mode="OFF"),
                     target=scheduler.CfnSchedule.TargetProperty(arn=controller.function_arn, role_arn=weekly_role.role_arn, input='{"trigger":"hourly_crypto_research","scheduled_at":"<aws.scheduler.scheduled-time>"}',
                            retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=1, maximum_event_age_in_seconds=1800)))

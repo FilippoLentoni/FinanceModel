@@ -332,7 +332,7 @@ def test_daily_trigger_stays_unscheduled_with_bounded_weekly_and_hourly_paper_re
     assert '"trigger":"weekly_classical_research"' in src
     assert 'schedule_expression="cron(10 * * * ? *)"' in src
     assert '"trigger":"hourly_crypto_research"' in src
-    assert 'end_date="2026-10-21T00:00:00Z"' in src
+    assert 'end_date="2026-10-21T00:00:00.000Z"' in src
     assert 'input="{}"' in src  # the tick carries no job request
 
 
