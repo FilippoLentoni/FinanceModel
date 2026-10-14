@@ -52,7 +52,7 @@ def recommendations(dataset, current_books=None):
     cfg=settings({'lookback_days':min(167,len(returns)), 'horizon_sessions':1,'cash_weight':.1,'max_weight':.6,'turnover_penalty':.001})
     out={}
     for algorithm in ALGORITHMS:
-        inputs={'algorithm':algorithm,'instruments':PRODUCTS,'settings':cfg,'current_weights':([current_books[algorithm]['quantities'][p]*dataset['bars'][p][-1]['close']/current_books[algorithm]['value'] for p in PRODUCTS] if current_books else [.45,.45]),
+        inputs={'algorithm':algorithm,'instruments':PRODUCTS,'settings':cfg,'current_weights':([current_books[algorithm]['quantities'][p]*dataset['bars'][p][-1]['close']/(current_books[algorithm]['cash']+sum(current_books[algorithm]['quantities'][q]*dataset['bars'][q][-1]['close'] for q in PRODUCTS)) for p in PRODUCTS] if current_books else [.45,.45]),
                 'covariance':cov.tolist(),'expected_returns':returns.mean(axis=0).tolist(),'scenarios':returns.tolist()}
         result=solve(inputs)
         status=result['status']
@@ -160,11 +160,16 @@ def run_hour(service, *, scheduled_at=None):
     previous=rows[0]['experiment'] if rows else None
     if previous and dt(dataset['as_of'])<=dt(previous['as_of']):
         raise FinplanError.precondition('out-of-order crypto research run',reason='crypto_out_of_order')
-    plans=recommendations(dataset, previous['books'] if previous else None); now=service.now()
+    now=service.now()
+    books=advance(previous,dataset,{name:{'eligible':False} for name in ALGORITHMS},now)
+    plans=recommendations(dataset,books)
+    for name in ALGORITHMS:
+        if plans[name]['eligible']:
+            books[name]['pending'].append({'weights':plans[name]['weights'],'available_at':iso(now),'decision_as_of':dataset['as_of']})
     exp={'experiment_id':IMPLEMENTATION,'as_of':dataset['as_of'],'started_at':previous['started_at'] if previous else iso(now),
          'initial_capital_usd':100,'synthetic':True,'market_data_synthetic':dataset['market_data_synthetic'],'observation_count':previous['observation_count']+1 if previous else 1,
          'parent_analysis_id':rows[0]['analysis_id'] if rows else None,'dataset_checksum':dataset['dataset_checksum'],'dataset_available_at':dataset['available_at'],
-         'books':advance(previous,dataset,plans,now),'models':plans,'cost_assumptions':{'fee_bps':60,'slippage_bps':10,'cash_return':0},
+         'books':books,'models':plans,'cost_assumptions':{'fee_bps':60,'slippage_bps':10,'cash_return':0},
          'supplemental_data':{'status':'baseline_free_data','paid_evidence_count':0,'historical_news_training_eligible':False},
          'limitations':['Forward paper simulation; no guarantee of live returns.','Synthetic opens approximate fills; no order-book liquidity model.','Volatility and Sharpe require a sufficiently long comparable history and are not reported at initialization.'],
          'implementation_checksum':sha256_checksum(Path(__file__).read_bytes())}
@@ -187,8 +192,23 @@ def handle(service,operation,body):
         raw=result.pop('untrusted_catalog_evidence')
         result.pop('source',None)
         result['catalog_evidence_checksum']=sha256_checksum(canonical_json_bytes(raw))
-        text=' '.join(b.get('text','') for b in raw.get('content',[]) if isinstance(b,dict))
-        result['catalog_summary']=re.sub(r'https?://[^\s"<>]+','[provider endpoint withheld]',text)[:6000]
+        import json
+        resources=[]
+        for block in raw.get('content',[]):
+            try:catalog=json.loads(block.get('text',''))
+            except (ValueError,AttributeError):continue
+            if not isinstance(catalog,dict):continue
+            for item in catalog.get('tools',[])[:3]:
+                if not isinstance(item,dict):continue
+                meta=item.get('_meta',{})
+                accepts=meta.get('x402/payment-required',{}).get('accepts',[])
+                description=re.sub(r'https?://[^\s"<>]+','[endpoint withheld]',str(item.get('description','')))[:400]
+                resources.append({'name':str(item.get('name','unnamed'))[:120], 'description':description,
+                    'observed_price_usd':str(meta.get('x402/guidance',{}).get('costObservedUsd','unknown'))[:30],
+                    'networks':[str(a.get('network',''))[:64] for a in accepts[:3] if isinstance(a,dict)],
+                    'metadata_trust':'unverified_catalog', 'payment_eligible':False})
+        result['resources']=resources[:3]
+        result['catalog_summary']='\n'.join(r['name']+': '+r['description']+'; observed catalog price USD '+r['observed_price_usd'] for r in resources[:3]) or 'No usable bounded catalog entries were returned.' 
         result['purchase_status']='operator_approval_required; hosted signing disabled'
         return service.issue('research_discovery',{'summary':'Free Coinbase x402 Bazaar discovery; purchases require the separate operator approval path.','discovery':result},{'query':body.get('query'),'at':iso(service.now())})
     rows=service.store.list(kind='crypto_experiment',limit=1)

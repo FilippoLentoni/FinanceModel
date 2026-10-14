@@ -58,3 +58,18 @@ def test_hourly_replay_and_out_of_order_are_safe():
     first=run_hour(service);second=run_hour(service)
     assert first['analysis_id']==second['analysis_id']
     assert second['experiment']['observation_count']==1
+
+
+def test_controller_recomputes_targets_after_pending_fills(monkeypatch):
+    import finplan_model.crypto_research as crypto
+    end=datetime(2026,1,3,tzinfo=UTC);current={'end':end}
+    service=ClassicalService(env='beta',now=lambda:current['end']+timedelta(minutes=10),store=MemoryStore(),deps=SimpleNamespace(project_budget=lambda:{'spent':1,'limit':100},platform=SimpleNamespace(get_crypto_dataset=lambda:dataset(current['end']))))
+    seen=[];original=crypto.recommendations
+    def capture(data,books=None):
+        seen.append(copy.deepcopy(books));return original(data,books)
+    monkeypatch.setattr(crypto,'recommendations',capture)
+    for i in range(3):
+        current['end']=end+timedelta(hours=i);run_hour(service)
+    assert seen[0]['min_variance']['quantities']['BTC-USD']==0
+    assert seen[2]['min_variance']['quantities']['BTC-USD']>0
+    assert seen[2]['min_variance']['cumulative_fees']>0
