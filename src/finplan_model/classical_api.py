@@ -23,6 +23,7 @@ log = logging.getLogger("finplan_model.classical")
 log.setLevel(logging.INFO)
 _SERVICE = None
 OPS = (
+    "get_crypto_experiment", "recommend_crypto_portfolio", "list_crypto_history", "discover_research_data",
     "recommend_classical_portfolio",
     "explain_classical_recommendation",
     "compare_classical_plans",
@@ -230,6 +231,9 @@ def handle(event, service):
     body = require_valid(
         event.get("request", {}), "tools/" + op.replace("_", "-") + "-request"
     )
+    if op in ("get_crypto_experiment", "recommend_crypto_portfolio", "list_crypto_history", "discover_research_data"):
+        from .crypto_research import handle as crypto_handle
+        return require_valid(crypto_handle(service, op, body), "tools/" + op.replace("_", "-") + "-response")
     idem_key = (
         body.get("idempotency_key")
         if op in ("recommend_classical_portfolio", "submit_portfolio_feedback", "run_recursive_improvement")
@@ -392,6 +396,9 @@ def weekly_handler(event, context=None):
         raise FinplanError.precondition(
             "weekly research is beta only", reason="research_disabled"
         )
+    if event.get("trigger") == "hourly_crypto_research":
+        from .crypto_research import run_hour
+        return run_hour(service, scheduled_at=event.get("scheduled_at"))
     resumed = scheduled_recursive_review(service)
     if resumed is not None:
         return resumed

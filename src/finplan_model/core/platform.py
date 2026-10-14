@@ -469,6 +469,9 @@ class HttpPlatformClient:
     def get_latest_snapshot(self, dataset_id: str) -> dict[str, Any]:
         return self._json("GET", "/v1/snapshots/latest", {"dataset_id": dataset_id})
 
+    def get_crypto_dataset(self):
+        return self._json("GET", "/v1/crypto-research/latest")
+
     def get_plan(self, plan_id: str) -> dict[str, Any]:
         require_id("plan_id", plan_id)
         return self._json("GET", f"/v1/plans/{plan_id}")
