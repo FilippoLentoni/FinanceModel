@@ -154,6 +154,7 @@ def run_hour(service, *, scheduled_at=None):
     except FinplanError as exc:
         if exc.code!='NOT_FOUND':raise
     else:
+        recovered=service.store.put(recovered)  # repair a record whose index write failed
         service.store.claim(claim_key,{'analysis_id':expected})
         return public(recovered)
     rows=service.store.list(kind='crypto_experiment',limit=1)
@@ -163,6 +164,10 @@ def run_hour(service, *, scheduled_at=None):
     now=service.now()
     books=advance(previous,dataset,{name:{'eligible':False} for name in ALGORITHMS},now)
     plans=recommendations(dataset,books)
+    now=service.now()  # policy formation time follows the numerical solves
+    if previous is None:
+        for book in books.values():
+            for pending in book['pending']:pending['available_at']=iso(now)
     for name in ALGORITHMS:
         if plans[name]['eligible']:
             books[name]['pending'].append({'weights':plans[name]['weights'],'available_at':iso(now),'decision_as_of':dataset['as_of']})

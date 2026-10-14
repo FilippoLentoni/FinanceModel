@@ -73,3 +73,24 @@ def test_controller_recomputes_targets_after_pending_fills(monkeypatch):
     assert seen[0]['min_variance']['quantities']['BTC-USD']==0
     assert seen[2]['min_variance']['quantities']['BTC-USD']>0
     assert seen[2]['min_variance']['cumulative_fees']>0
+
+
+def test_retry_repairs_the_index_after_a_record_only_commit():
+    class IndexFailureStore(MemoryStore):
+        def __init__(self):super().__init__();self.indexed=set();self.fail=True
+        def put(self,doc):
+            result=super().put(doc)
+            if self.fail:
+                self.fail=False
+                raise RuntimeError('injected failure after record before index')
+            self.indexed.add(doc['analysis_id']);return result
+        def list(self,**kwargs):return [d for d in super().list(**kwargs) if d['analysis_id'] in self.indexed]
+    end=datetime(2026,1,3,tzinfo=UTC);current={'end':end};store=IndexFailureStore()
+    service=ClassicalService(env='beta',now=lambda:current['end']+timedelta(minutes=10),store=store,deps=SimpleNamespace(project_budget=lambda:{'spent':1,'limit':100},platform=SimpleNamespace(get_crypto_dataset=lambda:dataset(current['end']))))
+    with pytest.raises(RuntimeError):run_hour(service)
+    recovered=run_hour(service)
+    assert recovered['analysis_id'] in store.indexed
+    current['end']=end+timedelta(hours=1)
+    next_record=run_hour(service)
+    assert next_record['experiment']['parent_analysis_id']==recovered['analysis_id']
+    assert next_record['experiment']['observation_count']==2
