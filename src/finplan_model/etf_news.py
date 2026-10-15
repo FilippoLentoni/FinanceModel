@@ -72,6 +72,8 @@ def compare_optimizer(inputs,features):
     enriched['covariance']=(np.asarray(inputs['covariance'])*np.outer(scale,scale)).tolist()
     enriched['scenarios']=(np.asarray(inputs['scenarios'])*scale).tolist()
     base=solve(inputs);augmented=solve(enriched)
+    if any(result.get('status')!='optimal' for result in (base,augmented)):
+        return {'status':'ineligible','reason':'matched_solver_not_certified','price_only_status':base.get('status'),'news_enriched_status':augmented.get('status')}
     return {'status':'computed','instruments':list(inputs['instruments']),'price_only':base,'news_enriched':augmented,
             'input_checksum':sha256_checksum(canonical_json_bytes(inputs)),
             'enriched_input_checksum':sha256_checksum(canonical_json_bytes(enriched)),
