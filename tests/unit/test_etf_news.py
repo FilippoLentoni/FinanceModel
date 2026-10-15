@@ -62,7 +62,7 @@ def test_snapshot_baseline_filters_mixed_universe_and_records_price_provenance(m
     start=datetime(2025,10,1,22,tzinfo=UTC)
     times=[start+timedelta(days=i) for i in range(70)]
     market=MarketData([t.date() for t in times],[Bar(s,t.date(),100+i+(i%3)*.1,t) for s in ('VOO','AAPL') for i,t in enumerate(times)],synthetic=True)
-    content=SimpleNamespace(snapshot=SimpleNamespace(manifest_checksum='sha256:'+'a'*64))
+    content=SimpleNamespace(snapshot=SimpleNamespace(manifest_checksum='sha256:'+'a'*64,record={'created_at':times[-1].isoformat()}))
     monkeypatch.setattr(loader,'load_market',lambda *args:(market,content))
     svc=SimpleNamespace(d=SimpleNamespace(platform=None));decision=times[-1].isoformat()
     inputs,reason=snapshot_baseline(svc,'synthetic-snapshot',['VOO'],decision,'cvar')
@@ -70,3 +70,19 @@ def test_snapshot_baseline_filters_mixed_universe_and_records_price_provenance(m
     assert inputs['settings']['max_weight']==1 and inputs['estimation']['observations']>=20
     missing,reason=snapshot_baseline(svc,'synthetic-snapshot',['SPY'],decision,'cvar')
     assert missing is None and reason=='snapshot_missing_requested_etfs'
+    content.snapshot.record['created_at']=(times[-1]+timedelta(days=1)).isoformat()
+    missing,reason=snapshot_baseline(svc,'synthetic-snapshot',['VOO'],decision,'cvar')
+    assert missing is None and reason=='snapshot_vintage_unavailable_at_decision'
+
+
+def test_explicit_single_etf_optimizer_uses_latest_approved_snapshot(monkeypatch):
+    import finplan_model.etf_news as module
+    d=data();d['symbols']=['VOO']
+    calls=[]
+    platform=SimpleNamespace(get_research_news=lambda symbols,at:d,
+        get_latest_snapshot=lambda dataset:(calls.append(dataset) or {'snapshot':{'input_snapshot_id':'synthetic-latest'}}))
+    svc=SimpleNamespace(env='beta',now=lambda:datetime(2026,1,2,14,tzinfo=UTC),d=SimpleNamespace(platform=platform),store=MemoryStore())
+    monkeypatch.setattr(module,'snapshot_baseline',lambda service,ident,symbols,decision,algorithm:(None,'snapshot_missing_requested_etfs'))
+    result=module.handle(svc,{'symbols':['VOO'],'algorithm':'cvar'})
+    assert calls==['finance/equity-etf-daily/research-universe']
+    assert result['models']['optimization']['comparison']['reason']=='snapshot_missing_requested_etfs'

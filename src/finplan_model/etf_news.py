@@ -90,6 +90,8 @@ def snapshot_baseline(service,snapshot_id,symbols,decision,algorithm):
     market,content=load_market(service.d.platform,snapshot_id)
     if not set(symbols)<=set(market.instruments):return None,'snapshot_missing_requested_etfs'
     cutoff=dt(decision)
+    created=getattr(content.snapshot,'record',{}).get('created_at')
+    if not created or dt(created)>cutoff:return None,'snapshot_vintage_unavailable_at_decision'
     sessions=[d for d in market.sessions if market.decision_time(d)<=cutoff]
     if not sessions:return None,'no_completed_price_session'
     as_of=max(sessions);view=PointInTimeView(market,as_of,cutoff,tuple(symbols));returns=pit_returns(view,60)
@@ -98,7 +100,7 @@ def snapshot_baseline(service,snapshot_id,symbols,decision,algorithm):
     inputs={'algorithm':algorithm,'instruments':symbols,'settings':cfg,'current_weights':[.9/len(symbols)]*len(symbols),
             'expected_returns':returns.mean(axis=0).tolist(),'covariance':estimate_covariance(returns,'ledoit_wolf').tolist(),'scenarios':returns.tolist(),
             'as_of':as_of.isoformat(),'decision_time':decision,'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,
-            'estimation':{'basis':'approved_adjusted_completed_prices','observations':len(returns),'current_weights':'synthetic_equal_weight_start'}}
+            'snapshot_created_at':created,'estimation':{'basis':'approved_adjusted_completed_prices','observations':len(returns),'current_weights':'synthetic_equal_weight_start'}}
     return inputs,None
 
 
@@ -116,8 +118,12 @@ def handle(service,body):
     usable=all(not features[s]['missing'] for s in symbols)
     comparison={'status':'ineligible','reason':'baseline_analysis_id_required'}
     if body.get('baseline_analysis_id') and body.get('input_snapshot_id'):raise FinplanError.validation('choose one baseline source',pointer='/input_snapshot_id')
-    if body.get('input_snapshot_id'):
-        inputs,reason=snapshot_baseline(service,body['input_snapshot_id'],symbols,decision,body.get('algorithm','mean_variance'))
+    snapshot_id=body.get('input_snapshot_id')
+    if not snapshot_id and not body.get('baseline_analysis_id') and body.get('algorithm') and len(symbols)==1:
+        dataset_id='finance/etf-daily/SPY' if symbols==['SPY'] else 'finance/equity-etf-daily/research-universe'
+        snapshot_id=service.d.platform.get_latest_snapshot(dataset_id)['snapshot']['input_snapshot_id']
+    if snapshot_id:
+        inputs,reason=snapshot_baseline(service,snapshot_id,symbols,decision,body.get('algorithm','mean_variance'))
         comparison=compare_optimizer(inputs,features) if inputs else {'status':'ineligible','reason':reason}
     if body.get('baseline_analysis_id'):
         baseline=service.store.get(body['baseline_analysis_id']);inputs=baseline.get('solve_inputs')
