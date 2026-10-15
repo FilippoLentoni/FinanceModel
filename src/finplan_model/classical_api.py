@@ -23,6 +23,7 @@ log = logging.getLogger("finplan_model.classical")
 log.setLevel(logging.INFO)
 _SERVICE = None
 OPS = (
+    "get_etf_research_inputs",
     "get_crypto_experiment", "recommend_crypto_portfolio", "list_crypto_history", "discover_research_data",
     "recommend_classical_portfolio",
     "explain_classical_recommendation",
@@ -231,6 +232,9 @@ def handle(event, service):
     body = require_valid(
         event.get("request", {}), "tools/" + op.replace("_", "-") + "-request"
     )
+    if op == "get_etf_research_inputs":
+        from .etf_news import handle as etf_handle
+        return require_valid(etf_handle(service, body), "tools/get-etf-research-inputs-response")
     if op in ("get_crypto_experiment", "recommend_crypto_portfolio", "list_crypto_history", "discover_research_data"):
         from .crypto_research import handle as crypto_handle
         return require_valid(crypto_handle(service, op, body), "tools/" + op.replace("_", "-") + "-response")
