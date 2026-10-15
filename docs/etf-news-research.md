@@ -23,3 +23,24 @@ uncertainty. This is a sensitivity experiment, not a calibrated forecast. Output
 checksums, weights, turnover and solver risk metrics; no accuracy or profitability claim is made.
 Newly collected news cannot create a historical backtest. Matched forward net outcomes remain
 necessary before claiming improvement. No new cloud training or automatic production activation.
+
+Opt-in PPO environment integration
+
+EnvSpec features can explicitly include etf_news_metadata_v1. It adds five values per instrument,
+in instrument order: sentiment, min(event_count,100)/100, uncertainty, min(age_hours,24)/24,
+and missing. The feature name versions this normalization and changes configuration_id.
+Existing feature defaults, observation bytes and default environment documents are unchanged.
+
+build_observation requires news_dataset, instruments and decision_time when this group is selected.
+PortfolioEnv and RLPolicyStrategy accept news_provider(instruments, decision_time), which returns
+api/research-news-response. PriceArrays.from_market retains exact market decision timestamps;
+legacy arrays without those timestamps cannot enable news. FrozenEtfNewsProvider freezes a corpus
+and exposes corpus_checksum for experiment provenance; use the checksum with policy artifacts.
+It preserves original publication/retrieval/availability dates at every historical request.
+
+Training observations require research_and_training rights plus eligible 24-hour coverage for
+EVERY instrument at EVERY decision. Research-only, future, missing or stale inputs fail training.
+Evaluation can represent excluded data using explicit missingness, provided a source/provider was
+supplied. No provider is inferred, no historic data is manufactured and no checkpoint is retrained
+or activated by selecting the feature. Existing job protocols remain unchanged unless explicitly
+configured and wired with a frozen provider. No measured accuracy improvement is claimed.

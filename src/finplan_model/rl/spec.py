@@ -69,7 +69,7 @@ __all__ = [
 ENV_SPEC_VERSION = "finplan-rl-env/2"
 #: Features the environment implements; a specification may declare only these.
 STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown",
-                  "cross_asset_risk", "market_regime", "recent_returns")
+                  "cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1")
 # Preserve the original observation unless a released experiment opts into new features.
 DEFAULT_FEATURES = ("log_return_window", "current_weights")
 ACTION_TRANSFORMS = ("softmax",)
@@ -205,6 +205,8 @@ class EnvSpec:
             size += 6
         if "recent_returns" in self.features:
             size += 5 * n_instruments
+        if "etf_news_metadata_v1" in self.features:
+            size += 5 * n_instruments
         return size
 
 
@@ -222,9 +224,28 @@ def softmax_weights(action: Any, n_instruments: int, action_scale: float) -> tup
     return weights, cash
 
 
-def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None) -> np.ndarray:
+def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None, news_dataset: Mapping[str, Any] | None = None, instruments: tuple[str, ...] | None = None, decision_time: str | None = None, news_training: bool = False) -> np.ndarray:
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
     parts: dict[str, np.ndarray] = {}
+    if "etf_news_metadata_v1" in spec.features:
+        from finplan_model.etf_news import ETF_UNIVERSE, extract, dt
+        from finplan_model.core.outcome import require_valid
+        if news_dataset is None or instruments is None or decision_time is None:
+            raise FinplanError.precondition("ETF news state requires explicit source data, instrument order and decision cutoff", reason="news_state_input_missing")
+        if len(instruments)!=len(weights) or len(set(instruments))!=len(instruments) or set(instruments)-ETF_UNIVERSE:
+            raise FinplanError.validation("ETF news state requires matching ETF instrument order", pointer="/observation/instruments")
+        require_valid(news_dataset,"api/research-news-response")
+        if set(instruments)!=set(news_dataset['symbols']) or dt(news_dataset['decision_at'])!=dt(decision_time):
+            raise FinplanError.precondition("news dataset query must match observation cutoff and universe", reason="news_state_query_mismatch")
+        features,_,_=extract(news_dataset,symbols=instruments,decision_time=decision_time,training=news_training)
+        if news_training and any(features[i]['missing'] for i in instruments):
+            raise FinplanError.precondition("news training requires licensed frozen coverage at every decision", reason="news_training_coverage_or_rights_missing")
+        values=[]
+        for instrument in instruments:
+            f=features[instrument]
+            values.extend([f['sentiment'],min(f['event_count'],100.)/100.,f['uncertainty'],min(f['age_hours'],24.)/24.,f['missing']])
+        parts['etf_news_metadata_v1']=np.asarray(values,dtype=np.float64)
+
     enriched = {"cross_asset_risk", "market_regime", "recent_returns"} & set(spec.features)
     if enriched:
         px = np.asarray(closes, dtype=np.float64)

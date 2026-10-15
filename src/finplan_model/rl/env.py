@@ -57,7 +57,8 @@ class Book:
 class Accounting:
     """The simulator's execution and marking rules over :class:`PriceArrays` (see module docstring)."""
 
-    def __init__(self, arrays: PriceArrays, config: SimulationConfig) -> None:
+    def __init__(self, arrays: PriceArrays, config: SimulationConfig, *, news_provider=None, news_training=False) -> None:
+        self.news_provider,self.news_training = news_provider,news_training
         self.a = arrays
         self.cfg = config
         self.per_period = (1.0 + config.cash_rate_annual) ** (1.0 / config.periods_per_year) - 1.0
@@ -153,7 +154,15 @@ class Accounting:
         value = book.value(self.a.close[k])
         peak = max(book.log, default=value)
         drawdown = max(0.0, min(1.0, 1 - value / peak)) if peak > 0 else 0.0
-        return build_observation(spec, closes, w, c, drawdown=drawdown)
+        kwargs={}
+        if 'etf_news_metadata_v1' in spec.features:
+            from finplan_model.core.errors import FinplanError
+            if self.news_provider is None or self.a.decision_times is None:
+                raise FinplanError.precondition('ETF news observation requires a provider and exact decision timestamps',reason='news_provider_missing')
+            cutoff=self.a.decision_times[k].isoformat()
+            kwargs={'news_dataset':self.news_provider(self.a.instruments,cutoff), 'instruments':self.a.instruments,
+                    'decision_time':cutoff,'news_training':self.news_training}
+        return build_observation(spec, closes, w, c, drawdown=drawdown,**kwargs)
 
 
 Predict = Callable[[np.ndarray], Any]
@@ -210,12 +219,15 @@ class PortfolioEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, arrays: PriceArrays, spec: EnvSpec, config: SimulationConfig, *, i0: int, i1: int, mode: str = "train", schedule: Sequence[int] | None = None) -> None:
+    def __init__(self, arrays: PriceArrays, spec: EnvSpec, config: SimulationConfig, *, i0: int, i1: int, mode: str = "train", schedule: Sequence[int] | None = None, news_provider=None) -> None:
         super().__init__()
         if mode not in ("train", "eval"):
             raise ValueError(mode)
         self.arrays, self.env_spec, self.cfg = arrays, spec, config
-        self.acc = Accounting(arrays, config)
+        if 'etf_news_metadata_v1' in spec.features and (news_provider is None or arrays.decision_times is None):
+            from finplan_model.core.errors import FinplanError
+            raise FinplanError.precondition('Selected ETF news state requires explicit provider and source decision times',reason='news_provider_missing')
+        self.acc = Accounting(arrays, config,news_provider=news_provider,news_training=mode=='train')
         self.n = self.acc.n
         self.i0, self.i1, self.mode = i0, i1, mode
         first = i0 + spec.window
