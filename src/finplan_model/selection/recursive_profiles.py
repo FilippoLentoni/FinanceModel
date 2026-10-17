@@ -14,13 +14,24 @@ STATE_PROFILES = {
     "recursive_ppo_state_combined": ("cross_asset_risk", "market_regime", "recent_returns"),
 }
 DAILY_HISTORY_PROFILE = "recursive_ppo_daily_history"
+GDELT_INTRADAY_PROFILE = "recursive_ppo_gdelt_premarket"
 GDELT_PROFILE = "recursive_ppo_gdelt_morning"
-PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES, DAILY_HISTORY_PROFILE, GDELT_PROFILE)
+PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES, DAILY_HISTORY_PROFILE, GDELT_PROFILE, GDELT_INTRADAY_PROFILE)
 
 
 def profile_protocol(base, profile):
     if profile not in PROFILES:
         raise FinplanError.validation("unknown released recursive PPO profile", pointer="/configuration/payload/objective")
+    if profile == GDELT_INTRADAY_PROFILE:
+        p=profile_protocol(base,'recursive_ppo_state_baseline')
+        p['data_start']='2024-01-01'
+        p['splits']={'train':{'start':'2024-01-01','end':'2025-05-31'},
+                     'validation':{'start':'2025-07-02','end':'2025-12-31'},
+                     'test':{'start':'2026-01-01','end':None}}
+        p['rl']['env']['features'].append('gdelt_intraday_organization_tone_v1')
+        p['rl']['decision_timing']='next_session_morning'
+        p['rl']['development_evaluation']=True
+        return p
     if profile == GDELT_PROFILE:
         p=profile_protocol(base,'recursive_ppo_state_baseline')
         p['rl']['env']['features'].append('gdelt_organization_tone_v1')

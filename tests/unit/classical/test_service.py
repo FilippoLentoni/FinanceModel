@@ -364,9 +364,9 @@ def test_eight_profile_optimizers_consume_current_numeric_metadata_and_freeze_se
     from finplan_model.core.platform import build_synthetic_snapshot
     from finplan_model.core.artifacts import sha256_checksum
     from finplan_model.paper_profile import DAILY_INSTRUMENTS,identity
-    from finplan_model.rl.gdelt import FEATURE_VERSION
+    from finplan_model.rl.gdelt_intraday import FEATURE_VERSION,formation_cutoff
     from finplan_model.sim.market import synthetic_market
-    from tests.unit.rl.test_gdelt_state import archive
+    from tests.unit.rl.test_gdelt_intraday import archive
     names=[*DAILY_INSTRUMENTS,'NFLX'];market=synthetic_market(names,n_sessions=180,seed=14)
     payload=copy.deepcopy(context.payload)
     payload['observations']=[{'instrument_id':b.instrument_id,'session_date':b.session_date.isoformat(),'kind':'completed_daily','open':b.open,'high':b.high,'low':b.low,'close':b.close,'adj_close':b.close,'volume':int(b.volume)} for i in market.instruments for b in market.bars_of(i)]
@@ -379,20 +379,20 @@ def test_eight_profile_optimizers_consume_current_numeric_metadata_and_freeze_se
     now=datetime(2026,10,10,14,tzinfo=UTC);context.service.now=lambda:now;calls=[]
     def read(symbols,start,end,cutoff,*,availability_mode):
         calls.append((symbols,cutoff,availability_mode));wrappers=[]
-        for source_day in ('2026-10-08','2026-10-09'):
+        for source_day in ('2026-10-10',):
             wrapper=archive(source_day);doc=wrapper['document'];doc['aliases']={s:['synthetic '+s] for s in names}
             doc['features']=[{'instrument_id':s,'article_count':k+1,'cluster_count':k+1,'tone':float(k-3),'missing':False} for k,s in enumerate(names)]
             doc['lineage'].update(retrieved_at='2026-10-10T12:01:00Z',platform_available_at='2026-10-10T12:01:00Z',central_available_at='2026-10-10T12:02:00Z')
             wrapper['checksum']=sha256_checksum(json.dumps(doc,sort_keys=True,separators=(',',':'),allow_nan=False).encode());wrappers.append(wrapper)
-        return {'contract_version':'1.10.0','feature_version':FEATURE_VERSION,'symbols':symbols,'decision_at':cutoff,'availability_mode':availability_mode,
-                'coverage':{'start_date':start,'end_date':end,'expected_days':2,'captured_days':2,'complete':True,'missing_days':[]},'documents':wrappers}
-    context.platform.get_gdelt_metadata=read
+        return {'contract_version':'1.11.0','feature_version':FEATURE_VERSION,'symbols':symbols,'decision_at':cutoff,'availability_mode':availability_mode,
+                'coverage':{'start_date':start,'end_date':end,'expected_days':1,'captured_days':1,'complete':True,'missing_days':[]},'documents':wrappers}
+    context.platform.get_gdelt_intraday_metadata=read
     out=context.service.recommend({'portfolio_id':context.pid,'algorithm':algorithm,'settings':{'cash_weight':.1}})
     evidence=out['recommendation']['diagnostics']['news_evidence'];saved=context.service.store.get(out['analysis_id'])
-    assert evidence['consumed'] and evidence['feature_protocol']==FEATURE_VERSION and evidence['provenance']['source_day']=='2026-10-09'
+    assert evidence['consumed'] and evidence['feature_protocol']==FEATURE_VERSION and evidence['provenance']['source_day']=='2026-10-10'
     assert evidence['price_only_inputs_checksum']!=evidence['news_inputs_checksum']
     assert evidence['sensitivity_assumptions']['coefficients_estimated_from_returns'] is False
-    assert len(saved['solve_inputs']['current_weights'])==8 and saved['solve_inputs']['decision_time']==now.isoformat()
+    assert len(saved['solve_inputs']['current_weights'])==8 and saved['solve_inputs']['decision_time']==formation_cutoff(now.isoformat())
     assert out['recommendation']['decision_timing']=='after_completed_close_for_next_session'
     assert out['recommendation']['news_timing']=='eligible_news_at_decision_with_completed_prices'
     assert calls[0][2]=='platform'

@@ -3,7 +3,7 @@ from .legacy_v1.inference import actor_action, export_actor, portfolio_state, al
 from .legacy_v1 import inference as legacy
 from . import inference_v2 as enriched
 
-ENRICHED = frozenset(("cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1", "gdelt_organization_tone_v1"))
+ENRICHED = frozenset(("cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1", "gdelt_organization_tone_v1", "gdelt_intraday_organization_tone_v1"))
 
 def implementation_for(bundle=None):
     features = (bundle or {}).get("environment", {}).get("features", [])

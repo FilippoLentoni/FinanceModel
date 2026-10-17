@@ -303,7 +303,7 @@ class JobService:
         remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id, ceiling_usd=ceiling)
         block = est.block(remaining, synthetic=synthetic)
         require_valid(block, "cost-estimate")
-        if 'gdelt_organization_tone_v1' in selection.get('selection_protocol',{}).get('rl',{}).get('env',{}).get('features',[]):
+        if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(selection.get('selection_protocol',{}).get('rl',{}).get('env',{}).get('features',[])):
             self._freeze_gdelt_corpus(selection['selection_protocol'],sub)
         if dry_run:
             resp = {"run_id": None, "configuration_id": sub.configuration_id, "state": None, "dry_run": True, "cost_estimate": block, "message": "Dry run: the request is valid and estimated; no run was recorded and no job started."}
@@ -439,9 +439,9 @@ class JobService:
         from finplan_model.selection.protocol import validate_protocol
 
         protocol = validate_protocol(sub.job_type.protocol or {})
-        from finplan_model.selection.recursive_profiles import profile_protocol,DAILY_HISTORY_PROFILE,GDELT_PROFILE
+        from finplan_model.selection.recursive_profiles import profile_protocol,DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE
         objective=sub.body['configuration']['payload'].get('objective')
-        manual_profile=sub.job_type.name=='model_selection' and objective in (DAILY_HISTORY_PROFILE,GDELT_PROFILE)
+        manual_profile=sub.job_type.name=='model_selection' and objective in (DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE)
         if sub.job_type.name == "recursive_evaluate" or manual_profile:
             protocol = validate_protocol(profile_protocol(protocol, sub.body["configuration"]["payload"].get("objective")))
         prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") in ("model_selection", "recursive_evaluate") and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
@@ -463,10 +463,13 @@ class JobService:
         """Only after producer cost/budget checks; no learner runs in the API."""
         from datetime import date,timedelta
         from finplan_model.rl.gdelt import freeze_from_api
+        intraday='gdelt_intraday_organization_tone_v1' in protocol['rl']['env']['features']
+        if intraday:
+            from finplan_model.rl.gdelt_intraday import freeze_from_api
         if self.d.platform is None or self.d.artifacts is None:
             raise FinplanError.precondition('GDELT training requires central archive and immutable research storage',reason='gdelt_training_source_missing')
         snap=SnapshotReader(self.d.platform).resolve(str(sub.body['input_snapshot_id']))
-        last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=1)
+        last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=0 if intraday else 1)
         symbols=sorted(sub.body['configuration']['payload']['universe'])
         dataset,evidence=freeze_from_api(self.d.platform,symbols,protocol['splits']['train']['start'],last.isoformat(),self.now().isoformat())
         ref=self.d.artifacts.put_json(dataset,kind='run_artifact',domain='finance')

@@ -485,6 +485,10 @@ class HttpPlatformClient:
         return self._json('GET','/v1/gdelt-metadata',{'symbols':','.join(symbols),'start_date':start_date,'end_date':end_date,
                           'decision_at':decision_at,'availability_mode':availability_mode})
 
+    def get_gdelt_intraday_metadata(self,symbols,start_date,end_date,decision_at,*,availability_mode='platform'):
+        return self._json('GET','/v1/gdelt-intraday-metadata',{'symbols':','.join(symbols),'start_date':start_date,'end_date':end_date,
+                          'decision_at':decision_at,'availability_mode':availability_mode})
+
     def get_crypto_dataset(self):
         return self._json("GET", "/v1/crypto-research/latest")
 

@@ -91,3 +91,6 @@ no brokerage orders or automatic changes to saved holdings are authorized.
   https://arxiv.org/abs/2304.13174
 
 These support the design choices, not a promise of positive returns.
+
+### Requirement: Current-day premarket state and explicit missingness
+The model SHALL use a separate GKG2.1 premarket feature protocol for same-day morning metadata. It SHALL freeze formation at 09:00 America/New_York independently from serving time and latest completed price date, require actual live central availability no later than formation, and reject before-formation requests. Historical source proxy and reconstructed archive missingness SHALL be disclosed. Healthy zero mentions, partial lower-bound counts, and wholly unknown archive inputs SHALL be distinct through observed batch coverage. Live all-missing windows SHALL fail closed. The separate released five-seed profile SHALL train2024–May2025, validateJuly–December2025 and evaluate2026 as development; the majorJune outage SHALL be excluded between splits. Previously inspected2026 SHALL never become untouched holdout evidence under a new snapshot identifier. A source-version change SHALL require matched retraining before PPO consumes it. Historical classical price-only controls and live fixed news sensitivity SHALL retain explicit input-difference disclosures.

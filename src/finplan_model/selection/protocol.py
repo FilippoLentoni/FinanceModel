@@ -174,7 +174,7 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     env = EnvSpec.from_dict(rl.get("env"))
     if rl.get('decision_timing','completed_close') not in ('completed_close','next_session_morning'):
         raise FinplanError.validation('unsupported frozen decision timing',pointer='/rl/decision_timing')
-    if 'gdelt_organization_tone_v1' in env.features and rl.get('decision_timing')!='next_session_morning':
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(env.features) and rl.get('decision_timing')!='next_session_morning':
         raise FinplanError.validation('numeric GDELT training must match morning serving timing',pointer='/rl/decision_timing')
     grid = rl.get("grid") or {}
     if grid:

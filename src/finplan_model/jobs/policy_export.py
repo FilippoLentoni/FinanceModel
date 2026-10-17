@@ -56,7 +56,7 @@ def freeze_policy_source(result, spec, source_run_id, strategy_id='ppo'):
         corpus=protocol['rl'].get('news_corpus') or {}
         if not corpus.get('checksum'):raise FinplanError.precondition('news-aware export needs training corpus identity',reason='news_training_corpus_missing')
         news_identity={'training_news_corpus_checksum':corpus['checksum'],'news_feature_protocol':'etf-search-metadata/1'}
-    if 'gdelt_organization_tone_v1' in env.get('features',[]):
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(env.get('features',[])):
         corpus=protocol['rl'].get('gdelt_corpus') or {}
         if not corpus.get('checksum'):raise FinplanError.precondition('GDELT-aware export requires frozen source identity',reason='gdelt_training_corpus_missing')
         news_identity={'training_gdelt_corpus_checksum':corpus['checksum'],'gdelt_feature_protocol':corpus['feature_version'],

@@ -405,8 +405,11 @@ def _run_rl(
         if not corpus.get('dataset'):raise FinplanError.precondition('news-aware job requires frozen licensed corpus',reason='news_training_corpus_missing')
         news_provider=FrozenEtfNewsProvider(corpus['dataset'])
         if news_provider.corpus_checksum!=corpus.get('checksum'):raise FinplanError.precondition('news corpus checksum mismatch',reason='news_training_corpus_integrity')
-    if 'gdelt_organization_tone_v1' in base.features:
-        from finplan_model.rl.gdelt import FrozenGdeltProvider
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(base.features):
+        if 'gdelt_intraday_organization_tone_v1' in base.features:
+            from finplan_model.rl.gdelt_intraday import FrozenGdeltProvider
+        else:
+            from finplan_model.rl.gdelt import FrozenGdeltProvider
         corpus=rl_proto.get('gdelt_corpus') or {}
         if not corpus.get('dataset'):raise FinplanError.precondition('GDELT-aware job requires a frozen numeric corpus',reason='gdelt_training_corpus_missing')
         news_provider=FrozenGdeltProvider(corpus['dataset'])

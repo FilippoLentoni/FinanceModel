@@ -69,7 +69,7 @@ __all__ = [
 ENV_SPEC_VERSION = "finplan-rl-env/2"
 #: Features the environment implements; a specification may declare only these.
 STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown",
-                  "cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1", "gdelt_organization_tone_v1")
+                  "cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1", "gdelt_organization_tone_v1", "gdelt_intraday_organization_tone_v1")
 # Preserve the original observation unless a released experiment opts into new features.
 DEFAULT_FEATURES = ("log_return_window", "current_weights")
 ACTION_TRANSFORMS = ("softmax",)
@@ -143,7 +143,7 @@ class EnvSpec:
         bad = [f for f in features if f not in STATE_FEATURES]
         if bad or not features or len(set(features)) != len(features):
             raise FinplanError.validation("state features must be distinct implemented features", pointer=f"{ptr}/features", known=list(STATE_FEATURES))
-        if {'etf_news_metadata_v1','gdelt_organization_tone_v1'}<=set(features):
+        if len({'etf_news_metadata_v1','gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(features))>1:
             raise FinplanError.validation('separate news sources require separately frozen state protocols',pointer=f'{ptr}/features')
         transform = d.get("action_transform", "softmax")
         if transform not in ACTION_TRANSFORMS:
@@ -209,7 +209,7 @@ class EnvSpec:
             size += 5 * n_instruments
         if "etf_news_metadata_v1" in self.features:
             size += 5 * n_instruments
-        if "gdelt_organization_tone_v1" in self.features:
+        if {"gdelt_organization_tone_v1","gdelt_intraday_organization_tone_v1"} & set(self.features):
             size += 5 * n_instruments
         return size
 
@@ -231,12 +231,15 @@ def softmax_weights(action: Any, n_instruments: int, action_scale: float) -> tup
 def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None, news_dataset: Mapping[str, Any] | None = None, instruments: tuple[str, ...] | None = None, decision_time: str | None = None, news_training: bool = False) -> np.ndarray:
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
     parts: dict[str, np.ndarray] = {}
-    if 'gdelt_organization_tone_v1' in spec.features:
-        from .gdelt import extract,FEATURE_ORDER
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(spec.features):
+        if 'gdelt_intraday_organization_tone_v1' in spec.features:
+            from .gdelt_intraday import extract,FEATURE_ORDER,STATE_FEATURE
+        else:
+            from .gdelt import extract,FEATURE_ORDER,STATE_FEATURE
         if news_dataset is None or instruments is None or decision_time is None or len(instruments)!=len(weights):
             raise FinplanError.precondition('GDELT state requires exact source data, instrument order and cutoff',reason='gdelt_state_input_missing')
         features,_=extract(news_dataset,symbols=instruments,decision_time=decision_time)
-        parts['gdelt_organization_tone_v1']=np.asarray([features[s][f] for s in instruments for f in FEATURE_ORDER],dtype=np.float64)
+        parts[STATE_FEATURE]=np.asarray([features[s][f] for s in instruments for f in FEATURE_ORDER],dtype=np.float64)
     if "etf_news_metadata_v1" in spec.features:
         from finplan_model.etf_news import FINANCIAL_NEWS_UNIVERSE, extract, dt
         from finplan_model.core.outcome import require_valid
