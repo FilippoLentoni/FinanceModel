@@ -76,16 +76,20 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
     ctx=RunContext(environment='beta',purpose='research',run_id=source.get('scheduled_slot'),synthetic=True)
     check_outbound_payload(descriptors,ctx=ctx,raw_values=raw_values_of(source.get('observations',[])),destination='direct_codex')
     u=source.get('research_universe') or {}
+    member_columns=['symbol','name','sector','membership_effective_at','effective_date_precision']
+    coverage_columns=['symbol','searched','status','total_eligible_news_count','selected_news_ids']
+    selected_ids={n['news_id'] for n in selected}
     actual={'investable_universe':source['investable_universe'],'market_descriptors':descriptors,
             'market_input_transform':{'version':'finplan_jev_encode_state/1','source_checksum':sha256_checksum(canonical_json_bytes(source.get('observations',[]))),
                  'implementation_checksum':sha256_checksum(Path(descriptor_implementation.__file__).read_bytes()),
                  'semantics':'20-session momentum and annualized volatility bucketed; current synthetic exposure bucketed; DS-14 outbound guard passed',
                  'raw_price_series_consumed':False,'raw_price_series_exclusion':'Protected Yahoo-derived history retained only as immutable source/engine evidence'},
             'news':selected,'research_universe':{**{k:v for k,v in u.items() if k not in ('source_content','members')},
-                'members':[{k:v for k,v in m.items() if k in ('symbol','name','sector','membership_effective_at','effective_date_precision')} for m in u.get('members',[])]},
-            'research_coverage':[{'symbol':c['symbol'],'searched':c['searched'],'status':c['status'],
-                'selected_news_ids':[nid for nid in c.get('news_ids',[]) if nid in {n['news_id'] for n in selected}],
-                'selected_context_status':'selected_evidence' if any(nid in {n['news_id'] for n in selected} for nid in c.get('news_ids',[])) else 'collected_evidence_omitted_from_bounded_context' if c.get('news_ids') else c['status']} for c in source.get('research_coverage',[])],'availability_cutoff':source.get('availability_cutoff'),
+                'member_table':{'columns':member_columns,'rows':[[m.get(k) for k in member_columns] for m in u.get('members',[])]}},
+            'research_coverage':{'columns':coverage_columns,'rows':[[c['symbol'],c['searched'],c['status'],len(c.get('news_ids',[])),
+                [nid for nid in c.get('news_ids',[]) if nid in selected_ids]] for c in source.get('research_coverage',[])],
+                'semantics':'Total counts describe collected eligible evidence; only selected IDs correspond to model-consumed news. Zero selected IDs with a positive count means bounded-context omission.'},
+            'availability_cutoff':source.get('availability_cutoff'),
             'limitations':source.get('limitations',[]),'news_selection':{'method':'latest_publication_then_news_id','max_items':40,'max_prompt_bytes':MAX_REVIEW_BYTES,
                  'available_count':len(source.get('news',[])),'source_bundle_checksum':sha256_checksum(canonical_json_bytes(source))}}
     prompt=PROMPT+'\nACTUAL INPUT JSON:\n'+canonical_json_bytes({'source':actual,'holdings':holdings}).decode()

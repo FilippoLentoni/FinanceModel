@@ -57,9 +57,10 @@ def test_no_missing_position_sell():
 
 
 def test_no_lookahead():
-    s=source();s['observations'][-1]['available_at']='2099-01-01T00:00:00Z';captures=[]
+    s=source();future=s['observations'][-1];future['available_at']='2099-01-01T00:00:00Z';future['close']=1e20;captures=[]
     evaluate_approach('equal_weight',s,holdings(),cutoff='2026-07-11T00:00:00Z',run_id='r',input_id='i',capture=captures.append)
-    assert all(r['available_at']<'2099' for r in captures[0]['numeric']['price_history'])
+    assert captures[0]['numeric']['prepared']['eligible_prices'][future['instrument_id']]!=future['close']
+    assert 'price_history' not in captures[0]['numeric']
 
 
 def test_forecast_pending_alignment_immutable_known_outcome():

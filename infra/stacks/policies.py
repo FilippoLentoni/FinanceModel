@@ -251,7 +251,12 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
         {"Sid": "ReadVersionedNewsState", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/research-news/latest", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
         {"Sid": "ReadSavedPortfolio", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/plans/*", "v1/portfolios/*", "v1/portfolios/*/state")},
         {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
-        {"Sid": "DenyTrainingAndWrites", "Effect": "Deny", "Action": ["sagemaker:*", "s3:PutObject", "s3:DeleteObject", "ssm:PutParameter", "ssm:DeleteParameter", "dynamodb:*"], "Resource": "*"},
+        {"Sid": "DenyTrainingAndWrites", "Effect": "Deny", "Action": ["sagemaker:*", "s3:DeleteObject*", "ssm:PutParameter", "ssm:DeleteParameter", "dynamodb:*"], "Resource": "*"},
+        *([
+            {"Sid":"WriteActualServedInputs","Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":[f"{research}/artifacts/served_model_input/*"]},
+            {"Sid":"DenyOtherInferenceWrites","Effect":"Deny","Action":["s3:PutObject"],"NotResource":[f"{research}/artifacts/served_model_input/*"]},
+            {"Sid":"DenyServedInputOverwrite","Effect":"Deny","Action":["s3:PutObject"],"Resource":[f"{research}/artifacts/served_model_input/*"],"Condition":{"Null":{"s3:if-none-match":"true"}}},
+        ] if env=="beta" else [{"Sid":"DenyInferenceStorageWrites","Effect":"Deny","Action":["s3:PutObject"],"Resource":"*"}]),
     ]}
 
 

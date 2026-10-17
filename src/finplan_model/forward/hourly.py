@@ -93,7 +93,7 @@ def load_current_inputs(session=None,cohort=None):
                             'open':b.open,'high':b.high,'low':b.low,'volume':b.volume,'kind':b.kind,'available_at':actual_available,
                             'price_basis':(content.payload.get('universe') or {}).get('return_basis','close'),
                             'availability_basis':'actual_approved_snapshot_created_at; no historical vintage claim'})
-    dates=sorted({r['session_date'] for r in feature})[-max(252,int(policy['environment'].get('window',60))+1):]
+    dates=sorted({r['session_date'] for r in feature})[-max(253,int(policy['environment'].get('window',60))+1):]
     feature=[r for r in feature if r['session_date'] in dates];raw=[r for r in raw if r['session_date'] in dates]
     source={'dataset_id':content.snapshot.dataset_id,'input_snapshot_id':content.snapshot.input_snapshot_id,
             'checksum':content.snapshot.manifest_checksum,'verified_artifacts':content.verified,
@@ -178,10 +178,10 @@ def _codex_adapter(output):
 
 def _history(backend,experiment,day,kind='runs'):
     rows=[];token=None
-    for _ in range(20):
+    for _ in range(100):
         page,token=backend.query_day(experiment,day,kind=kind,page_size=100,next_token=token);rows.extend(page)
         if not token:return rows
-    raise ValueError('bounded daily history exceeded; increase partition granularity before scaling')
+    raise ValueError('bounded daily history exceeded10000 records; narrow partitions before scaling')
 
 
 def _current_news(backend,experiment,cutoff):
@@ -264,7 +264,7 @@ def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
             oid=identifier('mo',experiment,aid,older['slot'],'execution_disposition')
             if not backend.repo.get('portfolio_observation',oid):
                 backend.record_observation(experiment,aid,older['slot'],older['portfolio_id'],{'run_id':older['run_id'],'status':'superseded',
-                    'replacement_run_id':run['run_id'],'reason':'Latest common-hourly policy supersedes earlier pending policy before an eligible next-open fill',
+                    'replacement_run_id':run['run_id'],'reason':'Latest common-hourly policy supersedes earlier pending policy before an eligible next-hourly quote fill',
                     'actual_fills':[],'observed_at':at,'observation_kind':'execution_disposition'},at,kind='execution_disposition')
         if not outcome.get('target_weights'):continue
         try:
@@ -275,6 +275,10 @@ def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
                 max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120))
             if result['status'] in ('applied','no_op'):
                 backend.commit_paper_step(run['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
+            else:
+                backend.record_observation(experiment,aid,slot,run['portfolio_id'],{'run_id':run['run_id'],'status':'execution_pending',
+                    'reason':result.get('reason','eligible_execution_price_unavailable'),'actual_fills':[],
+                    'observed_at':at,'value':None,'observation_kind':'pending','quote_status':'missing'},at,kind='execution_attempt')
         except Exception as exc:
             # Persist a retryable execution failure separately; never rewrite the recommendation.
             backend.record_observation(experiment,aid,at,run['portfolio_id'],{'run_id':run['run_id'],'status':'execution_failed',
@@ -334,7 +338,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         stored_quotes=backend.repo.get('research_input',quote_id)
         if stored_quotes:
             source['current_quotes']=backend.read_input(quote_id)['payload']
-            source['valuation_quote_evidence']={'input_id':quote_id,'checksum':stored_quotes.doc['checksum'],'usage':'valuation_only; never model input or fill price'}
+            source['valuation_quote_evidence']={'input_id':quote_id,'checksum':stored_quotes.doc['checksum'],'usage':'valuation_and_eligible_forward_execution_only; never frozen daily model input'}
         else:
             source['current_quotes']={'quotes':[],'status':'unavailable_platform_quote_collection','source_artifacts':[]}
     policies=policies or {}

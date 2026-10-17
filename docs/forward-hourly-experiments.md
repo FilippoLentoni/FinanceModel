@@ -61,14 +61,13 @@ and discrepancy check. Neither source proves historical index membership. All
 missing/failed coverage remains explicit. Public feed titles are retained, not
 article bodies. Publication, retrieval and platform availability are separate.
 This is forward-only evidence. The reviewer sees a deterministic bounded
-selection of headlines, exact numerical history, the dated research universe,
+selection of headlines, derived market descriptors, the dated research universe,
 coverage and its own current synthetic holdings. Exact raw provider history remains source/evaluator evidence; the prompt receives the approved bucketed momentum, volatility and exposure descriptors through the existing outbound guard. Its full public prompt, actual
 configured Codex model/CLI version, unmodified public final response and normalized
 policy are captured. No hidden model reasoning or authentication is stored.
 
 Yahoo one-minute quote responses are preserved with original bytes, checksums,
-actual retrieval/availability and freshness. They are used only for current
-portfolio valuation, never as daily frozen policy inputs or invented fills.
+actual retrieval/availability and freshness. They are used for current portfolio valuation and eligible common point-quote paper execution, never as daily frozen policy inputs or retrospectively fabricated fills.
 Closed-market quotes are carried forward visibly. Cash-only books have an exact
 cash valuation and require no market quote. Missing quote coverage prevents a
 fresh valued risky portfolio from entering a comparable leaderboard.
@@ -109,3 +108,12 @@ dividend/split fields and the current quote adapter preserves actual provider
 events/coverage; no payment date, dividend cash or split adjustment is invented.
 This explicit corporate-action reconciliation limitation remains a coverage
 blocker for affected forward observations.
+
+Hosted numerical serving freezes its actual prepared policy observation before
+actor execution in the content-addressed `artifacts/served_model_input/` research
+prefix. Beta inference has only a conditional create grant to that prefix; writes
+elsewhere, overwrites, deletes, DynamoDB writes, training and configuration writes
+remain denied. Higher-environment policy grants are unchanged. Exact payloads,
+checksums and references are returned in diagnostics and on actor failures so the
+existing platform graph activity trace can index the original evidence. Classical
+replays use their existing immutable classical-analysis store instead.
