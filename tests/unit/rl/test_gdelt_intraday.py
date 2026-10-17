@@ -96,3 +96,13 @@ def test_intraday_tiny_ppo_training_exports_compatible_numeric_actor_and_actual_
     evidence=rec['diagnostics']['news_evidence']
     assert evidence['consumed'] and evidence['feature_protocol']==FEATURE_VERSION and evidence['provenance']['source_day']
     assert evidence['max_window_age_hours']==1.5 and evidence['provenance']['source_day']=='2026-01-27'
+
+@pytest.mark.parametrize('mutation',['quality','duplicate','success_checksum','early_available','unknown_count'])
+def test_cross_field_source_audit_inconsistency_fails_closed(mutation):
+    w=archive(captured=0 if mutation=='unknown_count' else 3);d=w['document']
+    if mutation=='quality':d['quality_status']='complete'
+    elif mutation=='duplicate':d['lineage']['attempts'][1]['batch_at']=d['lineage']['attempts'][0]['batch_at']
+    elif mutation=='success_checksum':d['lineage']['attempts'][0]['archive_checksum']='sha256:'+'c'*64
+    elif mutation=='early_available':d['lineage']['sources'][0]['source_available_at']=d['window_start']
+    else:d['features'][0]['article_count']=0
+    with pytest.raises(FinplanError):corpus([wrap(d)],['AAPL','VOO'])

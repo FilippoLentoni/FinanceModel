@@ -44,6 +44,14 @@ def validate_document(wrapper):
     expected_times={start+timedelta(minutes=15*k) for k in range(4)}
     if {dt(a['batch_at']) for a in lineage['attempts']}!=expected_times or {dt(s['batch_at']) for s in lineage['sources']} | {dt(t) for t in d['missing_batches']}!=expected_times:
         raise FinplanError.precondition('intraday archive attempts differ from frozen quarter-hour window',reason='gdelt_window_invalid')
+    attempts={a['batch_at']:a for a in lineage['attempts']}
+    successful={s['batch_at']:s for s in lineage['sources']}
+    if set(successful)!={a['batch_at'] for a in lineage['attempts'] if a['http_status']==200} or set(d['missing_batches'])!=set(attempts)-set(successful):
+        raise FinplanError.precondition('intraday successful sources contradict actual HTTP attempts',reason='gdelt_coverage_invalid')
+    for batch,source in successful.items():
+        attempt=attempts[batch]
+        if attempt['archive_checksum']!=source['archive_checksum'] or attempt['url']!=source['url'] or dt(source['source_available_at'])>cutoff:
+            raise FinplanError.precondition('intraday source identity or availability differs from captured window',reason='gdelt_availability_invalid')
     if n and (lineage['source_available_at'] is None or dt(lineage['source_available_at'])!=max(dt(s['source_available_at']) for s in lineage['sources'])):
         raise FinplanError.precondition('intraday available time must match observed batches',reason='gdelt_availability_invalid')
     if not n and lineage['source_available_at'] is not None:
