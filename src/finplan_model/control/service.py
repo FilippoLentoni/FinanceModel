@@ -280,7 +280,7 @@ class JobService:
             from finplan_model.jobs.policy_export import freeze_policy_source
             source_id = payload.get("policy_source_run_id")
             source_run = self._get(source_id)
-            if sub.purpose != "research" or source_run.get("state") != "succeeded" or source_run.get("job_type") != "model_selection":
+            if sub.purpose != "research" or source_run.get("state") != "succeeded" or source_run.get("job_type") not in ("model_selection", "recursive_evaluate"):
                 raise FinplanError.precondition("only succeeded model-selection research policies can be exported", reason="policy_source_invalid")
             source_result = self.d.run_io.get_result(source_id) or {}
             source_spec = self.d.run_io.get_spec(source_id, None)
