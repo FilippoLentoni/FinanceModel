@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import boto3
 from finplan_model.core.artifacts import canonical_json_bytes,sha256_checksum,S3ArtifactStore
 from finplan_model.core.platform import HttpPlatformClient,SnapshotReader
+from finplan_model.core.aws_clients import s3_client
 from finplan_model.jobs.market_loader import market_from_content
 from .registry import registry,APPROACHES,Approach
 from .runtime import evaluate_approach,input_market,validate_policy
@@ -59,7 +60,7 @@ def policy_approach_id(bundle):
 
 def load_current_inputs(session=None,cohort=None):
     """Approved snapshots through signed platform API; preserve raw and actor basis separately."""
-    session=session or boto3.Session(region_name=REGION);ssm=session.client('ssm');s3=session.client('s3')
+    session=session or boto3.Session(region_name=REGION);ssm=session.client('ssm');s3=s3_client(REGION,session=session)
     param=lambda name:ssm.get_parameter(Name=name)['Parameter']['Value']
     setting=json.loads(param('/finplan/beta/financemodel/config/advisory-policy'))
     artifacts=S3ArtifactStore(s3,param('/finplan/beta/financemodel/config/research-storage-ref'))
