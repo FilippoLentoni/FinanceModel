@@ -1,9 +1,9 @@
 {
   "$comment": "Exact pin of the finplan-contracts package consumed by FinanceModel (task 1.2, contracts CS-04 consumer case). The digest is the SHA-256 of the exact vendored wheel (also recorded in uv.lock, which uv verifies on install). 1.1.0 (research universe, daily_recommendation job kind, production-strategy document, bias_disclosures) is a stable 1.x release: it is allowed in beta, gamma and prod. The wheel is the FinancialPlanning platform's reproducible build (SOURCE_DATE_EPOCH=315532800), vendored byte for byte; the FinancialPlanning build stage publishes the same bytes to the CodeArtifact registry (/finplan/shared/financialplanning/contract/registry-ref) once its bootstrap is re-run, and refuses to publish different bytes under the same version.",
   "package": "finplan-contracts",
-  "version": "1.8.0",
-  "artifact": "vendor/finplan-contracts/finplan_contracts-1.8.0-py3-none-any.whl",
-  "sha256": "6533af74cb34086b3706f531d5f74657317cfa127a06dc8b5bf4a238381a5cb7",
+  "version": "1.9.0",
+  "artifact": "vendor/finplan-contracts/finplan_contracts-1.9.0-py3-none-any.whl",
+  "sha256": "94d3154f8b965cfcf44106c5f2aba15c0622e28cf575e92f325d34b020036911",
   "source": "FinancialPlanning platform vendored wheel (built from its contracts/python; the same artifact its build stage publishes to CodeArtifact)",
   "source_date_epoch": 315532800,
   "published": false,
