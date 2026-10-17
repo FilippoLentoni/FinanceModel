@@ -56,6 +56,7 @@ class JobInputs:
     market: MarketData
     snapshot: SnapshotContent
     artifacts: ArtifactStore
+    platform: Any = None
 
     @property
     def sim_config(self) -> SimulationConfig:

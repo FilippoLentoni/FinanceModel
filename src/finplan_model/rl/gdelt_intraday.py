@@ -114,9 +114,10 @@ def read_live(client,symbols,decision_time):
     day=dt(decision_time).astimezone(ZoneInfo('America/New_York')).date().isoformat();r=client.get_gdelt_intraday_metadata(symbols,day,day,decision_time,availability_mode='platform');require_valid(r,'api/gdelt-intraday-response')
     dataset=corpus(r['documents'],symbols,availability_mode='platform');f,p=extract(dataset,symbols=symbols,decision_time=decision_time);return dataset,f,p
 
-def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availability_mode='historical_source_proxy',required_days=None):
+def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availability_mode='historical_source_proxy',required_days=None,max_workers=2):
     from datetime import date,timedelta
     from concurrent.futures import ThreadPoolExecutor
+    if type(max_workers) is not int or max_workers not in (1,2):raise ValueError('bulk source reads are limited to two workers')
     start,end=map(date.fromisoformat,(start_date,end_date));chunks=[]
     required=None if required_days is None else {date.fromisoformat(d).isoformat() for d in required_days}
     if required is not None and (not required or any(d<start_date or d>end_date for d in required)):
@@ -128,7 +129,7 @@ def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availabilit
         start=stop+timedelta(days=1)
     def read(pair):return client.get_gdelt_intraday_metadata(symbols,pair[0].isoformat(),pair[1].isoformat(),decision_at,availability_mode=availability_mode)
     docs=[];reads=[]
-    with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(read,chunks))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:results=list(pool.map(read,chunks))
     for (a,b),r in zip(chunks,results):
         require_valid(r,'api/gdelt-intraday-response')
         expected={(a+timedelta(days=k)).isoformat() for k in range((b-a).days+1)}

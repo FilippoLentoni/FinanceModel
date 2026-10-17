@@ -202,4 +202,7 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def protocol_id(protocol: Mapping[str, Any]) -> str:
-    return configuration_id(dict(protocol))
+    value=copy.deepcopy(dict(protocol))
+    if value.get('rl',{}).get('gdelt_corpus_request'):
+        value['rl'].get('gdelt_corpus',{}).pop('dataset',None)
+    return configuration_id(value)

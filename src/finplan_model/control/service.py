@@ -40,7 +40,7 @@ from finplan_model.core.ids import IdMinter, request_hash, require_id
 from finplan_model.core.outcome import require_valid
 from finplan_model.core.platform import PlatformClient, SnapshotReader
 from finplan_model.jobs.runio import RunIO
-from finplan_model.jobs.spec import build_run_spec, simulation_config_for
+from finplan_model.jobs.spec import build_run_spec, simulation_config_for, universe_for
 from finplan_model.selection.recursive_profiles import PROFILES as RESEARCH_PROFILES
 
 from . import costs
@@ -284,7 +284,7 @@ class JobService:
                 raise FinplanError.precondition("only succeeded model-selection research policies can be exported", reason="policy_source_invalid")
             source_result = self.d.run_io.get_result(source_id) or {}
             source_spec = self.d.run_io.get_spec(source_id, None)
-            policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'))
+            policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'), artifacts=self.d.artifacts)
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
         if sub.job_type.name in ("swarm_mode_a", "jev_backtest") and self.d.platform is not None:
             from datetime import date
@@ -307,6 +307,8 @@ class JobService:
             self._freeze_gdelt_corpus(selection['selection_protocol'],sub)
         if dry_run:
             resp = {"run_id": None, "configuration_id": sub.configuration_id, "state": None, "dry_run": True, "cost_estimate": block, "message": "Dry run: the request is valid and estimated; no run was recorded and no job started."}
+            if selection.get('selection_protocol',{}).get('rl',{}).get('gdelt_corpus_request'):
+                resp['message']='Dry run: budget and registered configuration validated; source_freeze_pending_cpu_setup. Full source coverage and integrity must pass inside the bounded CPU job before any learner starts.'
             if synthetic:
                 resp["synthetic"] = True
             self._log("submit_dry_run", correlation_id=correlation_id, job_type=sub.job_type.name, estimate=est.estimated_usd_upper_bound)
@@ -469,20 +471,13 @@ class JobService:
         if self.d.platform is None or self.d.artifacts is None:
             raise FinplanError.precondition('GDELT training requires central archive and immutable research storage',reason='gdelt_training_source_missing')
         snap=SnapshotReader(self.d.platform).resolve(str(sub.body['input_snapshot_id']))
-        last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=0 if intraday else 1)
+        if intraday:
+            from finplan_model.rl.gdelt_setup import source_request
+            protocol['rl']['gdelt_corpus_request']=source_request(snap,protocol,str(sub.body['input_snapshot_id']),universe_for(sub.body['configuration']['payload']),self.ts())
+            return
+        last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=1)
         symbols=sorted(sub.body['configuration']['payload']['universe'])
         kwargs={}
-        if intraday:
-            # Calendar-date archives outside executable market-session splits
-            # are not missing training states. Use the verified actual session
-            # list, never a weekday/holiday approximation.
-            from finplan_model.jobs.market_loader import load_market
-            market,_=load_market(self.d.platform,str(sub.body['input_snapshot_id']))
-            windows=protocol['splits'].values()
-            required=[day.isoformat() for day in market.sessions if any(
-                date.fromisoformat(window['start'])<=day<=min(last,date.fromisoformat(window['end']) if window.get('end') else last)
-                for window in windows)]
-            kwargs['required_days']=required
         dataset,evidence=freeze_from_api(self.d.platform,symbols,protocol['splits']['train']['start'],last.isoformat(),self.now().isoformat(),**kwargs)
         ref=self.d.artifacts.put_json(dataset,kind='run_artifact',domain='finance')
         protocol['rl']['gdelt_corpus']={'artifact':ref.to_dict(),'checksum':evidence['checksum'],

@@ -22,13 +22,17 @@ def run_prepare_policy(inp):
     return doc
 
 
-def freeze_policy_source(result, spec, source_run_id, strategy_id='ppo'):
+def freeze_policy_source(result, spec, source_run_id, strategy_id='ppo', *, artifacts=None):
     summary=result.get('payload',{}).get('model_selection') or {}
     choices=summary.get('selection',{}).get('chosen_hyperparameters',{})
     if result.get('completion_status') != 'succeeded' or strategy_id not in choices:
         raise FinplanError.precondition('the strategy must have been evaluated in a succeeded source run',reason='policy_source_invalid')
     selected=choices[strategy_id]
     protocol=spec['selection_protocol']
+    realized={};realized_corpus=None
+    if protocol['rl'].get('gdelt_corpus_request'):
+        from finplan_model.rl.gdelt_setup import verified_realization
+        realized_corpus,realized=verified_realization(result,spec,artifacts)
     common={'source_run_id':source_run_id,'strategy_id':strategy_id,'instruments':sorted(spec['universe']),
             'training_end':protocol['splits']['train']['end'],'available_after':protocol['splits']['validation']['end'],
             'constraints':spec['simulation']['constraints'],'constraint_policy':spec['simulation'].get('constraint_policy','project')}
@@ -57,8 +61,8 @@ def freeze_policy_source(result, spec, source_run_id, strategy_id='ppo'):
         if not corpus.get('checksum'):raise FinplanError.precondition('news-aware export needs training corpus identity',reason='news_training_corpus_missing')
         news_identity={'training_news_corpus_checksum':corpus['checksum'],'news_feature_protocol':'etf-search-metadata/1'}
     if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(env.get('features',[])):
-        corpus=protocol['rl'].get('gdelt_corpus') or {}
+        corpus=realized_corpus or protocol['rl'].get('gdelt_corpus') or {}
         if not corpus.get('checksum'):raise FinplanError.precondition('GDELT-aware export requires frozen source identity',reason='gdelt_training_corpus_missing')
         news_identity={'training_gdelt_corpus_checksum':corpus['checksum'],'gdelt_feature_protocol':corpus['feature_version'],
-                       'gdelt_training_availability_mode':corpus['availability_mode'],'decision_timing':'next_session_09:00_America/New_York'}
+                       'gdelt_training_availability_mode':corpus['availability_mode'],'decision_timing':'next_session_09:00_America/New_York',**realized}
     return {**common,'configuration_id':selected['configuration_id'],'environment':env,'members':members,**news_identity}

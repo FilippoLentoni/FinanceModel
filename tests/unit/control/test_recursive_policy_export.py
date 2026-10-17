@@ -38,27 +38,28 @@ def test_weekly_controller_cannot_use_the_manual_long_profile_job():
         h.service.submit_job(Principal.from_arn(arn('finplan-beta-financemodel-job-api-handler-research-role')),body,correlation_id='corr-manual-profile')
     assert error.value.code=='FORBIDDEN' and not h.store.runs and not h.sagemaker.calls
 
-def test_intraday_readiness_uses_verified_sessions_inside_frozen_splits(monkeypatch):
-    from datetime import date
+def test_intraday_acceptance_defers_bulk_source_and_preserves_idempotent_identity(monkeypatch):
+    import copy
     import finplan_model.control.service as service_module
     import finplan_model.jobs.market_loader as loader
-    import finplan_model.rl.gdelt_intraday as gdelt
-    from finplan_model.selection.protocol import DEFAULT_PROTOCOL
-    from finplan_model.selection.recursive_profiles import profile_protocol,GDELT_INTRADAY_PROFILE
-    h=Harness(auto_approve=1.);seen={};h.service.d.platform=SimpleNamespace()
-    monkeypatch.setattr(service_module,'SnapshotReader',lambda client:SimpleNamespace(resolve=lambda sid:SimpleNamespace(record={'coverage':{'end':'2026-10-16'}})))
-    actual=[date(2024,1,2),date(2025,5,30),date(2025,6,2),date(2025,7,2),date(2025,12,31),date(2026,1,2),date(2026,10,16)]
-    monkeypatch.setattr(loader,'load_market',lambda client,sid:(SimpleNamespace(sessions=actual),None))
-    def freeze(client,symbols,start,end,cutoff,**kwargs):
-        seen.update(kwargs)
-        return {'feature_version':gdelt.FEATURE_VERSION,'availability_mode':'historical_source_proxy'},{'checksum':'sha256:'+'a'*64,'source_days':len(kwargs['required_days']),'required_session_days':kwargs['required_days']}
-    monkeypatch.setattr(gdelt,'freeze_from_api',freeze)
-    h.service.d.artifacts=SimpleNamespace(put_json=lambda *a,**k:SimpleNamespace(to_dict=lambda:{'checksum':'sha256:'+'a'*64}))
-    protocol=profile_protocol(DEFAULT_PROTOCOL,GDELT_INTRADAY_PROFILE)
-    body=request();body['configuration']['payload']['universe']=['AAPL','VOO']
-    h.service._freeze_gdelt_corpus(protocol,SimpleNamespace(body=body))
-    assert seen['required_days']==['2024-01-02','2025-05-30','2025-07-02','2025-12-31','2026-01-02','2026-10-16']
-    assert protocol['rl']['gdelt_corpus']['required_session_days']==seen['required_days']
+    from finplan_model.core.artifacts import InMemoryArtifactStore,canonical_json_bytes,sha256_checksum
+    from finplan_model.selection.recursive_profiles import GDELT_INTRADAY_PROFILE
+    h=Harness(auto_approve=1.);h.service.d.platform=SimpleNamespace();h.service.d.artifacts=InMemoryArtifactStore()
+    snapshot=SimpleNamespace(record={'coverage':{'end':'2026-01-02'}},manifest_checksum='sha256:'+'a'*64,synthetic=True,dataset_id='finance/etf-daily/SPY')
+    monkeypatch.setattr(service_module,'SnapshotReader',lambda client:SimpleNamespace(resolve=lambda sid:snapshot))
+    monkeypatch.setattr(loader,'load_market',lambda *a:pytest.fail('API must not download/validate historical prices or read bulk sources'))
+    cfg=request()['configuration'];cfg['payload'].update(strategy='model_selection',objective=GDELT_INTRADAY_PROFILE,rebalance_frequency='daily')
+    _,dry=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000,dry_run=True)
+    assert 'source_freeze_pending_cpu_setup' in dry['message'] and not h.store.runs and not h.sagemaker.calls
+    _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    first=copy.deepcopy(h.run(submitted['run_id']))
+    descriptor=first['selection_protocol']['rl']['gdelt_corpus_request']
+    assert descriptor['query']['snapshot_manifest_checksum']==snapshot.manifest_checksum
+    assert descriptor['query_checksum']==sha256_checksum(canonical_json_bytes(descriptor['query']))
+    assert 'gdelt_corpus' not in first['selection_protocol']['rl'] and first['max_runtime_seconds']==3000
+    h.clock.advance(hours=1)
+    _,replayed=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    assert replayed['run_id']==submitted['run_id'] and h.run(submitted['run_id'])==first
 
 
 def test_matched_price_control_changes_only_news_state_not_periods_seeds_or_objectives():

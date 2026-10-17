@@ -542,22 +542,27 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
         raise FinplanError.validation("model_selection runs with purpose research or holdout_evaluation", pointer="/purpose")
     section = _bias(inp)
     protocol = validate_protocol(spec.get("selection_protocol"))
+    reserve = float(protocol['runtime']['reserve_seconds'])
+    max_runtime = float(spec.get('max_runtime_seconds') or 0)
+    deadline = started + max(0.0,max_runtime-reserve) if max_runtime else None
+    from finplan_model.rl.gdelt_setup import prepare
+    source_setup=prepare(inp,protocol,deadline=deadline)
     frozen_gdelt=protocol['rl'].get('gdelt_corpus') or {}
-    if frozen_gdelt.get('artifact'):
+    if frozen_gdelt.get('artifact') and not frozen_gdelt.get('dataset'):
         import json
         protocol['rl']['gdelt_corpus']={**frozen_gdelt,'dataset':json.loads(inp.artifacts.get(frozen_gdelt['artifact']))}
-    reserve = float(protocol["runtime"]["reserve_seconds"])
-    max_runtime = float(spec.get("max_runtime_seconds") or 0)
-    deadline = started + max(0.0, max_runtime - reserve) if max_runtime else None
     out = select_models(inp.market, inp.sim_config, protocol=protocol, universe=inp.universe, ctx=inp.ctx, deadline=deadline, incumbent=spec.get("incumbent_strategy"), prior_test_accesses=int(spec.get("test_period_prior_accesses") or 0))
     synthetic = True if inp.ctx.synthetic else None
-    refs = []
+    refs = [source_setup['corpus']['artifact'],source_setup['source_manifest']] if source_setup else []
+    from finplan_model.core.artifacts import ArtifactRef
+    refs=[ArtifactRef.from_dict(ref) for ref in refs]
     policy_rows = []
     for meta, data in out.policies:
         ref = inp.artifacts.put(data, kind="rl_policy", content_type="application/zip", synthetic=synthetic, domain="finance")
         refs.append(ref)
         policy_rows.append({**meta, "artifact_id": ref.artifact_id, "size_bytes": len(data)})
     summary = out.summary
+    if source_setup:summary["source_setup"]=source_setup
     summary["policies"] = policy_rows
     est = (spec.get("cost_estimate") or {}).get("estimated_usd_upper_bound")
     wall = time.monotonic() - started
