@@ -110,7 +110,7 @@ def test_actual_sb3_training_result_exports_against_the_realized_source_manifest
     from tests.unit.rl.test_gdelt_intraday import archive,wrap
     from tests.unit.rl.support import tiny_protocol
     from tests.unit.selection.test_model_selection_job import _harness,selection_request
-    
+
     started=time.perf_counter();protocol=tiny_protocol();protocol['rl'].update(algorithms=['ppo'],seeds=list(range(5)),policy_selection='ensemble',decision_timing='next_session_morning',development_evaluation=True)
     protocol['rl']['env'].update(features=['market_summary','current_weights','portfolio_drawdown','gdelt_intraday_organization_tone_v1'],step_sessions=1,decision_frequency='daily',version='finplan-rl-env/2')
     h,platform=_harness(protocol=protocol);store=InMemoryArtifactStore();h.service.d.artifacts=store
