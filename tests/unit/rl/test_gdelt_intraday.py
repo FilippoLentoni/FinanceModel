@@ -118,3 +118,18 @@ def test_training_freeze_requires_actual_session_audits_not_unused_calendar_days
     assert evidence['reads'][0]['complete'] is False
     with pytest.raises(FinplanError,match='audited source days'):
         freeze_from_api(Client(),['AAPL','VOO'],'2026-10-09','2026-10-11','2026-10-12T13:00:00Z',required_days=['2026-10-09','2026-10-10'])
+
+
+def test_four_archives_with_rejected_rows_are_partial_and_distinct_from_healthy_zero():
+    w=archive();d=w['document'];d.update(row_count=101,rejected_rows=1,quality_status='partial')
+    for f in d['features']:f['missing']=True
+    frozen=corpus([wrap(d)],['AAPL','VOO']);features,proof=extract(frozen,symbols=['AAPL'],decision_time=d['decision_cutoff'])
+    assert features['AAPL']['source_coverage_fraction']==pytest.approx(100/101)
+    assert proof['archive_coverage_fraction']==1 and proof['row_acceptance_fraction']==pytest.approx(100/101)
+    assert proof['rejected_rows']==1 and proof['quality_status']=='partial'
+    d.update(rejected_rows=101,quality_status='unavailable',unique_documents=0,duplicate_documents=0)
+    for f in d['features']:f.update(article_count=None,cluster_count=None,tone=None)
+    unknown=corpus([wrap(d)],['AAPL'],availability_mode='platform')
+    with pytest.raises(FinplanError,match='usable window'):extract(unknown,symbols=['AAPL'],decision_time=d['decision_cutoff'])
+    features,_=extract(corpus([wrap(d)],['AAPL']),symbols=['AAPL'],decision_time=d['decision_cutoff'])
+    assert features['AAPL']['source_coverage_fraction']==0

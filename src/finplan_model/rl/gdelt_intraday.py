@@ -24,7 +24,7 @@ def validate_document(wrapper):
     encoded=wrapper.get('canonical_document_json',json.dumps(d,sort_keys=True,separators=(',',':'),allow_nan=False))
     if json.loads(encoded)!=d or sha256_checksum(encoded.encode())!=wrapper['checksum']:
         raise FinplanError.precondition('intraday source checksum mismatch',reason='gdelt_checksum_mismatch')
-    if d['feature_version']!=FEATURE_VERSION or d['rejected_rows']!=0:
+    if d['feature_version']!=FEATURE_VERSION or d['rejected_rows']>d['row_count']:
         raise FinplanError.precondition('intraday source version or row quality invalid',reason='gdelt_source_invalid')
     lineage=d['lineage'];rights=lineage['rights']
     if rights.get('rights_status')!='research_and_training' or not rights.get('evidence_checksum') or not lineage.get('attribution'):
@@ -33,10 +33,13 @@ def validate_document(wrapper):
     local=cutoff.astimezone(ZoneInfo('America/New_York'))
     if local.date().isoformat()!=d['source_day'] or local.hour!=9 or local.minute!=0 or local.second!=0 or (end-start).total_seconds()!=3600 or (cutoff-end).total_seconds()!=900:
         raise FinplanError.precondition('intraday window differs from frozen 09:00 daily formation',reason='gdelt_window_invalid')
-    n=d['captured_batches'];expected=d['expected_batches']
+    n=d['captured_batches'];expected=d['expected_batches'];accepted=d['row_count']-d['rejected_rows'];usable=n>0 and accepted>0
+    quality='unavailable' if not usable else 'partial' if n<4 or d['rejected_rows'] else 'complete'
+    if d['unique_documents']+d['duplicate_documents']>accepted or (n==0 and d['row_count']!=0):
+        raise FinplanError.precondition('intraday accepted document counts contradict raw row audit',reason='gdelt_coverage_invalid')
     if expected!=4 or n!=len(lineage['sources']) or len(d['missing_batches'])!=4-n or len({s['batch_at'] for s in lineage['sources']})!=n:
         raise FinplanError.precondition('intraday coverage evidence contradicts observed batches',reason='gdelt_coverage_invalid')
-    if d['quality_status']!=('complete' if n==4 else 'partial' if n else 'unavailable'):
+    if d['quality_status']!=quality:
         raise FinplanError.precondition('intraday coverage quality is inconsistent',reason='gdelt_coverage_invalid')
     for source in lineage['sources']:
         if not source['archive_checksum'] or dt(source['source_available_at'])<max(dt(source['source_last_modified']),dt(source['batch_at'])+timedelta(minutes=15)) or dt(source['retrieved_at'])<dt(source['source_last_modified']):
@@ -60,10 +63,10 @@ def validate_document(wrapper):
     for f in d['features']:
         names.append(f['instrument_id'])
         for key in ('article_count','cluster_count'):
-            if (n==0 and f[key] is not None) or (n>0 and (type(f[key]) is not int or f[key]<0)):
+            if (not usable and f[key] is not None) or (usable and (type(f[key]) is not int or f[key]<0)):
                 raise FinplanError.precondition('intraday counts must distinguish observations from unknown values',reason='gdelt_source_invalid')
-        if not n and f['tone'] is not None:raise FinplanError.precondition('unknown archive cannot contain observed tone',reason='gdelt_source_invalid')
-        if f['missing']!=(n<4):raise FinplanError.precondition('intraday missingness must reflect batch coverage',reason='gdelt_coverage_invalid')
+        if not usable and f['tone'] is not None:raise FinplanError.precondition('unknown archive cannot contain observed tone',reason='gdelt_source_invalid')
+        if f['missing']!=(quality!='complete'):raise FinplanError.precondition('intraday missingness must reflect batch coverage',reason='gdelt_coverage_invalid')
         if f['tone'] is not None and (not math.isfinite(f['tone']) or abs(f['tone'])>100):raise FinplanError.precondition('intraday tone invalid',reason='gdelt_source_invalid')
     if len(names)!=len(set(names)):raise FinplanError.precondition('duplicate intraday feature symbol',reason='gdelt_source_invalid')
     return d
@@ -87,14 +90,16 @@ def extract(dataset,*,symbols,decision_time):
     d=selected['document'];lineage=d['lineage'];n=d['captured_batches'];mode=dataset['availability_mode']
     if dt(d['decision_cutoff'])!=cutoff or (n and dt(lineage['source_available_at'])>cutoff):raise FinplanError.precondition('source arrived after frozen formation cutoff',reason='gdelt_availability_invalid')
     if mode=='platform':
-        if not n:raise FinplanError.precondition('no current-day window source is available',reason='gdelt_coverage_missing')
+        if not n or d['row_count']==d['rejected_rows']:raise FinplanError.precondition('no current-day usable window source is available',reason='gdelt_coverage_missing')
         if not lineage.get('central_available_at') or dt(lineage['central_available_at'])>cutoff or dt(lineage['retrieved_at'])>cutoff:raise FinplanError.precondition('central source was unavailable at morning formation',reason='gdelt_availability_invalid')
     age=(cutoff-dt(d['window_end'])).total_seconds()/3600
     if age<0 or age>MAX_WINDOW_AGE_HOURS:raise FinplanError.precondition('intraday window outside registered freshness limit',reason='gdelt_coverage_missing')
+    archive_fraction=n/4.;row_fraction=(d['row_count']-d['rejected_rows'])/d['row_count'] if d['row_count'] else 0.
+    effective_fraction=archive_fraction*row_fraction
     by={r['instrument_id']:r for r in d['features']};features={}
     for s in symbols:
-        f=by[s];features[s]={'tone_scaled':0. if f['tone'] is None else f['tone']/100.,'article_count_log_scaled':min(1.,math.log1p(f['article_count'] or 0)/math.log1p(10000)),'cluster_count_log_scaled':min(1.,math.log1p(f['cluster_count'] or 0)/math.log1p(10000)),'window_age_scaled':age/MAX_WINDOW_AGE_HOURS,'source_coverage_fraction':n/4.}
-    proof={'document_checksum':selected['checksum'],'source_day':d['source_day'],'window_start':d['window_start'],'window_end':d['window_end'],'lineage':copy.deepcopy(lineage),'availability_mode':mode,'quality_status':d['quality_status'],'captured_batches':n,'expected_batches':4,'missing_batches':d['missing_batches'],'disclosures':d['disclosures'],'window_age_hours':age,'max_window_age_hours':MAX_WINDOW_AGE_HOURS,'freshness_basis':'window_end_at_fixed_09:00_formation','not_calibrated_stock_sentiment':True,'missingness_basis':'retrospective_archive_audit' if mode=='historical_source_proxy' else 'actual_central_capture'}
+        f=by[s];features[s]={'tone_scaled':0. if f['tone'] is None else f['tone']/100.,'article_count_log_scaled':min(1.,math.log1p(f['article_count'] or 0)/math.log1p(10000)),'cluster_count_log_scaled':min(1.,math.log1p(f['cluster_count'] or 0)/math.log1p(10000)),'window_age_scaled':age/MAX_WINDOW_AGE_HOURS,'source_coverage_fraction':effective_fraction}
+    proof={'document_checksum':selected['checksum'],'source_day':d['source_day'],'window_start':d['window_start'],'window_end':d['window_end'],'lineage':copy.deepcopy(lineage),'availability_mode':mode,'quality_status':d['quality_status'],'captured_batches':n,'expected_batches':4,'row_count':d['row_count'],'rejected_rows':d['rejected_rows'],'archive_coverage_fraction':archive_fraction,'row_acceptance_fraction':row_fraction,'source_coverage_fraction':effective_fraction,'missing_batches':d['missing_batches'],'disclosures':d['disclosures'],'window_age_hours':age,'max_window_age_hours':MAX_WINDOW_AGE_HOURS,'freshness_basis':'window_end_at_fixed_09:00_formation','not_calibrated_stock_sentiment':True,'missingness_basis':'retrospective_archive_audit' if mode=='historical_source_proxy' else 'actual_central_capture'}
     return features,proof
 
 class FrozenGdeltProvider:
