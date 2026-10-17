@@ -85,7 +85,7 @@ def _verified_realization(result,spec,artifacts):
     expected_env=EnvSpec.from_dict(protocol['rl']['env']).with_reward(**chosen['reward']).document()
     if (manifest.get('format')!='finplan.gdelt-source-realization/1' or
         manifest_ref['kind']!='run_artifact' or corpus['artifact']['kind']!='run_artifact' or
-        model['environment']!=expected_env or model['hyperparameters']!=protocol['rl']['ppo'] or model['seeds']!=protocol['rl']['seeds'] or
+        model['environment']!=expected_env or model['hyperparameters']!=protocol['rl']['ppo'] or sorted(row['seed'] for row in model['seeds'])!=sorted(protocol['rl']['seeds']) or
         accepted!=spec['selection_protocol'] or manifest['source_query']!=request['query'] or
         manifest['source_query_checksum']!=request['query_checksum'] or setup['source_query_checksum']!=request['query_checksum'] or
         sha256_checksum(canonical_json_bytes(request['query']))!=request['query_checksum'] or

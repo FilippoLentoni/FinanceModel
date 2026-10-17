@@ -43,7 +43,7 @@ def completed(monkeypatch):
     from finplan_model.rl.spec import EnvSpec
     model=result['payload']['model_selection']['rl']['ppo']
     model['environment']=EnvSpec.from_dict(protocol['rl']['env']).document()
-    model['hyperparameters']=protocol['rl']['ppo'];model['seeds']=protocol['rl']['seeds']
+    model['hyperparameters']=protocol['rl']['ppo'];model['seeds']=[{'seed':seed} for seed in protocol['rl']['seeds']]
     return inp,protocol,result,spec
 
 def test_setup_persists_realized_identity_without_mutating_accepted_spec(monkeypatch):
@@ -92,3 +92,50 @@ def test_setup_failure_occurs_before_any_learner(monkeypatch,failure):
     monkeypatch.setattr(handlers,'_bias',lambda inp:None)
     with pytest.raises(FinplanError):job.run_model_selection(inp)
     assert called==[] and not inp.artifacts.objects
+
+
+def test_actual_sb3_training_result_exports_against_the_realized_source_manifest(monkeypatch):
+    """Five32-step learners on synthetic sources exercise real serialization and export."""
+    import copy,json,time
+    from pathlib import Path
+    from datetime import date,timedelta
+    from finplan_model.core.artifacts import InMemoryArtifactStore
+    from finplan_model.jobs.entrypoint import run_job
+    from finplan_model.jobs.policy_export import freeze_policy_source,run_prepare_policy
+    from finplan_model.jobs.handlers import JobInputs
+    from finplan_model.jobs.market_loader import load_market
+    from finplan_model.core.context import RunContext
+    from finplan_model.rl import gdelt_setup
+    from finplan_model.rl.gdelt_intraday import freeze_from_api,FEATURE_VERSION
+    from tests.unit.rl.test_gdelt_intraday import archive,wrap
+    from tests.unit.rl.support import tiny_protocol
+    from tests.unit.selection.test_model_selection_job import _harness,selection_request
+    
+    started=time.perf_counter();protocol=tiny_protocol();protocol['rl'].update(algorithms=['ppo'],seeds=list(range(5)),policy_selection='ensemble',decision_timing='next_session_morning',development_evaluation=True)
+    protocol['rl']['env'].update(features=['market_summary','current_weights','portfolio_drawdown','gdelt_intraday_organization_tone_v1'],step_sessions=1,decision_frequency='daily',version='finplan-rl-env/2')
+    h,platform=_harness(protocol=protocol);store=InMemoryArtifactStore();h.service.d.artifacts=store
+    real_freeze=freeze_from_api
+    class Client:
+     def __init__(self,required):self.required=set(required)
+     def get_gdelt_intraday_metadata(self,symbols,first,last,cutoff,*,availability_mode):
+      a,b=date.fromisoformat(first),date.fromisoformat(last);days=[str(a+timedelta(days=k)) for k in range((b-a).days+1)];docs=[]
+      for day in days:
+       if day not in self.required:continue
+       d=archive(day,captured=3 if day=='2025-05-30' else 4)['document'];base=d['features'][0]
+       d['features']=[{**base,'instrument_id':iid,'article_count':3,'cluster_count':2,'tone':float((date.fromisoformat(day).toordinal()%7)-3)} for iid in symbols]
+       d['aliases']={iid:['synthetic '+iid] for iid in symbols};docs.append(wrap(d))
+      missing=sorted(set(days)-self.required)
+      return {'contract_version':'1.11.0','feature_version':FEATURE_VERSION,'symbols':symbols,'decision_at':cutoff,'availability_mode':availability_mode,'coverage':{'start_date':first,'end_date':last,'expected_days':len(days),'captured_days':len(docs),'complete':not missing,'missing_days':missing},'documents':docs}
+    def freeze(client,symbols,first,last,cutoff,**kwargs):
+     return real_freeze(Client(kwargs['required_days']),symbols,first,last,cutoff,**kwargs)
+    monkeypatch.setattr(gdelt_setup,'freeze_from_api',freeze)
+    rid=h.start(**selection_request());spec=h.run_io.get_spec(rid,None)
+    code,result=run_job('model_selection',rid,run_io=h.run_io,platform=platform,artifacts=store,environment='beta',clock=h.clock)
+    assert code==0,result
+    summary=result['payload']['model_selection'];assert len(summary['policies'])==5
+    assert summary['source_setup']['status']=='complete' and summary['protocol_id']==summary['source_setup']['realized_protocol_id']
+    frozen=freeze_policy_source(result,spec,rid,artifacts=store)
+    market,snapshot=load_market(platform,spec['input_snapshot_id']);export_spec={**spec,'job_type':'prepare_policy','policy_source':frozen}
+    export=run_prepare_policy(JobInputs(ctx=RunContext(environment='local',clock=h.clock,synthetic=True),spec=export_spec,market=market,snapshot=snapshot,artifacts=store,platform=platform))
+    assert export['completion_status']=='succeeded' and export['payload']['policy_export']['member_count']==5
+    bundle=store.get_json(export['artifacts'][0]);assert bundle['training_gdelt_corpus_checksum']==summary['source_setup']['corpus']['checksum']
