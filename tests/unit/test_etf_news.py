@@ -86,3 +86,12 @@ def test_explicit_single_etf_optimizer_uses_latest_approved_snapshot(monkeypatch
     result=module.handle(svc,{'symbols':['VOO'],'algorithm':'cvar'})
     assert calls==['finance/equity-etf-daily/research-universe']
     assert result['models']['optimization']['comparison']['reason']=='snapshot_missing_requested_etfs'
+
+
+def test_comparison_refuses_an_already_enriched_frozen_baseline():
+    inputs={'instruments':['VOO','GOOGL'],'news_evidence':{'consumed':True,'corpus_checksum':'sha256:'+'a'*64},
+            'expected_returns':[.001,.002],'covariance':[[.01,0],[0,.02]],'scenarios':[[.01,.02]]}
+    before=copy.deepcopy(inputs)
+    result=compare_optimizer(inputs,{'VOO':{'missing':0},'GOOGL':{'missing':0}})
+    assert result=={'status':'ineligible','reason':'baseline_already_news_enriched'}
+    assert inputs==before

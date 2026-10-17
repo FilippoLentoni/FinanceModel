@@ -63,6 +63,8 @@ def extract(dataset,*,symbols,decision_time,training=False):
 
 def compare_optimizer(inputs,features):
     """Matched inputs with a bounded declared hypothesis, never a performance claim."""
+    if inputs.get('news_evidence'):
+        return {'status':'ineligible','reason':'baseline_already_news_enriched'}
     if set(inputs['instruments'])-FINANCIAL_NEWS_UNIVERSE:raise FinplanError.precondition('ETF research requires an approved ETF/stock research universe',reason='non_etf_universe')
     if any(features.get(s,{}).get('missing',1) for s in inputs['instruments']):return {'status':'ineligible','reason':'eligible_news_missing_for_universe'}
     enriched=copy.deepcopy(inputs)
