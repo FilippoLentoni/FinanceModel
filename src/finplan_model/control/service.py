@@ -471,11 +471,24 @@ class JobService:
         snap=SnapshotReader(self.d.platform).resolve(str(sub.body['input_snapshot_id']))
         last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=0 if intraday else 1)
         symbols=sorted(sub.body['configuration']['payload']['universe'])
-        dataset,evidence=freeze_from_api(self.d.platform,symbols,protocol['splits']['train']['start'],last.isoformat(),self.now().isoformat())
+        kwargs={}
+        if intraday:
+            # Calendar-date archives outside executable market-session splits
+            # are not missing training states. Use the verified actual session
+            # list, never a weekday/holiday approximation.
+            from finplan_model.jobs.market_loader import load_market
+            market,_=load_market(self.d.platform,str(sub.body['input_snapshot_id']))
+            windows=protocol['splits'].values()
+            required=[day.isoformat() for day in market.sessions if any(
+                date.fromisoformat(window['start'])<=day<=min(last,date.fromisoformat(window['end']) if window.get('end') else last)
+                for window in windows)]
+            kwargs['required_days']=required
+        dataset,evidence=freeze_from_api(self.d.platform,symbols,protocol['splits']['train']['start'],last.isoformat(),self.now().isoformat(),**kwargs)
         ref=self.d.artifacts.put_json(dataset,kind='run_artifact',domain='finance')
         protocol['rl']['gdelt_corpus']={'artifact':ref.to_dict(),'checksum':evidence['checksum'],
                                        'feature_version':dataset['feature_version'],'availability_mode':dataset['availability_mode'],
-                                       'source_days':evidence['source_days']}
+                                       'source_days':evidence['source_days'],
+                                       **({'required_session_days':evidence['required_session_days']} if intraday else {})}
 
     def _production_strategy(self, body: Mapping[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         """M2: resolve the strategy from the SSM key at submission and re-validate it (nothing starts otherwise)."""

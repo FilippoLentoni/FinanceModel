@@ -106,3 +106,15 @@ def test_cross_field_source_audit_inconsistency_fails_closed(mutation):
     elif mutation=='early_available':d['lineage']['sources'][0]['source_available_at']=d['window_start']
     else:d['features'][0]['article_count']=0
     with pytest.raises(FinplanError):corpus([wrap(d)],['AAPL','VOO'])
+
+def test_training_freeze_requires_actual_session_audits_not_unused_calendar_days():
+    from finplan_model.rl.gdelt_intraday import freeze_from_api
+    class Client:
+        def get_gdelt_intraday_metadata(self,symbols,start,end,decision_at,*,availability_mode):
+            return {'contract_version':'1.11.0','feature_version':FEATURE_VERSION,'symbols':symbols,'decision_at':decision_at,'availability_mode':availability_mode,
+                    'coverage':{'start_date':start,'end_date':end,'expected_days':3,'captured_days':1,'complete':False,'missing_days':['2026-10-10','2026-10-11']},'documents':[archive('2026-10-09')]}
+    frozen,evidence=freeze_from_api(Client(),['AAPL','VOO'],'2026-10-09','2026-10-11','2026-10-12T13:00:00Z',required_days=['2026-10-09'])
+    assert len(frozen['documents'])==1 and evidence['required_session_days']==['2026-10-09']
+    assert evidence['reads'][0]['complete'] is False
+    with pytest.raises(FinplanError,match='audited source days'):
+        freeze_from_api(Client(),['AAPL','VOO'],'2026-10-09','2026-10-11','2026-10-12T13:00:00Z',required_days=['2026-10-09','2026-10-10'])

@@ -109,21 +109,28 @@ def read_live(client,symbols,decision_time):
     day=dt(decision_time).astimezone(ZoneInfo('America/New_York')).date().isoformat();r=client.get_gdelt_intraday_metadata(symbols,day,day,decision_time,availability_mode='platform');require_valid(r,'api/gdelt-intraday-response')
     dataset=corpus(r['documents'],symbols,availability_mode='platform');f,p=extract(dataset,symbols=symbols,decision_time=decision_time);return dataset,f,p
 
-def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availability_mode='historical_source_proxy'):
+def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availability_mode='historical_source_proxy',required_days=None):
     from datetime import date,timedelta
     from concurrent.futures import ThreadPoolExecutor
     start,end=map(date.fromisoformat,(start_date,end_date));chunks=[]
+    required=None if required_days is None else {date.fromisoformat(d).isoformat() for d in required_days}
+    if required is not None and (not required or any(d<start_date or d>end_date for d in required)):
+        raise ValueError('required session days must be nonempty and within the frozen interval')
     if end<start or (end-start).days>1100:raise ValueError('intraday interval must be chronological and bounded')
     while start<=end:
-        stop=min(end,start+timedelta(days=30));chunks.append((start,stop));start=stop+timedelta(days=1)
+        stop=min(end,start+timedelta(days=30))
+        if required is None or any(start.isoformat()<=d<=stop.isoformat() for d in required):chunks.append((start,stop))
+        start=stop+timedelta(days=1)
     def read(pair):return client.get_gdelt_intraday_metadata(symbols,pair[0].isoformat(),pair[1].isoformat(),decision_at,availability_mode=availability_mode)
     docs=[];reads=[]
     with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(read,chunks))
     for (a,b),r in zip(chunks,results):
         require_valid(r,'api/gdelt-intraday-response')
-        expected=[(a+timedelta(days=k)).isoformat() for k in range((b-a).days+1)]
-        if r['feature_version']!=FEATURE_VERSION or r['availability_mode']!=availability_mode or set(r['symbols'])!=set(symbols) or dt(r['decision_at'])!=dt(decision_at) or sorted(w['document']['source_day'] for w in r['documents'])!=expected:
+        expected={(a+timedelta(days=k)).isoformat() for k in range((b-a).days+1)}
+        if required is not None:expected &= required
+        actual=[w['document']['source_day'] for w in r['documents']]
+        if r['feature_version']!=FEATURE_VERSION or r['availability_mode']!=availability_mode or set(r['symbols'])!=set(symbols) or dt(r['decision_at'])!=dt(decision_at) or not expected<=set(actual) or len(actual)!=len(set(actual)) or any(d<a.isoformat() or d>b.isoformat() for d in actual):
             raise FinplanError.precondition('intraday response lacks required audited source days',reason='gdelt_coverage_missing')
-        docs.extend(r['documents']);reads.append(r['coverage'])
+        docs.extend(w for w in r['documents'] if w['document']['source_day'] in expected);reads.append(r['coverage'])
     dataset=corpus(docs,symbols,availability_mode=availability_mode)
-    return dataset,{'checksum':FrozenGdeltProvider(dataset).corpus_checksum,'reads':reads,'source_days':len(docs),'availability_mode':availability_mode}
+    return dataset,{'checksum':FrozenGdeltProvider(dataset).corpus_checksum,'reads':reads,'source_days':len(docs),'required_session_days':sorted(required) if required is not None else None,'availability_mode':availability_mode}

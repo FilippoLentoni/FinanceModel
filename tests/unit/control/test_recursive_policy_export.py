@@ -37,3 +37,25 @@ def test_weekly_controller_cannot_use_the_manual_long_profile_job():
     with pytest.raises(FinplanError) as error:
         h.service.submit_job(Principal.from_arn(arn('finplan-beta-financemodel-job-api-handler-research-role')),body,correlation_id='corr-manual-profile')
     assert error.value.code=='FORBIDDEN' and not h.store.runs and not h.sagemaker.calls
+
+def test_intraday_readiness_uses_verified_sessions_inside_frozen_splits(monkeypatch):
+    from datetime import date
+    import finplan_model.control.service as service_module
+    import finplan_model.jobs.market_loader as loader
+    import finplan_model.rl.gdelt_intraday as gdelt
+    from finplan_model.selection.protocol import DEFAULT_PROTOCOL
+    from finplan_model.selection.recursive_profiles import profile_protocol,GDELT_INTRADAY_PROFILE
+    h=Harness(auto_approve=1.);seen={};h.service.d.platform=SimpleNamespace()
+    monkeypatch.setattr(service_module,'SnapshotReader',lambda client:SimpleNamespace(resolve=lambda sid:SimpleNamespace(record={'coverage':{'end':'2026-10-16'}})))
+    actual=[date(2024,1,2),date(2025,5,30),date(2025,6,2),date(2025,7,2),date(2025,12,31),date(2026,1,2),date(2026,10,16)]
+    monkeypatch.setattr(loader,'load_market',lambda client,sid:(SimpleNamespace(sessions=actual),None))
+    def freeze(client,symbols,start,end,cutoff,**kwargs):
+        seen.update(kwargs)
+        return {'feature_version':gdelt.FEATURE_VERSION,'availability_mode':'historical_source_proxy'},{'checksum':'sha256:'+'a'*64,'source_days':len(kwargs['required_days']),'required_session_days':kwargs['required_days']}
+    monkeypatch.setattr(gdelt,'freeze_from_api',freeze)
+    h.service.d.artifacts=SimpleNamespace(put_json=lambda *a,**k:SimpleNamespace(to_dict=lambda:{'checksum':'sha256:'+'a'*64}))
+    protocol=profile_protocol(DEFAULT_PROTOCOL,GDELT_INTRADAY_PROFILE)
+    body=request();body['configuration']['payload']['universe']=['AAPL','VOO']
+    h.service._freeze_gdelt_corpus(protocol,SimpleNamespace(body=body))
+    assert seen['required_days']==['2024-01-02','2025-05-30','2025-07-02','2025-12-31','2026-01-02','2026-10-16']
+    assert protocol['rl']['gdelt_corpus']['required_session_days']==seen['required_days']
