@@ -49,3 +49,21 @@ def test_unselected_candidates_never_implicitly_claim_selected_canonical_identit
     result=assign_policy_variants(primary,[candidate])
     assert 'sac' not in result and len(result)==2
     assert any(key.startswith('sac_policy_') for key in result)
+
+
+def test_eight_asset_primary_prefers_original_selected_ensemble_over_new_seed_exports():
+    from finplan_model.forward.hourly import select_eight_asset_primary
+    ids=list('ABCDEFGH')
+    ensemble=bundle(universe=ids);ensemble['members']=[{'seed':n} for n in range(5)]
+    ensemble['source_run_id']='original_run';ensemble['configuration_id']='cfg_z'
+    seed=bundle(universe=ids,selected=True);seed['source_run_id']='newer_run';seed['configuration_id']='cfg_a'
+    newer=copy.deepcopy(ensemble);newer['source_run_id']='z_newer_selected_run'
+    news=bundle(universe=ids,news=True);news['members']=[{'seed':n} for n in range(5)]
+    sac=bundle('sac',universe=ids);sac['members']=[{'seed':n} for n in range(5)]
+    before=copy.deepcopy([seed,ensemble,newer,news,sac])
+    primary=select_eight_asset_primary(before)
+    assert primary==newer and before==[seed,ensemble,newer,news,sac]
+    assigned=assign_policy_variants(primary,[seed,ensemble,newer,news,sac])
+    assert assigned['ppo']==newer
+    assert sum(canonical_json_bytes(p)==canonical_json_bytes(seed) for p in assigned.values())==1
+    assert sum(canonical_json_bytes(p)==canonical_json_bytes(ensemble) for p in assigned.values())==1

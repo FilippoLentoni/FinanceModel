@@ -85,6 +85,19 @@ def assign_policy_variants(primary, bundles):
     return result
 
 
+def select_eight_asset_primary(bundles):
+    """Prefer an originally selected ensemble over newly exported individual seeds."""
+    candidates=[p for p in bundles if p.get('strategy_id')=='ppo' and len(p.get('instruments',[]))==8
+                and not any('news' in f or 'gdelt' in f for f in p.get('environment',{}).get('features',[]))]
+    if not candidates:raise ValueError('eight-asset frozen policy unavailable')
+    def priority(p):
+        evaluated=p.get('evaluated_variant')
+        selected=evaluated is None or evaluated.get('selected_in_original_run') is True
+        selected_ensemble=selected and len(p.get('members',[]))>1
+        return (selected_ensemble,selected,p.get('source_run_id',''),p.get('configuration_id',''))
+    return max(candidates,key=priority)
+
+
 def load_current_inputs(session=None,cohort=None):
     """Approved snapshots through signed platform API; preserve raw and actor basis separately."""
     session=session or boto3.Session(region_name=REGION);ssm=session.client('ssm');s3=s3_client(REGION,session=session)
@@ -102,8 +115,7 @@ def load_current_inputs(session=None,cohort=None):
             if row['Size']>2_000_000:continue
             candidate=json.loads(s3.get_object(Bucket=artifacts._bucket,Key=row['Key'])['Body'].read())
             if len(candidate.get('instruments',[]))==8 and not any('news' in f or 'gdelt' in f for f in candidate.get('environment',{}).get('features',[])):candidates.append(candidate)
-        if not candidates:raise ValueError('eight-asset frozen policy unavailable')
-        policy=sorted(candidates,key=lambda p:p['configuration_id'])[0]
+        policy=select_eight_asset_primary(candidates)
     endpoint=param('/finplan/beta/financialplanning/api/plan-endpoint')
     client=HttpPlatformClient(endpoint,region=REGION,credentials=session.get_credentials())
     latest=client.get_latest_snapshot('finance/equity-etf-daily/research-universe')['snapshot']
