@@ -76,4 +76,8 @@ def test_matched_price_control_changes_only_news_state_not_periods_seeds_or_obje
     cfg['payload'].update(strategy='model_selection',objective=GDELT_PRICE_CONTROL_PROFILE,rebalance_frequency='daily')
     _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
     frozen=h.run(submitted['run_id'])['selection_protocol']
-    assert frozen==validate_protocol(price) and 'gdelt_corpus' not in frozen['rl']
+    released_base=h.service.cfg.job_types['model_selection'].protocol
+    released_news=profile_protocol(released_base,GDELT_INTRADAY_PROFILE)
+    released_price=profile_protocol(released_base,GDELT_PRICE_CONTROL_PROFILE)
+    released_news['rl']['env']['features'].remove('gdelt_intraday_organization_tone_v1')
+    assert frozen==released_price==released_news and 'gdelt_corpus' not in frozen['rl']
