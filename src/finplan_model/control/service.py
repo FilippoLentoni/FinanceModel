@@ -439,9 +439,9 @@ class JobService:
         from finplan_model.selection.protocol import validate_protocol
 
         protocol = validate_protocol(sub.job_type.protocol or {})
-        from finplan_model.selection.recursive_profiles import profile_protocol,DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE
+        from finplan_model.selection.recursive_profiles import profile_protocol,DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE
         objective=sub.body['configuration']['payload'].get('objective')
-        manual_profile=sub.job_type.name=='model_selection' and objective in (DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE)
+        manual_profile=sub.job_type.name=='model_selection' and objective in (DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE)
         if sub.job_type.name == "recursive_evaluate" or manual_profile:
             protocol = validate_protocol(profile_protocol(protocol, sub.body["configuration"]["payload"].get("objective")))
         prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") in ("model_selection", "recursive_evaluate") and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)

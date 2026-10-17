@@ -14,14 +14,19 @@ STATE_PROFILES = {
     "recursive_ppo_state_combined": ("cross_asset_risk", "market_regime", "recent_returns"),
 }
 DAILY_HISTORY_PROFILE = "recursive_ppo_daily_history"
+GDELT_PRICE_CONTROL_PROFILE = "recursive_ppo_gdelt_premarket_price_control"
 GDELT_INTRADAY_PROFILE = "recursive_ppo_gdelt_premarket"
 GDELT_PROFILE = "recursive_ppo_gdelt_morning"
-PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES, DAILY_HISTORY_PROFILE, GDELT_PROFILE, GDELT_INTRADAY_PROFILE)
+PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES, DAILY_HISTORY_PROFILE, GDELT_PROFILE, GDELT_INTRADAY_PROFILE, GDELT_PRICE_CONTROL_PROFILE)
 
 
 def profile_protocol(base, profile):
     if profile not in PROFILES:
         raise FinplanError.validation("unknown released recursive PPO profile", pointer="/configuration/payload/objective")
+    if profile == GDELT_PRICE_CONTROL_PROFILE:
+        p=profile_protocol(base,GDELT_INTRADAY_PROFILE)
+        p['rl']['env']['features'].remove('gdelt_intraday_organization_tone_v1')
+        return p
     if profile == GDELT_INTRADAY_PROFILE:
         p=profile_protocol(base,'recursive_ppo_state_baseline')
         p['data_start']='2024-01-01'

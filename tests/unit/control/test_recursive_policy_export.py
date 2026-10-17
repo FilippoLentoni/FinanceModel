@@ -59,3 +59,21 @@ def test_intraday_readiness_uses_verified_sessions_inside_frozen_splits(monkeypa
     h.service._freeze_gdelt_corpus(protocol,SimpleNamespace(body=body))
     assert seen['required_days']==['2024-01-02','2025-05-30','2025-07-02','2025-12-31','2026-01-02','2026-10-16']
     assert protocol['rl']['gdelt_corpus']['required_session_days']==seen['required_days']
+
+
+def test_matched_price_control_changes_only_news_state_not_periods_seeds_or_objectives():
+    import copy
+    from finplan_model.selection.recursive_profiles import profile_protocol,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE
+    from finplan_model.selection.protocol import DEFAULT_PROTOCOL,validate_protocol
+    from finplan_model.rl.spec import EnvSpec
+    news=profile_protocol(DEFAULT_PROTOCOL,GDELT_INTRADAY_PROFILE)
+    price=profile_protocol(DEFAULT_PROTOCOL,GDELT_PRICE_CONTROL_PROFILE)
+    expected=copy.deepcopy(news);expected['rl']['env']['features'].remove('gdelt_intraday_organization_tone_v1')
+    assert price==expected
+    assert EnvSpec.from_dict(news['rl']['env']).observation_size(8)==98
+    assert EnvSpec.from_dict(price['rl']['env']).observation_size(8)==58
+    h=Harness(auto_approve=1.);cfg=request()['configuration']
+    cfg['payload'].update(strategy='model_selection',objective=GDELT_PRICE_CONTROL_PROFILE,rebalance_frequency='daily')
+    _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    frozen=h.run(submitted['run_id'])['selection_protocol']
+    assert frozen==validate_protocol(price) and 'gdelt_corpus' not in frozen['rl']
