@@ -55,3 +55,12 @@ def test_baseline_freezes_evaluated_parameters_without_policy_members():
     assert frozen['configuration_id'].startswith('cfg_')
     again = freeze_policy_source(copy.deepcopy(result), copy.deepcopy(spec), 'run_source', 'min_variance')
     assert frozen == again
+
+
+def test_news_aware_export_keeps_training_corpus_identity_and_refuses_missing_provenance():
+    result,spec=source();result['payload']['model_selection']['rl']['ppo']['environment']['features']=['current_weights','etf_news_metadata_v1']
+    with pytest.raises(FinplanError):freeze_policy_source(result,spec,'run_source')
+    spec['selection_protocol']['rl']['news_corpus']={'checksum':'sha256:'+'a'*64}
+    frozen=freeze_policy_source(result,spec,'run_source')
+    assert frozen['training_news_corpus_checksum']=='sha256:'+'a'*64
+    assert frozen['news_feature_protocol']=='etf-search-metadata/1'

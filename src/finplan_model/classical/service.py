@@ -61,9 +61,11 @@ class ClassicalService:
         # A zero holding is a portfolio state, not removal from the investable universe.
         # Keep approved assets eligible after a full exit and when starting from cash.
         instruments = sorted(market.instruments)
+        research_profile=None
         if saved is not None:
             from finplan_model.paper_profile import approved_profile_instruments
             metadata=self.d.platform.get_portfolio(saved['portfolio_id'])
+            research_profile=metadata.get('settings',{}).get('paper_research_profile')
             instruments=approved_profile_instruments(metadata,portfolio_id=saved['portfolio_id'],available_instruments=market.instruments)
         if not 1 <= len(instruments) <= 5:
             raise FinplanError.precondition(
@@ -118,6 +120,28 @@ class ClassicalService:
                 "observations": len(returns),
             },
         }
+        news_evidence={}
+        if research_profile is not None:
+            from finplan_model.etf_news import dt,extract
+            cutoff=market.decision_time(as_of).isoformat() if 'as_of' in body else self.now().isoformat()
+            created=content.snapshot.record.get('created_at')
+            if not created or dt(created)>dt(cutoff):raise FinplanError.precondition('price snapshot unavailable at news recommendation cutoff',reason='snapshot_vintage_unavailable')
+            corpus=self.d.platform.get_research_news(instruments,cutoff)
+            from finplan_model.core.outcome import require_valid
+            require_valid(corpus,'api/research-news-response')
+            if set(corpus['symbols'])!=set(instruments) or dt(corpus['decision_at'])!=dt(cutoff):raise FinplanError.precondition('news response does not match requested formation cutoff',reason='news_query_mismatch')
+            features,provenance,_=extract(corpus,symbols=instruments,decision_time=cutoff)
+            if any(features[s]['missing'] for s in instruments):raise FinplanError.precondition('isolated news-aware portfolio requires licensed current coverage for every instrument',reason='news_serving_coverage_missing')
+            price_inputs=copy.deepcopy(inputs);inputs['decision_time']=cutoff
+            sentiment=np.array([features[s]['sentiment'] for s in instruments]);scale=1+.25*np.array([features[s]['uncertainty'] for s in instruments])
+            inputs['expected_returns']=(np.asarray(inputs['expected_returns'])+.0005*sentiment).tolist()
+            inputs['covariance']=(np.asarray(inputs['covariance'])*np.outer(scale,scale)).tolist()
+            inputs['scenarios']=(np.asarray(inputs['scenarios'])*scale).tolist()
+            news_evidence={'consumed':True,'feature_protocol':'etf-search-metadata/1','formation_time':cutoff,'features':features,'provenance':provenance,
+                'corpus_checksum':sha256_checksum(canonical_json_bytes(corpus)), 'price_only_inputs_checksum':sha256_checksum(canonical_json_bytes(price_inputs)),
+                'news_inputs_checksum':sha256_checksum(canonical_json_bytes(inputs)),
+                'assumptions':{'sentiment_mean_shift_per_session':.0005,'uncertainty_risk_scale':.25},'accuracy_improvement':'not_established'}
+            inputs['news_evidence']=news_evidence
         solution = solve(inputs)
         if solution["status"] != "optimal":
             raise FinplanError.precondition(
@@ -167,6 +191,7 @@ class ClassicalService:
             "diagnostics": {
                 **solution["metrics"],
                 "solver": solution["solver"],
+                "news_evidence": news_evidence,
                 "settings": cfg,
             },
             "decision_timing": "after_completed_close_for_next_session",
@@ -197,6 +222,7 @@ class ClassicalService:
             self, rec, saved,
             {"implementation": inputs["implementation"], "settings": cfg,
              "decision_time": inputs["decision_time"],
+             "news_evidence": news_evidence,
              "snapshot_checksum": content.snapshot.manifest_checksum,
              "paper_execution_cost_bps": 2.0,
              "evaluation_contract": evaluation_contract(algorithm, optimizer_settings=cfg),

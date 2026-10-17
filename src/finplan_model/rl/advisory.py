@@ -68,7 +68,15 @@ def recommendation(service, body):
     if not dates or dates[-1]!=as_of:
         raise FinplanError.precondition('as_of must name the latest aligned completed session in the supplied snapshot',reason='stale_or_incomplete_market_data')
     holdings,metadata=value_holdings(body,saved,raw_market(content,market),as_of,bundle['instruments'])
-    rec=recommend(bundle,px,holdings) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
+    news_kwargs={}
+    decision_cutoff=market.decision_time(as_of).isoformat()
+    if 'etf_news_metadata_v1' in bundle.get('environment',{}).get('features',[]):
+        from finplan_model.etf_news import dt
+        decision_cutoff=market.decision_time(as_of).isoformat() if 'as_of' in body else service.now().isoformat()
+        created=content.snapshot.record.get('created_at')
+        if not created or dt(created)>dt(decision_cutoff):raise FinplanError.precondition('price snapshot unavailable at news-policy decision',reason='snapshot_vintage_unavailable')
+        news_kwargs={'news_dataset':service.d.platform.get_research_news(bundle['instruments'],decision_cutoff),'decision_time':decision_cutoff}
+    rec=recommend(bundle,px,holdings,**news_kwargs) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
     provenance = {
@@ -77,9 +85,9 @@ def recommendation(service, body):
         'export_run_id': pinned['export_run_id'],
         'policy_source_run_id': bundle['source_run_id'],
         'configuration_id': bundle['configuration_id'],
-        'policy_inputs': {'prices': px.tolist(), 'holdings': holdings, 'environment': bundle.get('environment'), 'instruments': bundle['instruments']},
+        'policy_inputs': {'prices': px.tolist(), 'holdings': holdings, 'environment': bundle.get('environment'), 'instruments': bundle['instruments'],**news_kwargs},
         'snapshot_checksum': content.snapshot.manifest_checksum,
-        'decision_time': market.decision_time(as_of).isoformat(),
+        'decision_time': decision_cutoff,
         'paper_execution_cost_bps': 2.0,
         'evaluation_contract': evaluation_contract(bundle['strategy_id'], bundle=bundle),
         'evaluation_implementation': evaluation_implementation(bundle),

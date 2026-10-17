@@ -14,6 +14,8 @@ PROTOCOL='etf-search-metadata/1'
 FEATURE_ORDER=('sentiment','event_count','uncertainty','age_hours','missing')
 ETF_UNIVERSE=frozenset(('SPY','VOO','VTI','QQQ','IWM','DIA','AGG','BND','TLT','GLD','VEA','VWO'))
 
+FINANCIAL_NEWS_UNIVERSE=ETF_UNIVERSE|{'GOOGL'}
+
 
 def dt(value):
     parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
@@ -61,7 +63,7 @@ def extract(dataset,*,symbols,decision_time,training=False):
 
 def compare_optimizer(inputs,features):
     """Matched inputs with a bounded declared hypothesis, never a performance claim."""
-    if set(inputs['instruments'])-ETF_UNIVERSE:raise FinplanError.precondition('ETF research requires an ETF-only approved universe',reason='non_etf_universe')
+    if set(inputs['instruments'])-FINANCIAL_NEWS_UNIVERSE:raise FinplanError.precondition('ETF research requires an approved ETF/stock research universe',reason='non_etf_universe')
     if any(features.get(s,{}).get('missing',1) for s in inputs['instruments']):return {'status':'ineligible','reason':'eligible_news_missing_for_universe'}
     enriched=copy.deepcopy(inputs)
     sentiment=np.array([features[s]['sentiment'] for s in inputs['instruments']]);uncertainty=np.array([features[s]['uncertainty'] for s in inputs['instruments']])
@@ -107,7 +109,7 @@ def snapshot_baseline(service,snapshot_id,symbols,decision,algorithm):
 def handle(service,body):
     if service.env!='beta':raise FinplanError.precondition('ETF news research is beta only',reason='beta_only')
     symbols=body['symbols']
-    if set(symbols)-ETF_UNIVERSE:raise FinplanError.validation('ETF symbol outside research allowlist',pointer='/symbols')
+    if set(symbols)-FINANCIAL_NEWS_UNIVERSE:raise FinplanError.validation('financial symbol outside research allowlist',pointer='/symbols')
     decision=body.get('decision_at',service.now().astimezone(UTC).isoformat().replace('+00:00','Z'))
     if dt(decision)>service.now():raise FinplanError.precondition('future research decision time',reason='news_future_decision')
     dataset=service.d.platform.get_research_news(symbols,decision)
@@ -119,7 +121,7 @@ def handle(service,body):
     comparison={'status':'ineligible','reason':'baseline_analysis_id_required'}
     if body.get('baseline_analysis_id') and body.get('input_snapshot_id'):raise FinplanError.validation('choose one baseline source',pointer='/input_snapshot_id')
     snapshot_id=body.get('input_snapshot_id')
-    if not snapshot_id and not body.get('baseline_analysis_id') and body.get('algorithm') and len(symbols)==1:
+    if not snapshot_id and not body.get('baseline_analysis_id') and body.get('algorithm') and (len(symbols)==1 or set(symbols)<={'VOO','GOOGL'}):
         dataset_id='finance/etf-daily/SPY' if symbols==['SPY'] else 'finance/equity-etf-daily/research-universe'
         snapshot_id=service.d.platform.get_latest_snapshot(dataset_id)['snapshot']['input_snapshot_id']
     if snapshot_id:

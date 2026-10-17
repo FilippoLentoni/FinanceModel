@@ -228,11 +228,11 @@ def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, ca
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
     parts: dict[str, np.ndarray] = {}
     if "etf_news_metadata_v1" in spec.features:
-        from finplan_model.etf_news import ETF_UNIVERSE, extract, dt
+        from finplan_model.etf_news import FINANCIAL_NEWS_UNIVERSE, extract, dt
         from finplan_model.core.outcome import require_valid
         if news_dataset is None or instruments is None or decision_time is None:
             raise FinplanError.precondition("ETF news state requires explicit source data, instrument order and decision cutoff", reason="news_state_input_missing")
-        if len(instruments)!=len(weights) or len(set(instruments))!=len(instruments) or set(instruments)-ETF_UNIVERSE:
+        if len(instruments)!=len(weights) or len(set(instruments))!=len(instruments) or set(instruments)-FINANCIAL_NEWS_UNIVERSE:
             raise FinplanError.validation("ETF news state requires matching ETF instrument order", pointer="/observation/instruments")
         require_valid(news_dataset,"api/research-news-response")
         if set(instruments)!=set(news_dataset['symbols']) or dt(news_dataset['decision_at'])!=dt(decision_time):

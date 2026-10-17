@@ -391,6 +391,13 @@ def _run_rl(
     t_win = arrays.window_indices(*windows["train"])
     v_win = arrays.window_indices(*windows["validation"])
     base = EnvSpec.from_dict(rl_proto.get("env"))
+    news_provider=None
+    if 'etf_news_metadata_v1' in base.features:
+        from finplan_model.rl.etf_news import FrozenEtfNewsProvider
+        corpus=rl_proto.get('news_corpus') or {}
+        if not corpus.get('dataset'):raise FinplanError.precondition('news-aware job requires frozen licensed corpus',reason='news_training_corpus_missing')
+        news_provider=FrozenEtfNewsProvider(corpus['dataset'])
+        if news_provider.corpus_checksum!=corpus.get('checksum'):raise FinplanError.precondition('news corpus checksum mismatch',reason='news_training_corpus_integrity')
     if base.decision_frequency != config.rebalance_frequency:
         # every family must decide on the same schedule (user decision 28: daily)
         raise FinplanError.validation(
@@ -406,6 +413,7 @@ def _run_rl(
         for point in grid:
             env_spec = base.with_reward(**point) if point else base
             conf = policy_configuration(algo, hp, env_spec, simulation_configuration_id=config.configuration_id, training_range=training_range, instruments=tuple(arrays.instruments))
+            if news_provider is not None:conf["news_corpus_checksum"]=news_provider.corpus_checksum
             cid = configuration_id(conf)
             seeds: list[Candidate] = []
             runs: list[dict[str, Any]] = []
@@ -414,10 +422,10 @@ def _run_rl(
                     runs.append({"seed": seed, "status": "skipped_time_budget"})
                     continue
                 log("rl_training_started", algorithm=algo, seed=seed, configuration_id=cid, reward=point)
-                tp = train_policy(arrays, env_spec, config, algorithm=algo, seed=seed, hyperparameters=hp, train_window=t_win, validation_window=v_win, configuration_id=cid, metric=metric, deadline=deadline)
+                tp = train_policy(arrays, env_spec, config, algorithm=algo, seed=seed, hyperparameters=hp, train_window=t_win, validation_window=v_win, configuration_id=cid, metric=metric, deadline=deadline,**({"news_provider":news_provider} if news_provider is not None else {}))
                 log("rl_training_finished", algorithm=algo, seed=seed, seconds=round(tp.seconds, 2), best_step=tp.best_step, stopped=tp.stopped_reason)
                 predict = load_predictor(algo, tp.model_bytes)
-                strat_factory = (lambda a=algo, p=predict, s=seed, e=env_spec, c=cid: RLPolicyStrategy(a, p, e, seed=s, configuration_id=c))
+                strat_factory = (lambda a=algo, p=predict, s=seed, e=env_spec, c=cid: RLPolicyStrategy(a, p, e, seed=s, configuration_id=c,news_provider=news_provider))
                 cand = Candidate(algo, "rl", {"reward": dict(point)} if point else {}, strat_factory, configuration_id=cid, seed=int(seed))
                 cand.results["validation"] = ev.run(cand.factory(), "validation")
                 seeds.append(cand)

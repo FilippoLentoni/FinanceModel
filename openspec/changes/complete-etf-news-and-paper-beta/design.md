@@ -14,3 +14,7 @@ Sparse news → no historical performance claim. Sensitivity coefficients are un
 
 ## Migration Plan
 Publish additive code without contract changes. Run fixture verification, then root runs real frozen evidence and beta lifecycle creation. Existing hosted APIs and production strategies are unchanged.
+
+
+## Strict completion update
+The user requires actual hosted optimizer and PPO consumption. The saved USD100 profile therefore requires fresh licensed news in numerical solver inputs, with formation time equal to actual issuance unless explicitly historical. Existing compatible-state inference must consume the same versioned inputs; training validates frozen coverage and training rights before creating a learner. Current research-only forward metadata cannot train a policy. A valid compatible source artifact and hosted source/observation evidence are mandatory; tasks remain open until these exist. Public-domain historical archives need separately audited historical availability and explicit no-event coverage, not backdated retrieval.

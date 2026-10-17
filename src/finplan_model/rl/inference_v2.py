@@ -123,7 +123,7 @@ def allocation_response(bundle, holdings, proposed, proposed_cash, *, solution_s
             "limitations": ["research_only", "hindsight_selected_universe", "no_trade_execution", "uses_completed_close_next_session_decision"]}
 
 
-def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[str, Any]) -> dict[str, Any]:
+def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[str, Any], *, news_dataset=None, decision_time=None) -> dict[str, Any]:
     spec = EnvSpec.from_dict(bundle["environment"])
     instruments = list(bundle["instruments"])
     current, cash, value, peak = portfolio_state(instruments, holdings)
@@ -131,12 +131,27 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
         raise FinplanError.precondition("the approved snapshot lacks aligned completed history", reason="insufficient_history")
     if not bundle.get("members"):
         raise FinplanError.precondition("the exported policy has no members", reason="policy_members_missing")
-    obs = build_observation(spec, prices, current, cash, drawdown=1 - value / peak)
+    kwargs={}
+    news_evidence={}
+    if 'etf_news_metadata_v1' in spec.features:
+        if len(bundle.get('members',[]))!=5:raise FinplanError.precondition('news-aware serving requires the complete five-seed ensemble',reason='news_policy_members_missing')
+        corpus_identity=bundle.get('training_news_corpus_checksum','')
+        if bundle.get('news_feature_protocol')!='etf-search-metadata/1' or not isinstance(corpus_identity,str) or len(corpus_identity)!=71 or not corpus_identity.startswith('sha256:'):
+            raise FinplanError.precondition('news-aware actor lacks frozen training corpus identity',reason='news_policy_training_provenance_missing')
+        from finplan_model.core.artifacts import canonical_json_bytes
+        from finplan_model.etf_news import extract
+        if news_dataset is None or decision_time is None:raise FinplanError.precondition('news-aware actor requires licensed point-in-time data',reason='news_serving_input_missing')
+        features,provenance,_=extract(news_dataset,symbols=instruments,decision_time=decision_time)
+        if any(features[s]['missing'] for s in instruments):raise FinplanError.precondition('news-aware served recommendation requires eligible source coverage',reason='news_serving_coverage_missing')
+        kwargs={'news_dataset':news_dataset,'instruments':tuple(instruments),'decision_time':decision_time}
+        news_evidence={'consumed':True,'training_news_corpus_checksum':bundle['training_news_corpus_checksum'],'decision_time':decision_time,'corpus_checksum':sha256_checksum(canonical_json_bytes(news_dataset)),'features':features,'provenance':provenance}
+    obs = build_observation(spec, prices, current, cash, drawdown=1 - value / peak,**kwargs)
     targets = [allocation_action(spec, actor_action(m["actor"], obs), current, cash) for m in bundle["members"]]
     return allocation_response(
         bundle, holdings, np.mean([t[0] for t in targets], axis=0),
         float(np.mean([t[1] for t in targets])),
         diagnostics={
+            "news_evidence": news_evidence,
             "input_features": list(spec.features),
             "observation_dimension": int(obs.size),
             "observation_checksum": sha256_checksum(obs.tobytes()),

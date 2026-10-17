@@ -51,4 +51,9 @@ def freeze_policy_source(result, spec, source_run_id, strategy_id='ppo'):
         members.append({'seed':row['seed'],'artifact':ref})
     env=summary['rl'][strategy_id]['environment']
     env={k:v for k,v in env.items() if k!='reward_formula'}
-    return {**common,'configuration_id':selected['configuration_id'],'environment':env,'members':members}
+    news_identity={}
+    if 'etf_news_metadata_v1' in env.get('features',[]):
+        corpus=protocol['rl'].get('news_corpus') or {}
+        if not corpus.get('checksum'):raise FinplanError.precondition('news-aware export needs training corpus identity',reason='news_training_corpus_missing')
+        news_identity={'training_news_corpus_checksum':corpus['checksum'],'news_feature_protocol':'etf-search-metadata/1'}
+    return {**common,'configuration_id':selected['configuration_id'],'environment':env,'members':members,**news_identity}

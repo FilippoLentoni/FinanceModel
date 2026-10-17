@@ -3,7 +3,7 @@ from .legacy_v1.inference import actor_action, export_actor, portfolio_state, al
 from .legacy_v1 import inference as legacy
 from . import inference_v2 as enriched
 
-ENRICHED = frozenset(("cross_asset_risk", "market_regime", "recent_returns"))
+ENRICHED = frozenset(("cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1"))
 
 def implementation_for(bundle=None):
     features = (bundle or {}).get("environment", {}).get("features", [])
@@ -12,5 +12,9 @@ def implementation_for(bundle=None):
 def implementation_identity(bundle=None):
     return implementation_for(bundle).implementation_identity()
 
-def recommend(bundle, prices, holdings):
-    return implementation_for(bundle).recommend(bundle, prices, holdings)
+def recommend(bundle, prices, holdings, **news_inputs):
+    implementation=implementation_for(bundle)
+    if news_inputs and implementation is legacy:
+        from finplan_model.core.errors import FinplanError
+        raise FinplanError.precondition('legacy actor cannot consume news features',reason='news_policy_incompatible')
+    return implementation.recommend(bundle, prices, holdings,**news_inputs)

@@ -57,7 +57,7 @@ def replay(service, doc):
     bundle = json.loads(service.d.artifacts.get(artifact))
     if provenance.get("implementation") and provenance["implementation"] != implementation_identity(bundle):
         raise FinplanError.precondition("policy inference implementation differs from issued decision", reason="policy_implementation_mismatch")
-    result = recommend(bundle, np.asarray(inputs["prices"]), inputs["holdings"])
+    result = recommend(bundle, np.asarray(inputs["prices"]), inputs["holdings"],**({"news_dataset":inputs["news_dataset"],"decision_time":inputs["decision_time"]} if "news_dataset" in inputs else {}))
     original = doc["recommendation"]
     expected = [r["weight"] for r in original["target_weights"]] + [original["cash_weight"]]
     actual = [r["weight"] for r in result["target_weights"]] + [result["cash_weight"]]

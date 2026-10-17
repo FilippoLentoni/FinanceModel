@@ -23,3 +23,10 @@ A $100 VOO/GOOGL paper profile SHALL have caller and portfolio identity, synthet
 #### Scenario: Existing larger paper portfolio
 - **WHEN** the caller initializes the small study
 - **THEN** a separate portfolio is created and the existing portfolio remains unchanged
+
+### Requirement: Real news reaches served optimizer and PPO recommendations
+Completion SHALL require purchased eligible news stored centrally, consumed by actual optimizer and compatible trained PPO computations, and returned in hosted LangGraph recommendations with source and observation checksums. Adapters, readiness or ineligible outputs SHALL NOT satisfy this requirement.
+
+#### Scenario: Compatible checkpoint unavailable
+- **WHEN** rights or historical coverage prevents training a compatible news-aware actor
+- **THEN** the exit check fails and the completion task stays open; legacy checkpoints cannot substitute
