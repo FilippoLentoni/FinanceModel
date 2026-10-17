@@ -151,3 +151,11 @@ Conflicting IDs, mismatched cutoffs/symbols and future-available deliveries cann
 enter the merged metadata. Successful empty queries remain distinct from failed
 queries. Missing eligible licensed metadata is exposed by the native extractor;
 public RSS headlines are not substituted for that model's declared metadata input.
+
+The direct classical Lambda's `get_etf_research_inputs` dispatcher explicitly
+applies the existing contract `no_storage_locations` semantic check before JSON
+validation or producer invocation. This closes the direct runtime rejection gap
+for location-valued `contract_version`/`decision_at` fields while preserving valid
+existing requests. The immutable legacy v1 request schema still lacks its check
+marker: the three pre-existing producer-schema audit failures are not waived,
+rewritten or represented as passing by this source hardening.

@@ -229,9 +229,24 @@ def handle(event, service):
         raise FinplanError.validation(
             "unknown classical operation", pointer="/operation"
         )
-    body = require_valid(
-        event.get("request", {}), "tools/" + op.replace("_", "-") + "-request"
-    )
+    schema = "tools/" + op.replace("_", "-") + "-request"
+    if op == "get_etf_research_inputs":
+        # The immutable legacy v1 schema omitted this marker. Enforce the
+        # existing semantic rule at the direct producer boundary, without
+        # changing frozen schema bytes or accepting caller-selected storage.
+        from finplan_contracts.schemas import load_store
+        from finplan_contracts.validate import CheckContext, check_no_storage_locations
+        contract_store = load_store()
+        issues = check_no_storage_locations(CheckContext(
+            document=event.get("request", {}), info=contract_store.get(schema),
+            store=contract_store, context={},
+        ))
+        if issues:
+            raise FinplanError.validation(
+                "storage locations are not accepted; use a trusted artifact reference",
+                pointer=issues[0].pointer, schema=schema,
+            )
+    body = require_valid(event.get("request", {}), schema)
     if op == "get_etf_research_inputs":
         from .etf_news import handle as etf_handle
         return require_valid(etf_handle(service, body), "tools/get-etf-research-inputs-response")
