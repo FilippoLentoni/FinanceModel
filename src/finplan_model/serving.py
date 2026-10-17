@@ -18,6 +18,23 @@ log.setLevel(logging.INFO)
 _SERVICE = None
 
 
+def capture_served_input(client,bucket,payload):
+    """Content-addressed pre-actor input; concurrent equal retries verify original bytes."""
+    from finplan_model.core.artifacts import ArtifactRef,canonical_json_bytes,sha256_checksum,verify_checksum
+    data=canonical_json_bytes(payload);checksum=sha256_checksum(data)
+    ref=ArtifactRef(artifact_id='served_model_input_'+checksum.split(':')[1],kind='served_model_input',
+                    checksum=checksum,content_type='application/json',size_bytes=len(data))
+    key='artifacts/served_model_input/'+ref.artifact_id
+    try:
+        client.put_object(Bucket=bucket,Key=key,Body=data,ContentType=ref.content_type,
+                          Metadata={'checksum':checksum,'kind':ref.kind},IfNoneMatch='*')
+    except Exception as exc:
+        if getattr(exc,'response',{}).get('Error',{}).get('Code') not in ('PreconditionFailed','ConditionalRequestConflict','412','409'):raise
+        original=client.get_object(Bucket=bucket,Key=key)['Body'].read()
+        verify_checksum(original,checksum,what='served model input')
+    return ref.to_dict()
+
+
 def build_service():
     import boto3
     from finplan_model.control.production_strategy import SsmStrategyParameter
@@ -35,6 +52,7 @@ def build_service():
         advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
         research_plan_parameter=SsmStrategyParameter(ssm, f"/finplan/{env}/financialplanning/config/research-plan-ref"),
         artifacts=S3ArtifactStore(s3_client(cfg.region, session=session), bucket),
+        capture_served_input=lambda payload:capture_served_input(s3_client(cfg.region,session=session),bucket,payload),
         platform=HttpPlatformClient(endpoint, region=cfg.region, credentials=session.get_credentials()),
     )
     return SimpleNamespace(env=env, d=deps, now=SystemClock().now)

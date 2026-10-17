@@ -54,12 +54,13 @@ def context(monkeypatch):
               "members": [{"seed": 0}], "environment": {"window": 2}}
     artifacts = InMemoryArtifactStore()
     ref = artifacts.put_json(bundle, kind="policy_inference")
-    deps = SimpleNamespace(platform=platform, research_plan_parameter=SimpleNamespace(read=lambda: PLAN), artifacts=artifacts,
+    deps = SimpleNamespace(capture_served_input=lambda payload:artifacts.put_json(payload,kind="served_model_input").to_dict(), platform=platform, research_plan_parameter=SimpleNamespace(read=lambda: PLAN), artifacts=artifacts,
                            advisory_parameter=SimpleNamespace(read=lambda: json.dumps({"export_run_id": "run_" + UID, "artifact": ref.to_dict()})))
     svc = SimpleNamespace(env="beta", d=deps, now=lambda: datetime(2026, 10, 10, tzinfo=UTC))
     captured = []
     monkeypatch.setattr("finplan_model.rl.advisory.load_market", lambda p, s: (market, content))
-    def recommend(frozen, px, holdings):
+    def recommend(frozen, px, holdings, *, input_capture=None):
+        if input_capture:input_capture({"boundary":"controlled_fixed_policy_fixture","prices":px.tolist(),"holdings":holdings})
         captured.append((px.copy(), copy.deepcopy(holdings)))
         return allocation_response(frozen, holdings, [.25, .25], .5)
     monkeypatch.setattr("finplan_model.rl.advisory.recommend", recommend)

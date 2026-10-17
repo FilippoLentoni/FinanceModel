@@ -74,7 +74,9 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
           'trigger':source.get('trigger','manual_validation'),'holdings':copy.deepcopy(holdings),'constraints':copy.deepcopy((config or {}).get('constraints',{})),
           'shared_source_checksum':sha256_checksum(canonical_json_bytes(source)),
           'news':{'consumed':False,'layer':'not_consumed','items':[],'reason':'News not consumed'},
-          'numeric':{'price_history':copy.deepcopy([r for r in source.get('observations',[]) if r.get('available_at','9999')<=cutoff and r.get('session_date','9999')<=cutoff[:10]]),'frequency':'completed_daily','price_history_layer':'eligible_source_context; exact_solver_or_actor_payload_in_prepared','price_history_consumed':approach.approach_id!='cash'}}
+          'numeric':{'frequency':'completed_daily','price_history_consumed':False,
+              'source_history_reference':{'shared_source_checksum':sha256_checksum(canonical_json_bytes(source)),
+                   'layer':'shared_source_only; exact consumed solver arrays or actor price window are in prepared'}}}
     if approach.adapter in ('codex','langgraph') or approach_id=='cash':
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False

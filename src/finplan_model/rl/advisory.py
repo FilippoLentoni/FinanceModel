@@ -115,11 +115,27 @@ def recommendation(service, body):
                  'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,
                  'snapshot_created_at':content.snapshot.record.get('created_at'),'policy_artifact':pinned['artifact'],
                  'policy_configuration_id':bundle['configuration_id'],'prepared':prepared}
-        ref=service.d.artifacts.put_json(payload,kind='run_artifact',domain='finance')
-        service.store.append_audit({'event':'capture_actual_served_model_input','audit_id':service.d.ids.correlation_id(),
-            'at':service.now().isoformat(),'input_snapshot_id':snapshot_id,'configuration_id':bundle['configuration_id'],'artifact':ref.to_dict()})
-        captured_inputs.append({'payload':payload,'artifact':ref.to_dict(),'checksum':sha256_checksum(canonical_json_bytes(payload))})
-    rec=recommend(bundle,px,holdings,**news_kwargs,input_capture=capture_actual) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings,input_capture=capture_actual)
+        checksum=sha256_checksum(canonical_json_bytes(payload))
+        # This serving principal owns immutable classical/* evidence, and has an
+        # explicit deny on DynamoDB. The caller's platform activity receipt
+        # indexes the exact pre-actor payload and these verified references.
+        writer=getattr(service.d,'capture_served_input',None)
+        if writer:
+            ref=writer(payload)
+        elif hasattr(service,'issue'):
+            ref=service.issue('served_model_input',{'input_payload':payload},
+                {'input_checksum':checksum,'policy_artifact':pinned['artifact']})['analysis_ref']
+        else:
+            raise FinplanError.dependency_unavailable('actual model input storage is unavailable',reason='input_capture_unavailable')
+        captured_inputs.append({'payload':payload,'artifact':ref,'checksum':checksum})
+    try:
+        rec=recommend(bundle,px,holdings,**news_kwargs,input_capture=capture_actual) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings,input_capture=capture_actual)
+    except Exception as exc:
+        from finplan_model.core.errors import as_finplan_error
+        error=as_finplan_error(exc)
+        error.details['actual_model_input_refs']=[entry['artifact'] for entry in captured_inputs]
+        error.details['actual_model_inputs']=captured_inputs
+        raise error from exc
     rec.setdefault('diagnostics',{})['actual_model_inputs']=captured_inputs
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
