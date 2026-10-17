@@ -75,11 +75,13 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
           'shared_source_checksum':sha256_checksum(canonical_json_bytes(source)),
           'news':{'consumed':False,'layer':'not_consumed','items':[],'reason':'News not consumed'},
           'numeric':{'price_history':copy.deepcopy([r for r in source.get('observations',[]) if r.get('available_at','9999')<=cutoff and r.get('session_date','9999')<=cutoff[:10]]),'frequency':'completed_daily','price_history_layer':'eligible_source_context; exact_solver_or_actor_payload_in_prepared','price_history_consumed':approach.approach_id!='cash'}}
-    if approach.adapter in ('codex','langgraph') or approach_id=='cash':
+    if approach.adapter in ('codex','langgraph','crypto_native') or approach_id=='cash':
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False
         base['collected_not_consumed']={'price_history':{'shared_source_checksum':base['shared_source_checksum'],
              'status':'not_supplied_to_this_approach','reason':'DS-14 protected raw series; exact derived/provider request is in prepared' if approach.adapter=='codex' else 'Actual graph sub-boundaries are captured separately' if approach.adapter=='langgraph' else 'Constant cash control consumes no market history'}}
+    if approach.adapter=='crypto_native':
+        base['numeric']['frequency']='hourly_crypto_24x7'
     captured=False
     capture_failed=False
     def before(prepared):
@@ -87,6 +89,7 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
         if captured:raise ValueError('multiple boundary captures in one decision')
         payload=copy.deepcopy(base)
         payload['numeric']['prepared']=copy.deepcopy(prepared)
+        if approach.adapter=='crypto_native':payload['numeric']['price_history_consumed']=bool(prepared.get('price_history_consumed',False))
         payload['invocation_state']=prepared.get('invocation_state') or ('not_invoked' if str(prepared.get('boundary','')).startswith('not_invoked') else 'invoking')
         if prepared.get('news_evidence',{}).get('consumed'):
             payload['news']={'consumed':True,'layer':approach.news_layer,'items':copy.deepcopy(prepared.get('news_dataset',news_dataset)),

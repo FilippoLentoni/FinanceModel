@@ -50,7 +50,7 @@ def apply_next_session(policy,state,market,*,decision_at,observed_at,config=None
             'common_evaluator_result':result.to_dict(),'checksum':sha256_checksum(canonical_json_bytes(result.to_dict()))}
 
 
-def apply_forward_quotes(policy,state,quote_bundle,*,decision_at,opportunity_at,recorded_at,config,universe):
+def apply_forward_quotes(policy,state,quote_bundle,*,decision_at,opportunity_at,recorded_at,config,universe,execution_calendar="XNYS",quote_protocol="native_completed_1m_unadjusted_close/1",max_quote_age_seconds=120):
     """Apply a prior-hour policy to an actual fresh quote at the declared next opportunity."""
     from finplan_model.evaluate.evaluator import evaluate_point_rebalance
     from finplan_model.core.errors import FinplanError
@@ -64,7 +64,7 @@ def apply_forward_quotes(policy,state,quote_bundle,*,decision_at,opportunity_at,
     try:
         result=evaluate_point_rebalance(target,positions={r['instrument_id']:r['quantity'] for r in state['positions']},
             cash=state['cash_balance'],quotes=quotes,config=SimulationConfig.from_dict(config),decision_at=decision_at,
-            opportunity_at=opportunity_at,recorded_at=recorded_at,universe=universe)
+            opportunity_at=opportunity_at,recorded_at=recorded_at,universe=universe,execution_calendar=execution_calendar,quote_protocol=quote_protocol,max_quote_age_seconds=max_quote_age_seconds)
     except FinplanError as exc:
         return {'status':'pending_market_data','reason':exc.details.get('reason',exc.message),'fills':[]}
     new_state={**state,'positions':[{'instrument_id':i,'quantity':q} for i,q in result['positions'].items()],

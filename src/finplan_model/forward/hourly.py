@@ -141,14 +141,17 @@ def load_current_inputs(session=None,cohort=None):
     return source,policies
 
 
-def evaluator_config():
+def evaluator_config(policy=None):
+    policy=policy or POLICY
     from finplan_model.sim.config import SimulationConfig
     allowed=set(SimulationConfig.__dataclass_fields__)
-    return {**{k:copy.deepcopy(v) for k,v in POLICY.items() if k in allowed and k!='execution_timing'},'execution_timing':'next_open','initial_cash':POLICY['initial_capital'],'rebalance_frequency':'daily'}
+    return {**{k:copy.deepcopy(v) for k,v in policy.items() if k in allowed and k!='execution_timing'},'execution_timing':'next_open','initial_cash':POLICY['initial_capital'],'rebalance_frequency':'daily'}
 
 def _portfolio_holdings(book,source):
     state=book['paper_state'];marks={}
     for row in sorted(source.get('execution_observations',source.get('observations',[])),key=lambda r:r['session_date']):marks[row['instrument_id']]=row['close']
+    for instrument,rows in (source.get('native_crypto_dataset') or {}).get('bars',{}).items():
+        if rows:marks[instrument]=rows[-1]['close']
     shares={r['instrument_id']:r['quantity'] for r in state['positions']}
     cash=state['cash_balance'];missing=[i for i,q in shares.items() if q and i not in marks]
     value=None if missing else cash+sum(q*marks[i] for i,q in shares.items() if q)
@@ -194,8 +197,8 @@ def _current_news(backend,experiment,cutoff):
     return max(candidates,key=lambda s:s['available_at']) if candidates else None
 
 
-def _register(backend,experiment,approaches,source,at,slot):
-    policy={**POLICY,'investable_universe':source['investable_universe'],'first_scheduled_slot':slot,'scheduled_start_at':slot,'cadence_seconds':3600,'decision_offset_seconds':300}
+def _register(backend,experiment,approaches,source,at,slot,comparison_policy=None):
+    policy={**(comparison_policy or POLICY),'investable_universe':source['investable_universe'],'first_scheduled_slot':slot,'scheduled_start_at':slot,'cadence_seconds':3600,'decision_offset_seconds':300}
     old=backend.read_registry(experiment)
     if old:
         if {k:v for k,v in old['comparison_policy'].items() if k not in ('first_scheduled_slot','scheduled_start_at')}!={k:v for k,v in policy.items() if k not in ('first_scheduled_slot','scheduled_start_at')}:raise ValueError('existing experiment comparison policy is immutable; new experiment required')
@@ -204,7 +207,7 @@ def _register(backend,experiment,approaches,source,at,slot):
     else:backend.register_approaches(experiment,approaches,policy,at)
 
 
-def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,book,holdings,source,at,outcome):
+def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,book,holdings,source,at,outcome,comparison_policy=None):
     oid=identifier('mo',experiment,approach_id,slot,'valuation')
     if backend.repo.get('portfolio_observation',oid):return
     last_price=max((r['session_date'] for r in source.get('execution_observations',[])),default=None)
@@ -228,7 +231,7 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
     if isinstance(quotes,list):quotes={q['instrument_id']:q for q in quotes}
     positions={r['instrument_id']:r['quantity'] for r in holdings['positions']}
     needed=[i for i,q in positions.items() if q]
-    if needed and all(i in quotes and quotes[i].get('status')=='fresh' and quotes[i].get('available_at','9999')<=at and quotes[i].get('quoted_at','9999')<=at and 0<=quotes[i].get('freshness_seconds',999999)<=POLICY['price_freshness_seconds'] for i in needed):
+    if needed and all(i in quotes and quotes[i].get('status')=='fresh' and quotes[i].get('available_at','9999')<=at and quotes[i].get('quoted_at','9999')<=at and 0<=quotes[i].get('freshness_seconds',999999)<=(comparison_policy or POLICY)['price_freshness_seconds'] for i in needed):
         value=holdings['cash']+sum(q*quotes[i]['price'] for i,q in positions.items() if q)
         payload.update(value=value,observation_kind='valid',quote_status='fresh',reason='Actual eligible current quote marks',
                        quote_provenance={i:quotes[i] for i in needed})
@@ -240,7 +243,8 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
         payload.update(observation_kind='pending',quote_status='corporate_action_unreconciled',value=None,reason='Captured dividend/split requires authoritative action reconciliation; ranking blocked')
     backend.record_observation(experiment,approach_id,slot,book['portfolio_id'],payload,at)
 
-def reconcile_durable(backend,experiment,source,at,slot):
+def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
+    comparison_policy=comparison_policy or POLICY
     """Bounded seven-day pending fills and forecasts, preserving original predictions/inputs."""
     day=datetime.fromisoformat(at.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date()
     runs=[];observations=[]
@@ -266,7 +270,9 @@ def reconcile_durable(backend,experiment,source,at,slot):
         try:
             opportunity=(datetime.fromisoformat(slot.replace('Z','+00:00'))+timedelta(minutes=5)).isoformat().replace('+00:00','Z')
             result=apply_forward_quotes(outcome,book['paper_state'],source.get('current_quotes',{}),decision_at=run.get('finished_at',run['started_at']),
-                opportunity_at=opportunity,recorded_at=at,config=evaluator_config(),universe=source['investable_universe'])
+                opportunity_at=opportunity,recorded_at=at,config=evaluator_config(comparison_policy),universe=source['investable_universe'],
+                execution_calendar=comparison_policy.get('market_calendar','XNYS'),quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
+                max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120))
             if result['status'] in ('applied','no_op'):
                 backend.commit_paper_step(run['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
         except Exception as exc:
@@ -299,7 +305,8 @@ def reconcile_durable(backend,experiment,source,at,slot):
         if not token:break
     if token:raise ValueError('pending forecast query exceeded bounded10000 records; heads retained for recovery')
 
-def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None):
+def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None):
+    comparison_policy=comparison_policy or POLICY
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
     deadline=datetime.fromisoformat(at.replace('Z','+00:00'));slot_dt=datetime.fromisoformat(slot.replace('Z','+00:00'))
     if slot_dt>deadline:raise ValueError('future scheduled slot forbidden')
@@ -322,7 +329,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                 source={'investable_universe':persisted_registry['comparison_policy']['investable_universe'],'observations':[],'execution_observations':[],
                         'acquisition_failure':type(exc).__name__+': '+str(exc),'registry_approaches':persisted_registry['approaches']}
         if now is None:at=stamp();deadline=datetime.fromisoformat(at.replace('Z','+00:00'))
-    if not prior_shared and not missed:
+    if not prior_shared and not missed and 'current_quotes' not in source:
         quote_id=identifier('mi',experiment,'__valuation_quotes__',slot,'valuation_quotes')
         stored_quotes=backend.repo.get('research_input',quote_id)
         if stored_quotes:
@@ -339,12 +346,12 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         extras.append(Approach(name,name.replace('_',' '),'reinforcement_learning','actor',news_layer=layer,requires='verified_frozen_policy_bundle',version=policy['configuration_id']).to_dict())
     approaches=source.get('registry_approaches') or registry(extras)
     cohort_id='cohort_'+hashlib.sha256(canonical_json_bytes(sorted(source['investable_universe']))).hexdigest()[:16]
-    comparison_policy_id=sha256_checksum(canonical_json_bytes({**POLICY,'investable_universe':source['investable_universe']}))
+    comparison_policy_id=sha256_checksum(canonical_json_bytes({**comparison_policy,'investable_universe':source['investable_universe']}))
     for approach in approaches:
-        book=backend.ensure_portfolio(experiment,approach['approach_id'],POLICY['initial_capital'],source['investable_universe'],at)
+        book=backend.ensure_portfolio(experiment,approach['approach_id'],comparison_policy['initial_capital'],source['investable_universe'],at)
         approach.update(trigger=os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),code_versions=source.get('code_versions',{}),portfolio_id=book['portfolio_id'],cohort_id=cohort_id,comparison_policy_id=comparison_policy_id,
-                        initial_capital=POLICY['initial_capital'],universe=source['investable_universe'])
-    _register(backend,experiment,approaches,source,at,slot)
+                        initial_capital=comparison_policy['initial_capital'],universe=source['investable_universe'])
+    _register(backend,experiment,approaches,source,at,slot,comparison_policy)
     # Recover original shared input after crash/retry; never replace it with newly fetched data.
     shared_id=identifier('mi',experiment,'__shared__',slot,'shared_source')
     existing=backend.repo.get('research_input',shared_id)
@@ -363,7 +370,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                     'news':[],'availability_cutoff':at,'decision_time':at,'scheduled_slot':slot,'historical_slot_missing':True,
                     'reason':'skipped_missing_point_in_time; no historical input fabricated'}
         if not missed:
-            reconcile_durable(backend,experiment,source,at,slot)
+            reconcile_durable(backend,experiment,source,at,slot,comparison_policy)
         frozen_holdings={}
         for approach in approaches:
             snapshot_book=backend.get_portfolio(approach['portfolio_id'])
@@ -375,12 +382,12 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,**(external_adapters or {})}
     for approach in approaches:
         aid=approach['approach_id'];rid=identifier('mr',experiment,aid,slot);iid=identifier('mi',experiment,aid,slot,'model_input')
-        book=backend.ensure_portfolio(experiment,aid,POLICY['initial_capital'],source['investable_universe'],at)
+        book=backend.ensure_portfolio(experiment,aid,comparison_policy['initial_capital'],source['investable_universe'],at)
         old=backend.repo.get('research_run',rid)
         if old and old.doc['status']!='running':
             original=backend.read_input(old.doc['input_id'])['payload'];completed=backend.read_run(rid)
             original_holdings=original['holdings']
-            record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original_holdings,source,at,completed['outcome'])
+            record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original_holdings,source,at,completed['outcome'],comparison_policy)
             summary.append({'approach_id':aid,'run_id':rid,'status':old.doc['status'],'retry':'existing_terminal'});continue
         holdings=copy.deepcopy(source.get('comparison_holdings',{}).get(aid))
         if holdings is None:
@@ -396,7 +403,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             # inputs or risk duplicate vendor costs; mark explicit recovered failure for review.
             if not backend.claim_run(rid,owner,stamp(),lease_seconds=600):continue
             outcome={'status':'failed','reason':'recovered_interrupted_invocation_original_input_preserved','forecast':{'available':False}}
-            backend.finish_run(rid,outcome,stamp());original=backend.read_input(iid)['payload'];record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original['holdings'],source,at,outcome);summary.append({'approach_id':aid,'run_id':rid,**outcome});continue
+            backend.finish_run(rid,outcome,stamp());original=backend.read_input(iid)['payload'];record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original['holdings'],source,at,outcome,comparison_policy);summary.append({'approach_id':aid,'run_id':rid,**outcome});continue
         def capture(payload):
             payload={**payload,'slot':slot,'approach_id':aid,'run_id':rid,'input_id':iid}
             boundary_at=now or stamp();payload['invocation_at']=boundary_at
@@ -409,7 +416,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             outcome={'status':'skipped' if missed else 'unavailable','reason':'skipped_missing_point_in_time' if missed else holdings.get('capture_blocker') or source['acquisition_failure'],'forecast':{'available':False}}
         else:
             try:
-                outcome=evaluate_approach(aid,source,holdings,cutoff=at,run_id=rid,input_id=iid,capture=capture,config=evaluator_config(),
+                outcome=evaluate_approach(aid,source,holdings,cutoff=at,run_id=rid,input_id=iid,capture=capture,config=evaluator_config(comparison_policy),
                     policy=policies.get(aid),news_dataset=source.get('native_policy_inputs',{}).get(aid,{}).get('dataset'),external_adapters=adapters,approach_metadata=approach,native_decision_time=source.get('native_policy_inputs',{}).get(aid,{}).get('decision_time'))
             except NotClaimed:
                 summary.append({'approach_id':aid,'run_id':rid,'status':'running_other_owner'});continue
@@ -417,7 +424,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             if outcome.get('forecast'):
                 issued_at=now or stamp();outcome['recommendation_issued_at']=issued_at
                 outcome['forecast']=freeze(outcome['forecast'],decision_at=issued_at,run_id=rid,portfolio_id=book['portfolio_id'])
-            outcome['execution_status']='pending_next_hourly_regular_session_quote' if outcome['status'] in ('succeeded','hold') else 'not_applicable'
+            outcome['execution_status']='pending_'+comparison_policy['execution_timing'] if outcome['status'] in ('succeeded','hold') else 'not_applicable'
             outcome['market_input_status']='completed_daily_history_reused_until_next_valid_snapshot'
             outcome['price_as_of']=max((r['session_date'] for r in source.get('observations',[])),default=None)
             outcome['news_research_status']='available' if source.get('news') else 'missing_coverage'
@@ -430,7 +437,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         backend.finish_run(rid,outcome,stamp())
         state=backend.get_portfolio(book['portfolio_id'])
         current=_portfolio_holdings(state,source)
-        record_slot_observation(backend,experiment,aid,slot,rid,iid,state,current,source,at,outcome)
+        record_slot_observation(backend,experiment,aid,slot,rid,iid,state,current,source,at,outcome,comparison_policy)
         summary.append({'approach_id':aid,'run_id':rid,'input_id':iid,'portfolio_id':book['portfolio_id'],'status':outcome['status']})
     result={'slot':slot,'experiment_id':experiment,'generated_at':stamp(),'approaches':summary,'shared_input_id':shared['input_id']}
     (output/'hourly-result.json').write_bytes(canonical_json_bytes(result));return result

@@ -196,6 +196,7 @@ def evaluate_point_rebalance(
     quotes: Mapping[str, Mapping[str, Any]], config: SimulationConfig,
     decision_at: str, opportunity_at: str, recorded_at: str,
     universe: Sequence[str], max_quote_age_seconds: float = 120.0,
+    execution_calendar: str = "XNYS", quote_protocol: str = "native_completed_1m_unadjusted_close/1",
 ) -> dict[str, Any]:
     """One forward paper rebalance on genuine native quotes, sharing the daily fill kernel.
 
@@ -211,6 +212,11 @@ def evaluate_point_rebalance(
     from finplan_model.sim import engine as execution_engine
     from finplan_model.sim.constraints import apply_constraints
     from finplan_model.sim.strategy import coerce_target, FALLBACK_STATUSES, NO_EFFECT
+    protocols = {"XNYS": ("native_completed_1m_unadjusted_close/1", "next_hourly_regular_session_quote", "actual_shares_per_quote_minute"),
+                 "CRYPTO_24X7": ("native_completed_1h_coinbase_close/1", "next_hourly_crypto_completed_quote", "actual_base_asset_units_per_completed_hour")}
+    if execution_calendar not in protocols or quote_protocol != protocols[execution_calendar][0]:
+        raise FinplanError.validation("unsupported calendar/quote protocol pair", pointer="/quote_protocol")
+    _, execution_rule, liquidity_units = protocols[execution_calendar]
     if config.liquidity.unfilled!='cancel':raise FinplanError.validation('point evaluator requires explicit cancel remainders; no implicit carry',pointer='/liquidity/unfilled')
     ids=tuple(sorted(universe))
     if len(ids)!=len(set(ids)) or not ids:raise FinplanError.validation('point evaluation needs distinct universe',pointer='/universe')
@@ -225,13 +231,16 @@ def evaluate_point_rebalance(
         if isinstance(price,bool) or not isinstance(price,(int,float)) or not math.isfinite(price) or price<=0:raise FinplanError.validation('invalid point quote price',pointer='/quotes')
         available,quoted=map(parse_utc,(q['available_at'],q['quoted_at']))
         bar_started=parse_utc(q.get('bar_started_at',q['quoted_at']))
-        if bar_started<decision or not decision<quoted<=available<=recorded or available<opportunity or not 0<=(recorded-quoted).total_seconds()<=max_quote_age_seconds:
+        if (execution_calendar=='XNYS' and bar_started<decision) or not decision<quoted<=available<=recorded or available<opportunity or not 0<=(recorded-quoted).total_seconds()<=max_quote_age_seconds:
             raise FinplanError.precondition('execution quote was not actually captured in its eligible window',reason='missed_eligible_execution_price',instrument=i)
-        regular=q.get('regular_session',{})
-        if not q.get('market_open') or not regular.get('start') or not regular.get('end') or not parse_utc(regular['start'])<=recorded<parse_utc(regular['end']) or quoted<parse_utc(regular['start']):
-            raise FinplanError.precondition('off-session point fills forbidden',reason='market_closed',instrument=i)
+        if execution_calendar == 'XNYS':
+            regular=q.get('regular_session',{})
+            if not q.get('market_open') or not regular.get('start') or not regular.get('end') or not parse_utc(regular['start'])<=recorded<parse_utc(regular['end']) or quoted<parse_utc(regular['start']):
+                raise FinplanError.precondition('off-session point fills forbidden',reason='market_closed',instrument=i)
+        elif q.get('venue_calendar') != 'CRYPTO_24X7' or q.get('frequency') != '1h' or q.get('provider') != 'Coinbase Exchange public completed candles' or (quoted-bar_started).total_seconds() != 3600:
+            raise FinplanError.precondition('crypto point requires actual complete native hourly candle provenance',reason='incompatible_crypto_quote',instrument=i)
         if (config.liquidity.participation_cap is not None or config.slippage.model!='none') and (isinstance(volume,bool) or not isinstance(volume,(int,float)) or not math.isfinite(volume) or volume<=0):
-            raise FinplanError.precondition('point liquidity requires actual minute volume',reason='execution_volume_missing',instrument=i)
+            raise FinplanError.precondition('point liquidity requires actual native quote volume',reason='execution_volume_missing',instrument=i)
     prices={i:float(quotes[i]['price']) for i in ids}
     initial=cash+sum(positions.get(i,0.)*prices[i] for i in ids)
     if not math.isfinite(initial) or initial<=0:raise FinplanError.validation('point portfolio value must be positive',pointer='/cash')
@@ -265,8 +274,8 @@ def evaluate_point_rebalance(
     if book.cash < -config.reconciliation_tolerance or not math.isclose(initial,final+total_cost,rel_tol=1e-10,abs_tol=config.reconciliation_tolerance):
         raise FinplanError.internal('point execution reconciliation break',reason='reconciliation_break')
     result={'schema_version':'finplan-point-evaluation/1','evaluator_version':EVALUATOR_VERSION,'point_evaluator_version':'1.0.0',
-            'simulation_configuration_id':sha256_checksum(canonical_json_bytes({**config.to_dict(),'execution_timing':'next_hourly_regular_session_quote'})),
-            'execution_rule':'next_hourly_regular_session_quote','configuration':{**config.to_dict(),'execution_timing':'next_hourly_regular_session_quote'},'cost_model_id':config.cost_model_id,
+            'simulation_configuration_id':sha256_checksum(canonical_json_bytes({**config.to_dict(),'execution_timing':execution_rule})),
+            'execution_rule':execution_rule,'configuration':{**config.to_dict(),'execution_timing':execution_rule},'cost_model_id':config.cost_model_id,
             'decision_at':decision_at,'opportunity_at':opportunity_at,'execution_at':recorded_at,
             'positions':book.shares,'cash':book.cash,'before_value':initial,'after_value':final,'transaction_cost':total_cost,
             'fills':[fill.to_dict() for fill in fills],'unfilled':unfilled,'constraint_outcome':constrained.to_dict(),
@@ -277,8 +286,8 @@ def evaluate_point_rebalance(
                 'model_source_commit':os.environ.get('FINPLAN_MODEL_SOURCE_COMMIT','not_supplied'),
                 'source_checksum':sha256_checksum(Path(__file__).read_bytes()),
                 'execution_kernel_checksum':sha256_checksum(Path(execution_engine.__file__).read_bytes()),
-                'execution_timing':'next_hourly_regular_session_quote','quote_protocol':'native_completed_1m_unadjusted_close/1',
-                'max_quote_age_seconds':max_quote_age_seconds,'liquidity_units':'actual_shares_per_quote_minute',
+                'execution_timing':execution_rule,'quote_protocol':quote_protocol,'execution_calendar':execution_calendar,
+                'max_quote_age_seconds':max_quote_age_seconds,'liquidity_units':liquidity_units,
                 'cost_model_id':config.cost_model_id,'constraint_set':config.constraints.to_dict()}}
     result['result_checksum']=sha256_checksum(canonical_json_bytes(result))
     return result
