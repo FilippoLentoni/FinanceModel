@@ -23,7 +23,7 @@ from finplan_model.jobs.market_loader import market_from_content
 from .registry import registry,APPROACHES,Approach
 from .runtime import evaluate_approach,input_market,validate_policy
 from .research import review,stamp
-from .forecasts import freeze,reconcile
+from .forecasts import freeze,reconcile,freeze_outcome
 from .paper import apply_next_session,apply_forward_quotes
 
 DEFAULT_EXPERIMENT='beta-forward-hourly-v1'
@@ -58,6 +58,32 @@ def policy_approach_id(bundle):
     suffix='_gdelt_intraday' if 'gdelt_intraday_organization_tone_v1' in features else '_gdelt' if 'gdelt_organization_tone_v1' in features else '_etf_news' if 'etf_news_metadata_v1' in features else ''
     return algorithm+suffix
 
+def assign_policy_variants(primary, bundles):
+    """Canonical selected models plus separately identified evaluated candidates.
+
+    A selected compatible news/SAC export supplies its honest canonical variant;
+    each other evaluated configuration/seed keeps a checksum-specific book.
+    Artifact bytes, actor math, fixed universe and feature shape are unchanged.
+    """
+    result = {policy_approach_id(primary): primary}
+    def priority(bundle):
+        evaluated = bundle.get('evaluated_variant')
+        selected = evaluated is None or evaluated.get('selected_in_original_run') is True
+        return (selected, bundle.get('source_run_id', ''), bundle.get('configuration_id', ''))
+    for bundle in sorted(bundles, key=priority, reverse=True):
+        if any(bundle == old for old in result.values()):
+            continue
+        canonical = policy_approach_id(bundle)
+        evaluated = bundle.get('evaluated_variant')
+        selected = evaluated is None or evaluated.get('selected_in_original_run') is True
+        if bundle['instruments'] == primary['instruments'] and canonical not in result and selected:
+            result[canonical] = bundle
+        else:
+            name = bundle.get('strategy_id', 'ppo') + '_policy_' + sha256_checksum(canonical_json_bytes(bundle)).split(':')[-1][:12]
+            result[name] = bundle
+    return result
+
+
 def load_current_inputs(session=None,cohort=None):
     """Approved snapshots through signed platform API; preserve raw and actor basis separately."""
     session=session or boto3.Session(region_name=REGION);ssm=session.client('ssm');s3=s3_client(REGION,session=session)
@@ -65,6 +91,7 @@ def load_current_inputs(session=None,cohort=None):
     setting=json.loads(param('/finplan/beta/financemodel/config/advisory-policy'))
     artifacts=S3ArtifactStore(s3,param('/finplan/beta/financemodel/config/research-storage-ref'))
     policy=json.loads(artifacts.get(setting['artifact']))
+    served_policy=copy.deepcopy(policy);served_ref=copy.deepcopy(setting['artifact'])
     if cohort=='eight_assets':
         listing=s3.list_objects_v2(Bucket=artifacts._bucket,Prefix='artifacts/policy_inference/',MaxKeys=100)
         if listing.get('IsTruncated'):raise ValueError('policy inventory exceeded bound')
@@ -111,12 +138,12 @@ def load_current_inputs(session=None,cohort=None):
         if item['Size']>2_000_000:raise ValueError('frozen policy export exceeds bound')
         data=s3.get_object(Bucket=artifacts._bucket,Key=item['Key'])['Body'].read()
         exports.append({'artifact':{'artifact_id':item['Key'].rsplit('/',1)[-1],'kind':'policy_inference','checksum':sha256_checksum(data),'content_type':'application/json','size_bytes':len(data)}})
-    # Each discovered exported frozen policy gets its own honest book and identity.
-    for ref in [v['artifact'] for v in setting.get('portfolio_policies',{}).values()]+[r['artifact'] for r in exports]:
-        bundle=json.loads(artifacts.get(ref))
-        if bundle==policy:continue
-        name=bundle.get('strategy_id','ppo')+'_policy_'+ref['checksum'].split(':')[-1][:12]
-        policies[name]=bundle
+    # Canonical originally selected models and every distinct evaluated export,
+    # without a second alias/book for the same selected source artifact.
+    bundles=[json.loads(artifacts.get(ref)) for ref in [v['artifact'] for v in setting.get('portfolio_policies',{}).values()]+[r['artifact'] for r in exports]]
+    policies=assign_policy_variants(policy,bundles)
+    policies['hosted_langgraph']=served_policy
+    source['served_advisory_policy']=served_policy;source['served_advisory_policy_ref']=served_ref
     source['code_versions']={'financemodel':os.environ.get('FINPLAN_MODEL_SOURCE_COMMIT','workspace_commit_not_supplied'),
                              'financialplanning':os.environ.get('FINPLAN_PLATFORM_SOURCE_COMMIT','workspace_commit_not_supplied'),
                              'financeagent':os.environ.get('FINPLAN_AGENT_SOURCE_COMMIT','workspace_commit_not_supplied')}
@@ -134,7 +161,9 @@ def load_current_inputs(session=None,cohort=None):
             native=formation_cutoff(stamp())
             dataset,features,provenance=read_live(client,universe,native)
             source['native_policy_inputs'][aid]={'status':'available','decision_time':native,'dataset':dataset,'features':features,'provenance':provenance,
-              'cadence_status':'reused_exact_native_09:00_formation_inputs','acquired_at':stamp()}
+              'cadence_status':'hourly_actor_reevaluation_with_reused_09:00_source_features_and_current_holdings',
+              'native_source_formation_at':native,'adapter_version':'hourly_native_feature_reuse/1',
+              'source_checksum':sha256_checksum(canonical_json_bytes(dataset)),'acquired_at':stamp()}
         except Exception as exc:
             source['native_policy_inputs'][aid]={'status':'unavailable','reason':type(exc).__name__+': '+str(exc),
                'query':{'symbols':universe,'availability_mode':'platform','native_formation':'09:00 America/New_York'},'acquired_at':stamp()}
@@ -163,12 +192,28 @@ def _portfolio_holdings(book,source):
 
 def _graph_adapter(base,source,holdings,before):
     from finplan_agent.modeling.hosted import invoke_graph
+    expected=source.get('served_advisory_policy')
+    expected_ref=source.get('served_advisory_policy_ref') or {}
+    if not expected or expected['instruments']!=source['investable_universe']:
+        before({'framework':'langgraph','boundary':'not_invoked_graph_cohort_precondition',
+                'expected_policy_ref':expected_ref,'supported_universe':expected.get('instruments') if expected else None,
+                'supplied_universe':source['investable_universe'],'invocation_state':'not_invoked'})
+        return {'status':'unavailable','reason':'hosted_policy_missing_or_incompatible_fixed_universe','forecast':{'available':False}}
     arguments={'input_snapshot_id':source['input_snapshot_id'],'as_of':max(r['session_date'] for r in source['observations']),
-               'holdings':{k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')},
-               }
+               'holdings':{k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')}}
     response=invoke_graph(arguments,capture_before=before)
-    # This is an orchestration approach: its numerical recommendation is actually served PPO.
-    response['framework']='LangGraph';response['allocation_origin']='FinanceModel served frozen PPO via graph tool'
+    response['framework']='LangGraph'
+    actual=(response.get('answer') or {}).get('recommendation') or {}
+    actual_strategy=actual.get('strategy')
+    response['allocation_origin']='FinanceModel served '+str(actual_strategy or 'unavailable')+' via LangGraph tool'
+    response['expected_served_policy_ref']=expected_ref
+    if response.get('status') in ('failed','unavailable'):
+        return response
+    if not actual or not response.get('target_weights') or not actual.get('diagnostics',{}).get('actual_model_inputs'):
+        response.update(status='unavailable',reason='hosted_actual_policy_inputs_or_valid_recommendation_unavailable')
+    elif actual.get('policy_artifact_checksum')!=expected_ref.get('checksum') or actual_strategy!=expected.get('strategy_id'):
+        response.update(status='unavailable',reason='hosted_model_identity_changed',
+                        observed_policy_checksum=actual.get('policy_artifact_checksum'),observed_strategy=actual_strategy)
     return response
 
 
@@ -232,16 +277,31 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
     if isinstance(quotes,list):quotes={q['instrument_id']:q for q in quotes}
     positions={r['instrument_id']:r['quantity'] for r in holdings['positions']}
     needed=[i for i,q in positions.items() if q]
-    if needed and all(i in quotes and quotes[i].get('status')=='fresh' and quotes[i].get('available_at','9999')<=at and quotes[i].get('quoted_at','9999')<=at and 0<=quotes[i].get('freshness_seconds',999999)<=(comparison_policy or POLICY)['price_freshness_seconds'] for i in needed):
+    def eligible_quote(quote):
+        try:
+            cutoff=datetime.fromisoformat(at.replace('Z','+00:00'))
+            quoted=datetime.fromisoformat(quote['quoted_at'].replace('Z','+00:00'))
+            available=datetime.fromisoformat(quote['available_at'].replace('Z','+00:00'))
+            price=quote['price']
+            return (quote.get('status') in ('fresh','fresh_close') and all(t.tzinfo is not None for t in (cutoff,quoted,available))
+                    and quoted<=available<=cutoff and 0<=(cutoff-quoted).total_seconds()<=(comparison_policy or POLICY)['price_freshness_seconds']
+                    and isinstance(price,(int,float)) and not isinstance(price,bool) and __import__('math').isfinite(price) and price>0)
+        except (KeyError,TypeError,ValueError):
+            return False
+    if needed and all(i in quotes and eligible_quote(quotes[i]) for i in needed):
         value=holdings['cash']+sum(q*quotes[i]['price'] for i,q in positions.items() if q)
         payload.update(value=value,observation_kind='valid',quote_status='fresh',reason='Actual eligible current quote marks',
-                       quote_provenance={i:quotes[i] for i in needed})
+                       quote_provenance={i:quotes[i] for i in needed},value_as_of=min((quotes[i]['quoted_at'] for i in needed),key=lambda value:datetime.fromisoformat(value.replace('Z','+00:00'))))
     elif not needed and not source.get('historical_slot_missing'):
         payload.update(value=holdings['cash'],observation_kind='valid',quote_status='fresh',
                        reason='Cash-only synthetic book; no market quote is required for its actual cash balance',
-                       quote_provenance={'basis':'authoritative_paper_cash_balance','revision':holdings.get('revision',book['revision'])})
+                       quote_provenance={'basis':'authoritative_paper_cash_balance','revision':holdings.get('revision',book['revision'])},value_as_of=at)
     if action_rows or any(quotes.get(i,{}).get('corporate_actions') for i in needed):
         payload.update(observation_kind='pending',quote_status='corporate_action_unreconciled',value=None,reason='Captured dividend/split requires authoritative action reconciliation; ranking blocked')
+    if source.get('native_crypto_dataset'):
+        payload['market_session']={'status':'open','session_date':datetime.fromisoformat(at.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat(),
+            'source':{'calendar':'CRYPTO_24X7','provider':'coinbase_exchange_public','dataset_checksum':source['native_crypto_dataset']['dataset_checksum'],
+                      'as_of':source['native_crypto_dataset']['as_of'],'basis':'actual completed native candles in declared continuous venue calendar'}}
     backend.record_observation(experiment,approach_id,slot,book['portfolio_id'],payload,at)
 
 def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
@@ -314,8 +374,10 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     comparison_policy=comparison_policy or POLICY
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
     deadline=datetime.fromisoformat(at.replace('Z','+00:00'));slot_dt=datetime.fromisoformat(slot.replace('Z','+00:00'))
+    if slot_dt.tzinfo is None or deadline.tzinfo is None:raise ValueError('aware hourly timestamps required')
+    slot_dt=slot_dt.astimezone(UTC);slot=slot_dt.isoformat().replace('+00:00','Z')
     if slot_dt>deadline:raise ValueError('future scheduled slot forbidden')
-    if slot_dt.minute or slot_dt.second:raise ValueError('hourly slot must be hour aligned')
+    if slot_dt.minute or slot_dt.second or slot_dt.microsecond:raise ValueError('hourly slot must be hour aligned')
     missed=account_missed or (deadline-slot_dt).total_seconds()>3600
     prior_shared_id=identifier('mi',experiment,'__shared__',slot,'shared_source')
     prior_shared=backend.repo.get('research_input',prior_shared_id)
@@ -352,6 +414,10 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     approaches=source.get('registry_approaches') or registry(extras)
     cohort_id='cohort_'+hashlib.sha256(canonical_json_bytes(sorted(source['investable_universe']))).hexdigest()[:16]
     comparison_policy_id=sha256_checksum(canonical_json_bytes({**comparison_policy,'investable_universe':source['investable_universe']}))
+    from .model_freeze import freeze_experiment_models
+    frozen=freeze_experiment_models(backend.read_registry(experiment),approaches,policies)
+    approaches,policies=frozen['approaches'],frozen['policies']
+    source['model_identity_blockers']=frozen['blockers'];source['model_inventory_changes']=frozen['inventory_changes']
     for approach in approaches:
         book=backend.ensure_portfolio(experiment,approach['approach_id'],comparison_policy['initial_capital'],source['investable_universe'],at)
         approach.update(trigger=os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),code_versions=source.get('code_versions',{}),portfolio_id=book['portfolio_id'],cohort_id=cohort_id,comparison_policy_id=comparison_policy_id,
@@ -415,10 +481,13 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             item=backend.capture_input(experiment,aid,slot,payload,shared,boundary_at)
             backend.start_run(experiment,aid,slot,item['input_id'],book['portfolio_id'],boundary_at,metadata=approach)
             if not backend.claim_run(rid,owner,stamp(),lease_seconds=600):raise NotClaimed('another owner claimed permanent run')
-        if missed or holdings.get('capture_blocker') or source.get('acquisition_failure') and aid!='cash':
+        model_blocker=source.get('model_identity_blockers',{}).get(aid)
+        if missed or holdings.get('capture_blocker') or model_blocker or source.get('acquisition_failure') and aid not in ('cash','crypto_cash'):
             capture({'schema_version':'finplan-model-input/1','approach_id':aid,'run_id':rid,'input_id':iid,'decision_time':at,'availability_cutoff':at,
-                     'invocation_state':'not_invoked','news':{'consumed':False,'reason':'historical input unavailable'},'numeric':{},'holdings':holdings})
-            outcome={'status':'skipped' if missed else 'unavailable','reason':'skipped_missing_point_in_time' if missed else holdings.get('capture_blocker') or source['acquisition_failure'],'forecast':{'available':False}}
+                     'invocation_state':'not_invoked','news':{'consumed':False,'reason':'Inference precondition failed; no news consumed'},'numeric':{},'holdings':holdings,
+                     'model_identity_precondition':model_blocker})
+            outcome={'status':'skipped' if missed else 'unavailable','reason':'skipped_missing_point_in_time' if missed else holdings.get('capture_blocker') or (model_blocker or {}).get('reason') or source.get('acquisition_failure'),
+                     'model_identity_precondition':model_blocker,'forecast':{'available':False}}
         else:
             try:
                 outcome=evaluate_approach(aid,source,holdings,cutoff=at,run_id=rid,input_id=iid,capture=capture,config=evaluator_config(comparison_policy),
@@ -428,10 +497,10 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             if outcome['status']=='recommended':outcome['status']='succeeded'
             if outcome.get('forecast'):
                 issued_at=now or stamp();outcome['recommendation_issued_at']=issued_at
-                outcome['forecast']=freeze(outcome['forecast'],decision_at=issued_at,run_id=rid,portfolio_id=book['portfolio_id'])
+                outcome=freeze_outcome(outcome,decision_at=issued_at,run_id=rid,portfolio_id=book['portfolio_id'],baseline_value=holdings.get('portfolio_value'))
             outcome['execution_status']='pending_'+comparison_policy['execution_timing'] if outcome['status'] in ('succeeded','hold') else 'not_applicable'
-            outcome['market_input_status']='completed_daily_history_reused_until_next_valid_snapshot'
-            outcome['price_as_of']=max((r['session_date'] for r in source.get('observations',[])),default=None)
+            outcome['market_input_status']='actual_native_completed_hourly_crypto_history' if source.get('native_crypto_dataset') else 'completed_daily_history_reused_until_next_valid_snapshot'
+            outcome['price_as_of']=(source.get('native_crypto_dataset') or {}).get('as_of') or max((r['session_date'] for r in source.get('observations',[])),default=None)
             outcome['news_research_status']='available' if source.get('news') else 'missing_coverage'
             if aid in source.get('native_policy_inputs',{}):outcome['native_input_status']=source['native_policy_inputs'][aid]['status'];outcome['native_input_detail']={k:v for k,v in source['native_policy_inputs'][aid].items() if k!='dataset'}
         if outcome.get('captured_inputs'):
@@ -450,6 +519,9 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
 
 def run_interim(slot,experiment,output,*,backend=None):
     """Thirty-minute collection + actual Codex review, persisted separately, never a primary fill."""
+    native_slot=datetime.fromisoformat(slot.replace('Z','+00:00'))
+    if native_slot.tzinfo is None or native_slot.minute not in (0,30) or native_slot.second or native_slot.microsecond:raise ValueError('interim slot must be timezone-aware and half-hour aligned')
+    slot=native_slot.astimezone(UTC).isoformat().replace('+00:00','Z')
     backend=backend or evidence_backend();interim=experiment+'-interim';output=Path(output);output.mkdir(parents=True,exist_ok=True)
     aid='direct_codex_news';rid=identifier('mr',interim,aid,slot);iid=identifier('mi',interim,aid,slot,'model_input')
     def receipt():
@@ -513,10 +585,10 @@ def run_interim(slot,experiment,output,*,backend=None):
             capture({'boundary':'not_invoked_source_acquisition_failed','actual_source':{'news':[]},'messages':[],
                      'error':source['acquisition_failure']})
             raise RuntimeError(source['acquisition_failure'])
-        outcome=review(source,holdings,output/'recommendation.json',capture=capture)
+        outcome=review(source,holdings,output/'recommendation.json',capture=capture,allow_forecast=False)
         if outcome['status']=='recommended':outcome['status']='succeeded'
         issued_at=stamp();outcome['recommendation_issued_at']=issued_at
-        outcome['forecast']=freeze(outcome.get('forecast'),decision_at=issued_at,run_id=rid,portfolio_id=primary['portfolio_id'])
+        outcome=freeze_outcome(outcome,decision_at=issued_at,run_id=rid,portfolio_id=primary['portfolio_id'],baseline_value=holdings.get('portfolio_value'))
         outcome['purpose']='interim_research_no_primary_execution';outcome['execution_status']='not_applied_interim'
     except Exception as exc:
         if not backend.repo.get('research_run',rid):raise

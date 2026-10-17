@@ -81,7 +81,7 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False
         base['collected_not_consumed']={'price_history':{'shared_source_checksum':base['shared_source_checksum'],
-             'status':'not_supplied_to_this_approach','reason':'DS-14 protected raw series; exact derived/provider request is in prepared' if approach.adapter=='codex' else 'Actual graph sub-boundaries are captured separately' if approach.adapter=='langgraph' else 'Constant cash control consumes no market history'}}
+             'status':'not_supplied_to_this_approach','reason':'DS-14 protected raw series; exact derived/provider request is in prepared' if approach.adapter=='codex' else 'Actual graph sub-boundaries are captured separately' if approach.adapter=='langgraph' else 'No daily-price history supplied; actual native hourly inputs are in prepared' if approach.adapter=='crypto_native' else 'Constant cash control consumes no market history'}}
     if approach.adapter=='crypto_native':
         base['numeric']['frequency']='hourly_crypto_24x7'
     captured=False

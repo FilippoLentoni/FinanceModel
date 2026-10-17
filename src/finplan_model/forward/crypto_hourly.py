@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import copy
 import os
+import time
 from pathlib import Path
 from datetime import UTC, datetime
 import boto3
@@ -74,11 +75,25 @@ def load_source(slot, *, session=None):
         raise ValueError("beta crypto restricted to us-east-2")
     endpoint = session.client("ssm").get_parameter(Name="/finplan/beta/financialplanning/api/plan-endpoint")["Parameter"]["Value"]
     client = HttpPlatformClient(endpoint, region="us-east-2", credentials=session.get_credentials())
-    data = client.get_crypto_dataset()
-    return source_from_dataset(data, acquired_at=stamp(), slot=slot)
+    # Platform's approved ingest timer is :05. Bound the race without claiming
+    # that a previous hour's source belongs to this slot or replacing a capture.
+    for attempt in range(13):
+        data = client.get_crypto_dataset()
+        if datetime.fromisoformat(data["as_of"].replace("Z", "+00:00")) == datetime.fromisoformat(slot.replace("Z", "+00:00")):
+            return source_from_dataset(data, acquired_at=stamp(), slot=slot)
+        if attempt < 12:
+            time.sleep(5)
+    raise ValueError("approved crypto ingest did not publish the matching hourly source within60seconds")
 
 
 def run(slot, experiment, output, *, backend=None, source=None, now=None, account_missed=False):
+    backend=backend or hourly.evidence_backend()
+    parsed=datetime.fromisoformat(slot.replace('Z','+00:00'))
+    if parsed.tzinfo is None:raise ValueError('aware hourly slot required')
+    slot=parsed.astimezone(UTC).isoformat().replace('+00:00','Z')
+    original=backend.repo.get('research_input',hourly.identifier('mi',experiment,'__shared__',slot,'shared_source'))
+    if original is not None:
+        source=backend.read_input(original.id)['payload']
     if source is None:
         try:
             source = load_source(slot) if not account_missed else {"investable_universe": list(PRODUCTS),

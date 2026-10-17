@@ -5,6 +5,7 @@ snippets are retained with rights labels; no article body scraping or paid calls
 """
 from __future__ import annotations
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -49,9 +50,17 @@ class ReviewFailure(RuntimeError):
 def stamp():return datetime.now(UTC).isoformat().replace('+00:00','Z')
 
 
-def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',timeout=180):
+def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',timeout=180,allow_forecast=True):
     """Real Codex execution. Public prompt/request/output are retained; auth stays in CLI."""
     path=Path(output);path.parent.mkdir(parents=True,exist_ok=True)
+    response_schema=copy.deepcopy(POLICY_SCHEMA)
+    scoped_prompt=PROMPT
+    if not allow_forecast:
+        forecast_properties=response_schema['properties']['forecast']['properties']
+        forecast_properties['status']['enum']=['not_available']
+        for field in ('target_at','value','units','baseline_value'):forecast_properties[field]={'type':'null'}
+        scoped_prompt=PROMPT.replace('An allocation is not a forecast. Set forecast status not_available unless you actually supply\nan explicit portfolio-value forecast with target_at, units, baseline_value and assumptions.',
+            'This is an interim research proposal, without an executed portfolio forecast.\nSet forecast.status=not_available; target_at, value, units and baseline_value=null,\nand assumptions=[]. Hourly comparison separately freezes forecasts of executed books.')
     selected=[{k:v for k,v in row.items() if k in ('news_id','headline','text','text_status','url','provider','source','symbols','published_at','published_at_source_value','retrieved_at','available_at','quality','rights','checksum')}
               for row in sorted(source.get('news',[]),key=lambda n:(n.get('published_at') or '',n['news_id']),reverse=True)[:40]]
     # Preserve DS-14: protected provider series stay inside the account. The
@@ -92,7 +101,7 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
             'availability_cutoff':source.get('availability_cutoff'),
             'limitations':source.get('limitations',[]),'news_selection':{'method':'latest_publication_then_news_id','max_items':40,'max_prompt_bytes':MAX_REVIEW_BYTES,
                  'available_count':len(source.get('news',[])),'source_bundle_checksum':sha256_checksum(canonical_json_bytes(source))}}
-    prompt=PROMPT+'\nACTUAL INPUT JSON:\n'+canonical_json_bytes({'source':actual,'holdings':holdings}).decode()
+    prompt=scoped_prompt+'\nACTUAL INPUT JSON:\n'+canonical_json_bytes({'source':actual,'holdings':holdings}).decode()
     configured_model=os.environ.get('FINPLAN_CODEX_MODEL')
     if not configured_model:
         config_file=Path.home()/'.codex'/'config.toml'
@@ -100,12 +109,12 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
             with config_file.open('rb') as stream:configured_model=tomllib.load(stream).get('model')
     cli_version=subprocess.run([codex,'--version'],text=True,capture_output=True,timeout=10,check=True).stdout.strip()
     request={'boundary':'codex_exec','prompt_version':VERSION,'messages':[{'role':'user','content':prompt}],
-             'schema':POLICY_SCHEMA,'actual_source':actual,'captured_at':stamp(),'model':configured_model or 'CLI_default_not_exposed','model_identity_source':'requested_configured_model; provider_attestation_not_exposed','cli_version':cli_version,
+             'schema':response_schema,'forecast_scope':'primary_experiment_book' if allow_forecast else 'interim_nonexecuted_research_proposal','actual_source':actual,'captured_at':stamp(),'model':configured_model or 'CLI_default_not_exposed','model_identity_source':'requested_configured_model; provider_attestation_not_exposed','cli_version':cli_version,
              'prompt_checksum':sha256_checksum(prompt.encode()),'code_versions':source.get('code_versions',{}),
              'invocation_state':'not_invoked' if len(prompt.encode())>MAX_REVIEW_BYTES else 'invoking','tool_policy':{'disabled_features':list(DISABLED_REVIEW_FEATURES),'web_search':'disabled','ephemeral':True,'allowed_external_tools':[]}}
     request_bytes=canonical_json_bytes(request)
     (path.parent/(path.name+'.input.json')).write_bytes(request_bytes)
-    schema=path.parent/(path.name+'.schema.json');schema.write_bytes(canonical_json_bytes(POLICY_SCHEMA))
+    schema=path.parent/(path.name+'.schema.json');schema.write_bytes(canonical_json_bytes(response_schema))
     capture(request)
     if len(prompt.encode())>MAX_REVIEW_BYTES:raise ReviewFailure('Public review prompt exceeds declared bounded byte budget; model not invoked')
     command=[codex,*[arg for feature in DISABLED_REVIEW_FEATURES for arg in ('--disable',feature)],'-c','web_search="disabled"',
@@ -139,7 +148,13 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
         response=validate_policy(response,source['investable_universe'],holdings)
     except (ValueError,TypeError,KeyError) as exc:
         raise ReviewFailure('Codex public final response failed policy validation: '+str(exc),public_final_response=raw_response.decode('utf-8'),invocation=meta) from None
+    if not allow_forecast:
+        supplied_forecast=response.get('forecast')
+        if not isinstance(supplied_forecast,dict) or supplied_forecast.get('status')!='not_available' or any(supplied_forecast.get(field) is not None for field in ('target_at','value','units','baseline_value')) or supplied_forecast.get('assumptions')!=[]:
+            raise ReviewFailure('interim research response supplied a forbidden executed-portfolio forecast',public_final_response=raw_response.decode('utf-8'),invocation=meta)
     eligible={r['url'] for r in selected}
+    constituent_source=actual['research_universe'].get('source_url')
+    if isinstance(constituent_source,str) and constituent_source:eligible.add(constituent_source)
     if set(response.get('citations',[]))-eligible:raise ReviewFailure('reviewer cited unprovided source',public_final_response=raw_response.decode('utf-8'),invocation=meta)
     response['provider_final_response_text']=raw_response.decode('utf-8')
     response['provider_final_response_checksum']=sha256_checksum(raw_response)

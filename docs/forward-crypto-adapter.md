@@ -46,3 +46,19 @@ Validation: `uv run pytest tests/unit/test_forward_crypto.py
 parity, exact capture before invocation, failed-save prevention, missing/future/
 stale/gapped/synthetic input rejection, buy-and-hold drift, fallback and the
 normal hourly external-adapter wrapper. Fixtures are controlled tests only.
+
+The installed EC2 workflow invokes `python -m finplan_model.forward.crypto_hourly
+--slot <UTC-hour> --experiment <primary>-crypto --output <EBS-directory>` before
+collecting the equity cohort's fresh minute quotes. It reads the approved signed
+platform API, waits at most 60 seconds for its matching :05 ingestion slot, and
+freezes the original central dataset. The comparison policy uses the common
+execution kernel with a 60 bps fee on reference notional and a 10 bps spread,
+actual completed hourly closes, actual hourly base-asset volume, a 5% participation
+cap and a 1,200-second maximum quote age. This is a declared new common protocol,
+separate from legacy slippage-adjusted fee calculations. Equity fills still
+require an open regular session and their original 120-second native minute rule.
+
+Contract 1.13 adds the native input reference needed by these isolated books.
+The reference links the original captured shared input and approved BTC/ETH
+hourly dataset; an unrelated equity snapshot ID is never invented. The existing
+user-facing portfolio's approval and snapshot requirements remain in effect.
