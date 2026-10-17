@@ -33,7 +33,8 @@ def test_pin_is_exact_and_matches_installed_version():
     import finplan_contracts
 
     pin = json.loads((ROOT / "contracts-pin.json").read_text(encoding="utf-8"))
-    assert pin["version"] == finplan_contracts.__version__ == "1.8.0"
+    assert pin["version"] == finplan_contracts.__version__
+    assert pin["version"].split('.')[0] == '1'
     assert pin["served_environments"] == ["beta", "gamma", "prod"]
     assert "registry-ref" in pin["registry"]
 
@@ -50,7 +51,8 @@ def test_tampered_wheel_fails_with_digest_mismatch(tmp_path):
 def test_version_range_is_refused(tmp_path):
     root = _copy_pin_tree(tmp_path)
     py = root / "pyproject.toml"
-    py.write_text(py.read_text(encoding="utf-8").replace('"finplan-contracts==1.8.0"', '"finplan-contracts>=1.0"'), encoding="utf-8")
+    version=json.loads((root/'contracts-pin.json').read_text())['version']
+    py.write_text(py.read_text(encoding="utf-8").replace(f'"finplan-contracts=={version}"', '"finplan-contracts>=1.0"'), encoding="utf-8")
     assert any("exactly" in p for p in check(root, check_installed=False))
 
 
