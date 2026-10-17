@@ -140,3 +140,14 @@ An incompatible fixed-universe export remains visibly unavailable in that cohort
 without projecting its frozen input shape onto another universe. The selected
 GDELT ensemble retains its verified original news protocol; this does not invent
 independent exported news-seed models or missing ETF-news/daily-GDELT policies.
+
+Native licensed search-metadata reads retain the existing platform API limit of
+five symbols per request. The eight-asset cohort performs exactly two bounded
+reads at one shared cutoff. `finplan.batched-native-news/1` preserves each original
+schema-validated response/checksum, query-symbol coverage and partial failures,
+then deduplicates identical immutable delivery IDs for native feature extraction.
+It never relabels that aggregate as an original eight-symbol API response.
+Conflicting IDs, mismatched cutoffs/symbols and future-available deliveries cannot
+enter the merged metadata. Successful empty queries remain distinct from failed
+queries. Missing eligible licensed metadata is exposed by the native extractor;
+public RSS headlines are not substituted for that model's declared metadata input.

@@ -168,7 +168,8 @@ def load_current_inputs(session=None,cohort=None):
     from finplan_model.etf_news import FINANCIAL_NEWS_UNIVERSE
     if set(universe)<=FINANCIAL_NEWS_UNIVERSE:
         try:
-            source['paid_news_dataset']=client.get_research_news(universe,stamp())
+            from .native_news import read_native_news
+            source['paid_news_dataset']=read_native_news(client,universe,stamp())
         except Exception as exc:source['paid_news_source_status']={'status':'unavailable','reason':type(exc).__name__+': '+str(exc)}
     else:source['paid_news_source_status']={'status':'unavailable','reason':'native_supported_news_universe_excludes_requested_symbols'}
     source['native_policy_inputs']={}
