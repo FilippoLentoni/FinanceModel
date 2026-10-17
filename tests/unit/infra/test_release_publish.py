@@ -55,6 +55,18 @@ def _get(ssm, name):
     return ssm.get_parameter(Name=name)["Parameter"]["Value"]
 
 
+def test_beta_12_release_requires_and_publishes_strategy_function(aws):
+    outputs = _outputs('beta')
+    arn = f'arn:aws:lambda:us-east-2:{ACCT}:function:finplan-beta-financemodel-job-api-handler-inference'
+    with pytest.raises(ManifestError, match='StrategyFunctionRef'):
+        publish_release(_info(contract_version='1.2.0'), 'beta', ssm=aws['ssm'], cfn=FakeCfn(outputs), account=ACCT, now=NOW)
+    outputs['finplan-beta-financemodel-control']['StrategyFunctionRef'] = arn
+    manifest = publish_release(_info(contract_version='1.2.0'), 'beta', ssm=aws['ssm'], cfn=FakeCfn(outputs), account=ACCT, now=NOW)
+    name = manifest['outputs']['strategy-function-ref']
+    assert name == '/finplan/beta/financemodel/api/strategy-function-ref'
+    assert _get(aws['ssm'],name) == arn
+
+
 def test_dep04_beta_manifest_lists_endpoint_registry_job_types_and_contract(aws):
     manifest = publish_release(_info(), "beta", ssm=aws["ssm"], cfn=FakeCfn(_outputs("beta", gaps=True)), account=ACCT, now=NOW)
     assert validate(manifest, "release-manifest").valid  # ENV-06

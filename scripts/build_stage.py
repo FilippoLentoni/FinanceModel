@@ -131,6 +131,10 @@ def run_build(
         except SourceOnlyCodeError as exc:
             raise BuildFailed(f"release synth refused source-only Lambda code; no artifact produced: {exc}") from exc
         ctx.assembly = assembly
+        # A small code channel reuses the already validated AWS vLLM DLC for Qwen batch jobs.
+        # It is covered by the assembly digest and promoted unchanged with this release.
+        from scripts.qwen_code import build as build_qwen_code
+        build_qwen_code(root, assembly / "qwen-code.zip")
         if "post" in gates and not _gates_ok(ctx, "post", only, log):
             raise BuildFailed("post-synth gates failed; no artifact produced")
         image = image_fn(release_id, source_commit) if image_fn is not None else None

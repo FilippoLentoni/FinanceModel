@@ -159,6 +159,10 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         for point in grid_points(block["grid"]):
             build_strategy(name, {**dict(block.get("fixed") or {}), **point}, pointer=f"/traditional/{name}")
     rl = p["rl"]
+    if 'development_evaluation' in rl and not isinstance(rl['development_evaluation'],bool):
+        raise FinplanError.validation('development_evaluation must be a frozen boolean',pointer='/rl/development_evaluation')
+    if rl.get("policy_selection", "best_seed") not in ("best_seed", "ensemble"):
+        raise FinplanError.validation("policy_selection must be best_seed or ensemble", pointer="/rl/policy_selection")
     algos = list(rl.get("algorithms") or [])
     if not algos or not set(algos) <= set(RL_NAMES) or len(set(algos)) != len(algos):
         raise FinplanError.validation("rl.algorithms lists ppo and/or sac", pointer="/rl/algorithms")
@@ -168,6 +172,10 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     from finplan_model.rl.spec import EnvSpec, RewardSpec
 
     env = EnvSpec.from_dict(rl.get("env"))
+    if rl.get('decision_timing','completed_close') not in ('completed_close','next_session_morning'):
+        raise FinplanError.validation('unsupported frozen decision timing',pointer='/rl/decision_timing')
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(env.features) and rl.get('decision_timing')!='next_session_morning':
+        raise FinplanError.validation('numeric GDELT training must match morning serving timing',pointer='/rl/decision_timing')
     grid = rl.get("grid") or {}
     if grid:
         _check_grid(grid, "/rl/grid")
@@ -194,4 +202,7 @@ def validate_protocol(raw: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def protocol_id(protocol: Mapping[str, Any]) -> str:
-    return configuration_id(dict(protocol))
+    value=copy.deepcopy(dict(protocol))
+    if value.get('rl',{}).get('gdelt_corpus_request'):
+        value['rl'].get('gdelt_corpus',{}).pop('dataset',None)
+    return configuration_id(value)

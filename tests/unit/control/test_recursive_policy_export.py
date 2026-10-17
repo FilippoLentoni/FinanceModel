@@ -1,0 +1,84 @@
+"""A succeeded recursive PPO experiment uses the same verified export boundary."""
+from types import SimpleNamespace
+import pytest
+from tests.unit.control.support import Harness,request
+from tests.unit.rl.test_policy_export import source
+
+
+@pytest.mark.parametrize('kind',['model_selection','recursive_evaluate'])
+def test_dry_run_exports_complete_evaluated_recursive_or_selection_ensemble(kind):
+    h=Harness(auto_approve=1.);result,spec=source();rid=h.ids.run_id()
+    h.service._get=lambda run_id:{'state':'succeeded','job_type':kind}
+    h.deps.run_io=SimpleNamespace(get_result=lambda run_id:result,get_spec=lambda run_id,checksum:spec)
+    cfg=request()['configuration'];cfg['payload'].update(strategy='prepare_policy',policy_source_run_id=rid,policy_strategy_id='ppo')
+    status,doc=h.submit(job_type='prepare_policy',configuration=cfg,dry_run=True)
+    assert status==200 and doc['dry_run'] is True and doc['run_id'] is None
+    assert not h.sagemaker.calls
+
+
+def test_manual_daily_profile_uses_existing_long_job_cap_and_server_frozen_history():
+    from finplan_model.selection.recursive_profiles import DAILY_HISTORY_PROFILE
+    h=Harness(auto_approve=1.);cfg=request()['configuration']
+    cfg['payload'].update(strategy='model_selection',objective=DAILY_HISTORY_PROFILE,rebalance_frequency='daily')
+    _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    stored=h.run(submitted['run_id']);protocol=stored['selection_protocol']
+    assert stored['max_runtime_seconds']==3000 and protocol['splits']['train']['start']=='2013-01-01'
+    assert protocol['rl']['seeds']==[0,1,2,3,4] and protocol['rl']['ppo']['total_timesteps']==30000
+    assert protocol['rl']['development_evaluation'] is True
+
+
+def test_weekly_controller_cannot_use_the_manual_long_profile_job():
+    from finplan_model.control.auth import Principal
+    from finplan_model.core.errors import FinplanError
+    from finplan_model.selection.recursive_profiles import DAILY_HISTORY_PROFILE
+    from tests.unit.control.support import arn
+    h=Harness(auto_approve=1.);body=request(job_type='model_selection',max_runtime_seconds=3000,idempotency_key='classical-weekly-long-attempt')
+    body['configuration']['payload'].update(strategy='model_selection',objective=DAILY_HISTORY_PROFILE,rebalance_frequency='daily')
+    with pytest.raises(FinplanError) as error:
+        h.service.submit_job(Principal.from_arn(arn('finplan-beta-financemodel-job-api-handler-research-role')),body,correlation_id='corr-manual-profile')
+    assert error.value.code=='FORBIDDEN' and not h.store.runs and not h.sagemaker.calls
+
+def test_intraday_acceptance_defers_bulk_source_and_preserves_idempotent_identity(monkeypatch):
+    import copy
+    import finplan_model.control.service as service_module
+    import finplan_model.jobs.market_loader as loader
+    from finplan_model.core.artifacts import InMemoryArtifactStore,canonical_json_bytes,sha256_checksum
+    from finplan_model.selection.recursive_profiles import GDELT_INTRADAY_PROFILE
+    h=Harness(auto_approve=1.);h.service.d.platform=SimpleNamespace();h.service.d.artifacts=InMemoryArtifactStore()
+    snapshot=SimpleNamespace(record={'coverage':{'end':'2026-01-02'}},manifest_checksum='sha256:'+'a'*64,synthetic=True,dataset_id='finance/etf-daily/SPY')
+    monkeypatch.setattr(service_module,'SnapshotReader',lambda client:SimpleNamespace(resolve=lambda sid:snapshot))
+    monkeypatch.setattr(loader,'load_market',lambda *a:pytest.fail('API must not download/validate historical prices or read bulk sources'))
+    cfg=request()['configuration'];cfg['payload'].update(strategy='model_selection',objective=GDELT_INTRADAY_PROFILE,rebalance_frequency='daily')
+    _,dry=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000,dry_run=True)
+    assert 'source_freeze_pending_cpu_setup' in dry['message'] and not h.store.runs and not h.sagemaker.calls
+    _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    first=copy.deepcopy(h.run(submitted['run_id']))
+    descriptor=first['selection_protocol']['rl']['gdelt_corpus_request']
+    assert descriptor['query']['snapshot_manifest_checksum']==snapshot.manifest_checksum
+    assert descriptor['query_checksum']==sha256_checksum(canonical_json_bytes(descriptor['query']))
+    assert 'gdelt_corpus' not in first['selection_protocol']['rl'] and first['max_runtime_seconds']==3000
+    h.clock.advance(hours=1)
+    _,replayed=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    assert replayed['run_id']==submitted['run_id'] and h.run(submitted['run_id'])==first
+
+
+def test_matched_price_control_changes_only_news_state_not_periods_seeds_or_objectives():
+    import copy
+    from finplan_model.selection.recursive_profiles import profile_protocol,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE
+    from finplan_model.selection.protocol import DEFAULT_PROTOCOL,validate_protocol
+    from finplan_model.rl.spec import EnvSpec
+    news=profile_protocol(DEFAULT_PROTOCOL,GDELT_INTRADAY_PROFILE)
+    price=profile_protocol(DEFAULT_PROTOCOL,GDELT_PRICE_CONTROL_PROFILE)
+    expected=copy.deepcopy(news);expected['rl']['env']['features'].remove('gdelt_intraday_organization_tone_v1')
+    assert price==expected
+    assert EnvSpec.from_dict(news['rl']['env']).observation_size(8)==98
+    assert EnvSpec.from_dict(price['rl']['env']).observation_size(8)==58
+    h=Harness(auto_approve=1.);cfg=request()['configuration']
+    cfg['payload'].update(strategy='model_selection',objective=GDELT_PRICE_CONTROL_PROFILE,rebalance_frequency='daily')
+    _,submitted=h.submit(job_type='model_selection',configuration=cfg,max_runtime_seconds=3000)
+    frozen=h.run(submitted['run_id'])['selection_protocol']
+    released_base=h.service.cfg.job_types['model_selection'].protocol
+    released_news=profile_protocol(released_base,GDELT_INTRADAY_PROFILE)
+    released_price=profile_protocol(released_base,GDELT_PRICE_CONTROL_PROFILE)
+    released_news['rl']['env']['features'].remove('gdelt_intraday_organization_tone_v1')
+    assert frozen==released_price==released_news and 'gdelt_corpus' not in frozen['rl']

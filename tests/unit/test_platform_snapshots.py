@@ -114,3 +114,60 @@ def test_http_client_signs_and_maps_errors():
     assert client2.get_snapshot(SID)["snapshot"]["input_snapshot_id"] == SID
     with pytest.raises(ValueError):
         HttpPlatformClient("http://plain.example.invalid", region="us-east-2", credentials=None)
+
+
+def test_saved_context_reads_use_signed_gets_and_validate_identifiers():
+    from botocore.credentials import Credentials
+    from urllib.parse import parse_qs, urlparse
+
+    seen = []
+    def opener(req, timeout):
+        seen.append(req)
+        return _Resp(200, b'{}')
+    client = HttpPlatformClient("https://plan-api.example.invalid", region="us-east-2", credentials=Credentials("testing", "testing"), opener=opener)
+    suffix = SID.removeprefix("snap_")
+    client.get_plan("pl_" + suffix)
+    client.get_portfolio_state("pf_" + suffix)
+    client.get_latest_snapshot("finance/equity-etf-daily/research-universe")
+    assert [urlparse(r.full_url).path for r in seen] == [f"/v1/plans/pl_{suffix}", f"/v1/portfolios/pf_{suffix}/state", "/v1/snapshots/latest"]
+    assert parse_qs(urlparse(seen[-1].full_url).query)["dataset_id"] == ["finance/equity-etf-daily/research-universe"]
+    assert all(r.method == "GET" and "AWS4-HMAC-SHA256" in r.headers["Authorization"] for r in seen)
+    with pytest.raises(FinplanError):
+        client.get_portfolio_state("../../another/path")
+
+
+def test_lifecycle_client_signs_post_body_and_checks_decision_portfolio():
+    from botocore.credentials import Credentials
+
+    seen = []
+    suffix = SID.removeprefix("snap_")
+    pid, did = "pf_" + suffix, "pd_" + suffix
+    def opener(req, timeout):
+        seen.append(req)
+        return _Resp(200, json.dumps({"decision": {"portfolio_id": pid, "decision_id": did}}).encode())
+    client = HttpPlatformClient("https://plan-api.example.invalid", region="us-east-2", credentials=Credentials("testing", "testing"), opener=opener)
+    body = {"portfolio_id": pid, "recommendation": {"weights": [.2, .8]}, "idempotency_key": "proposal-1"}
+    assert client.create_portfolio_decision(pid, body)["decision"]["decision_id"] == did
+    assert seen[-1].method == "POST" and json.loads(seen[-1].data) == body
+    assert "AWS4-HMAC-SHA256" in seen[-1].headers["Authorization"]
+    assert client.get_portfolio_decision(pid, did)["decision"]["portfolio_id"] == pid
+    assert seen[-1].full_url.endswith("/v1/portfolio-decisions/" + did)
+    with pytest.raises(FinplanError):
+        client.get_portfolio_decision(pid, "../../unsafe")
+
+
+def test_lifecycle_pagination_uses_platform_page_size_and_preserves_tokens():
+    from botocore.credentials import Credentials
+    from urllib.parse import parse_qs, urlparse
+
+    seen = []
+    def opener(req, timeout):
+        seen.append(req)
+        return _Resp(200, b'{}')
+    client = HttpPlatformClient("https://plan-api.example.invalid", region="us-east-2", credentials=Credentials("testing", "testing"), opener=opener)
+    pid = "pf_" + SID.removeprefix("snap_")
+    for operation in (client.list_portfolio_decisions, client.get_portfolio_history):
+        operation(pid, limit=73, next_token="opaque+token/next=")
+        assert parse_qs(urlparse(seen[-1].full_url).query) == {
+            "page_size": ["73"], "next_token": ["opaque+token/next="],
+        }

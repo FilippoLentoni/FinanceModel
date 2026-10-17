@@ -322,12 +322,17 @@ def test_drj05_build_cost_check():
 
 
 # ===================================================================== UNV-03 no schedule; API resource policy
-def test_unv03_no_schedule_submits_jobs():
-    """FinanceModel's only schedule is the dispatcher tick (it starts queued runs, never submits)."""
+def test_daily_trigger_stays_unscheduled_with_bounded_weekly_and_hourly_paper_research():
+    """Dispatcher stays a queue tick; the separately authorized beta research loop is explicit."""
     from infra.stacks.control import DISPATCH_SCHEDULE_DESCRIPTION
 
     src = (ROOT / "infra" / "stacks" / "control.py").read_text()
-    assert src.count("scheduler.CfnSchedule(") == 1 and "submit" not in DISPATCH_SCHEDULE_DESCRIPTION.lower()
+    assert src.count("scheduler.CfnSchedule(") == 3 and "submit" not in DISPATCH_SCHEDULE_DESCRIPTION.lower()
+    assert 'schedule_expression="cron(0 9 ? * MON *)"' in src
+    assert '"trigger":"weekly_classical_research"' in src
+    assert 'schedule_expression="cron(10 * * * ? *)"' in src
+    assert '"trigger":"hourly_crypto_research"' in src
+    assert 'end_date="2026-10-21T00:00:00.000Z"' in src
     assert 'input="{}"' in src  # the tick carries no job request
 
 

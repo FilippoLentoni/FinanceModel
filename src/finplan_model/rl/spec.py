@@ -28,13 +28,18 @@ Reward (per decision step ``t``, from the decision close ``d_t`` to the next dec
     V = simulated net asset value (fees, spread and slippage paid), DD[s] = 1 - V[s] / max_{u <= s} V[u]
     within the episode, turnover_t = traded notional at the execution session / value at the decision close.
 
+Version 2 optionally adds market summaries and observed drawdown, randomized fixed-length training
+episodes and partial rebalances. The declared feature order is the observation order. Defaults retain
+the legacy behavior; beta opts into these additions (``docs/rl-environment.md``).
+
 The reward is a training signal only: it is reported in the training-reward section and never as
 portfolio performance (RL-06); portfolio metrics come from the common evaluator.
 
 Episode
     training: one pass over the training window, all cash at the start, first decision at a random
-    offset in ``[window, window + step_sessions)`` sessions into the window (seeded), then a decision
-    every ``step_sessions`` sessions (about one month); evaluation (validation checkpoints): the
+    offset in ``[window, window + step_sessions)`` sessions into the window (seeded), or uniformly
+    sampled fixed-length episodes when ``episode_sessions > 0``; then a decision
+    every ``step_sessions`` sessions; evaluation (validation checkpoints): the
     calendar rebalance sessions of the window (``decision_frequency``), exactly as the common evaluator.
 """
 
@@ -56,13 +61,17 @@ __all__ = [
     "EnvSpec",
     "RewardSpec",
     "build_observation",
+    "allocation_action",
     "policy_configuration",
     "softmax_weights",
 ]
 
-ENV_SPEC_VERSION = "finplan-rl-env/1"
+ENV_SPEC_VERSION = "finplan-rl-env/2"
 #: Features the environment implements; a specification may declare only these.
-STATE_FEATURES = ("log_return_window", "current_weights")
+STATE_FEATURES = ("log_return_window", "current_weights", "market_summary", "portfolio_drawdown",
+                  "cross_asset_risk", "market_regime", "recent_returns", "etf_news_metadata_v1", "gdelt_organization_tone_v1", "gdelt_intraday_organization_tone_v1")
+# Preserve the original observation unless a released experiment opts into new features.
+DEFAULT_FEATURES = ("log_return_window", "current_weights")
 ACTION_TRANSFORMS = ("softmax",)
 REWARD_FORMULA = (
     "reward_t = reward_scale * (ln(V[d_t+1]/V[d_t]) - risk_penalty * sum_s ln(V[s]/V[s-1])^2 "
@@ -108,13 +117,15 @@ class RewardSpec:
 @dataclass(frozen=True)
 class EnvSpec:
     window: int = 20
-    features: tuple[str, ...] = STATE_FEATURES
+    features: tuple[str, ...] = DEFAULT_FEATURES
     return_scale: float = 50.0
     obs_clip: float = 5.0
     action_transform: str = "softmax"
     action_scale: float = 5.0
     step_sessions: int = 1
     decision_frequency: str = "daily"
+    episode_sessions: int = 0  # 0 preserves the original full-window episode
+    rebalance_fraction: float = 1.0
     reward: RewardSpec = field(default_factory=RewardSpec)
     version: str = ENV_SPEC_VERSION
 
@@ -125,18 +136,25 @@ class EnvSpec:
         unknown = sorted(set(d) - allowed)
         if unknown:
             raise FinplanError.validation("unknown environment specification field", pointer=f"{ptr}/{unknown[0]}")
-        if d.get("version", ENV_SPEC_VERSION) != ENV_SPEC_VERSION:
+        version = d.get("version", ENV_SPEC_VERSION)
+        if version not in ("finplan-rl-env/1", ENV_SPEC_VERSION):
             raise FinplanError.validation("unsupported environment specification version", pointer=f"{ptr}/version")
-        features = tuple(d.get("features", STATE_FEATURES))
+        features = tuple(d.get("features", DEFAULT_FEATURES))
         bad = [f for f in features if f not in STATE_FEATURES]
         if bad or not features or len(set(features)) != len(features):
             raise FinplanError.validation("state features must be distinct implemented features", pointer=f"{ptr}/features", known=list(STATE_FEATURES))
+        if len({'etf_news_metadata_v1','gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(features))>1:
+            raise FinplanError.validation('separate news sources require separately frozen state protocols',pointer=f'{ptr}/features')
         transform = d.get("action_transform", "softmax")
         if transform not in ACTION_TRANSFORMS:
             raise FinplanError.validation("PPO and SAC map actions to weights by a declared continuous transform (softmax)", pointer=f"{ptr}/action_transform")
         freq = d.get("decision_frequency", "daily")
         if freq not in ("daily", "weekly", "monthly", "quarterly"):
             raise FinplanError.validation("decision_frequency must be a rebalance frequency", pointer=f"{ptr}/decision_frequency")
+        if "portfolio_drawdown" in features and (freq != "daily" or d.get("step_sessions", 1) != 1):
+            raise FinplanError.validation("drawdown observations require daily decisions in training and evaluation", pointer=f"{ptr}/decision_frequency")
+        if "recent_returns" in features and d.get("window", 20) < 5:
+            raise FinplanError.validation("recent returns require five visible sessions", pointer=f"{ptr}/window")
         return cls(
             window=_int(d, "window", 20, lo=2, hi=252, ptr=ptr),
             features=features,
@@ -146,7 +164,10 @@ class EnvSpec:
             action_scale=_num(d, "action_scale", 5.0, lo=0.1, hi=50.0, ptr=ptr),
             step_sessions=_int(d, "step_sessions", 1, lo=1, hi=252, ptr=ptr),
             decision_frequency=str(freq),
+            episode_sessions=_int(d, "episode_sessions", 0, lo=0, hi=5000, ptr=ptr),
+            rebalance_fraction=_num(d, "rebalance_fraction", 1.0, lo=0.01, hi=1.0, ptr=ptr),
             reward=RewardSpec.from_dict(d.get("reward"), ptr=f"{ptr}/reward"),
+            version=version,
         )
 
     def with_reward(self, **changes: float) -> EnvSpec:
@@ -176,6 +197,20 @@ class EnvSpec:
             size += self.window * n_instruments
         if "current_weights" in self.features:
             size += n_instruments + 1
+        if "market_summary" in self.features:
+            size += 6 * n_instruments
+        if "portfolio_drawdown" in self.features:
+            size += 1
+        if "cross_asset_risk" in self.features:
+            size += n_instruments * (n_instruments - 1) // 2 + 1
+        if "market_regime" in self.features:
+            size += 6
+        if "recent_returns" in self.features:
+            size += 5 * n_instruments
+        if "etf_news_metadata_v1" in self.features:
+            size += 5 * n_instruments
+        if {"gdelt_organization_tone_v1","gdelt_intraday_organization_tone_v1"} & set(self.features):
+            size += 5 * n_instruments
         return size
 
 
@@ -193,20 +228,94 @@ def softmax_weights(action: Any, n_instruments: int, action_scale: float) -> tup
     return weights, cash
 
 
-def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float) -> np.ndarray:
+def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, cash_weight: float, *, drawdown: float | None = None, news_dataset: Mapping[str, Any] | None = None, instruments: tuple[str, ...] | None = None, decision_time: str | None = None, news_training: bool = False) -> np.ndarray:
     """Observation at a decision from ``window + 1`` aligned closes (oldest first) and current weights."""
-    parts: list[np.ndarray] = []
+    parts: dict[str, np.ndarray] = {}
+    if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(spec.features):
+        if 'gdelt_intraday_organization_tone_v1' in spec.features:
+            from .gdelt_intraday import extract,FEATURE_ORDER,STATE_FEATURE
+        else:
+            from .gdelt import extract,FEATURE_ORDER,STATE_FEATURE
+        if news_dataset is None or instruments is None or decision_time is None or len(instruments)!=len(weights):
+            raise FinplanError.precondition('GDELT state requires exact source data, instrument order and cutoff',reason='gdelt_state_input_missing')
+        features,_=extract(news_dataset,symbols=instruments,decision_time=decision_time)
+        parts[STATE_FEATURE]=np.asarray([features[s][f] for s in instruments for f in FEATURE_ORDER],dtype=np.float64)
+    if "etf_news_metadata_v1" in spec.features:
+        from finplan_model.etf_news import FINANCIAL_NEWS_UNIVERSE, extract, dt
+        from finplan_model.core.outcome import require_valid
+        if news_dataset is None or instruments is None or decision_time is None:
+            raise FinplanError.precondition("ETF news state requires explicit source data, instrument order and decision cutoff", reason="news_state_input_missing")
+        if len(instruments)!=len(weights) or len(set(instruments))!=len(instruments) or set(instruments)-FINANCIAL_NEWS_UNIVERSE:
+            raise FinplanError.validation("ETF news state requires matching ETF instrument order", pointer="/observation/instruments")
+        from .etf_news import validate_corpus
+        news_dataset=validate_corpus(news_dataset)
+        if set(instruments)!=set(news_dataset['symbols']) or dt(news_dataset['decision_at'])!=dt(decision_time):
+            raise FinplanError.precondition("news dataset query must match observation cutoff and universe", reason="news_state_query_mismatch")
+        features,_,_=extract(news_dataset,symbols=instruments,decision_time=decision_time,training=news_training)
+        if news_training and any(features[i]['missing'] for i in instruments):
+            raise FinplanError.precondition("news training requires licensed frozen coverage at every decision", reason="news_training_coverage_or_rights_missing")
+        values=[]
+        for instrument in instruments:
+            f=features[instrument]
+            values.extend([f['sentiment'],min(f['event_count'],100.)/100.,f['uncertainty'],min(f['age_hours'],24.)/24.,f['missing']])
+        parts['etf_news_metadata_v1']=np.asarray(values,dtype=np.float64)
+
+    enriched = {"cross_asset_risk", "market_regime", "recent_returns"} & set(spec.features)
+    if enriched:
+        px = np.asarray(closes, dtype=np.float64)
+        if px.shape != (spec.window + 1, len(weights)) or not np.all(np.isfinite(px)) or np.any(px <= 0):
+            raise FinplanError.validation("state features require positive aligned visible closes", pointer="/observation/closes")
+        returns = np.log(px[1:] / px[:-1])
+        recent = returns[-min(20, len(returns)):]
+        if "cross_asset_risk" in enriched:
+            centered = recent - recent.mean(axis=0)
+            covariance = centered.T @ centered / max(len(recent), 1)
+            std = np.sqrt(np.maximum(np.diag(covariance), 0.))
+            denom = np.outer(std, std)
+            corr = np.divide(covariance, denom, out=np.zeros_like(covariance), where=denom > 1e-15)
+            pairs = corr[np.triu_indices(len(weights), k=1)]
+            portfolio_vol = np.sqrt(max(0., float(weights @ covariance @ weights))) * np.sqrt(252.)
+            parts["cross_asset_risk"] = np.clip(np.append(pairs, portfolio_vol), -spec.obs_clip, spec.obs_clip)
+        if "market_regime" in enriched:
+            market = returns.mean(axis=1)  # Equal-weight universe proxy, not an external market index.
+            values = [market[-min(h, len(market)):].mean() * spec.return_scale for h in (20, 60)]
+            values += [market[-min(h, len(market)):].std() * spec.return_scale for h in (20, 60)]
+            values += [recent.mean(axis=0).std() * spec.return_scale, float(np.mean(recent.mean(axis=0) > 0))]
+            parts["market_regime"] = np.clip(np.array(values), -spec.obs_clip, spec.obs_clip)
+        if "recent_returns" in enriched:
+            parts["recent_returns"] = np.clip(returns[-5:] * spec.return_scale, -spec.obs_clip, spec.obs_clip).reshape(-1)
     if "log_return_window" in spec.features:
         spec.require("log_return_window")
         px = np.asarray(closes, dtype=np.float64)
         if px.shape[0] != spec.window + 1:
             raise FinplanError.validation("the observation needs window + 1 closes", pointer="/rl/env/window", window=spec.window)
         r = np.log(px[1:] / px[:-1]) * spec.return_scale
-        parts.append(np.clip(r, -spec.obs_clip, spec.obs_clip).reshape(-1))
+        parts["log_return_window"] = np.clip(r, -spec.obs_clip, spec.obs_clip).reshape(-1)
     if "current_weights" in spec.features:
         spec.require("current_weights")
-        parts.append(np.append(np.asarray(weights, dtype=np.float64), float(cash_weight)))
-    return np.concatenate(parts).astype(np.float32)
+        parts["current_weights"] = np.append(np.asarray(weights, dtype=np.float64), float(cash_weight))
+    if "market_summary" in spec.features:
+        px = np.asarray(closes, dtype=np.float64)
+        if px.shape[0] != spec.window + 1:
+            raise FinplanError.validation("market summaries need window + 1 visible closes", pointer="/rl/env/window")
+        returns = np.log(px[1:] / px[:-1])
+        # Per-session mean return and volatility at three horizons; no fitted normalizer or future data.
+        summaries = [f(returns[-min(h, spec.window):], axis=0) * spec.return_scale
+                     for h in (5, 20, 60) for f in (np.mean, np.std)]
+        parts["market_summary"] = np.clip(np.concatenate(summaries), -spec.obs_clip, spec.obs_clip)
+    if "portfolio_drawdown" in spec.features:
+        if drawdown is None or not math.isfinite(drawdown) or not 0 <= drawdown <= 1:
+            raise FinplanError.validation("drawdown must be supplied from observed portfolio values", pointer="/observation/drawdown")
+        parts["portfolio_drawdown"] = np.array([drawdown], dtype=np.float64)
+    return np.concatenate([parts[f] for f in spec.features]).astype(np.float32)
+
+
+def allocation_action(spec: EnvSpec, action: Any, current_weights: np.ndarray, cash_weight: float) -> tuple[np.ndarray, float]:
+    """Blend a proposed target with the current allocation before the shared constraint policy."""
+    weights, cash = softmax_weights(action, len(current_weights), spec.action_scale)
+    fraction = spec.rebalance_fraction
+    return (fraction * weights + (1 - fraction) * current_weights,
+            fraction * cash + (1 - fraction) * cash_weight)
 
 
 def policy_configuration(algo: str, hyperparameters: Mapping[str, Any], env_spec: EnvSpec, *, simulation_configuration_id: str, training_range: Mapping[str, str], instruments: tuple[str, ...]) -> dict[str, Any]:

@@ -221,6 +221,9 @@ def test_documented_default_specification_validates_and_is_the_configured_one():
     assert "configuration pending user review" in text
     (block,) = re.findall(r"```json\n(.*?)\n```", text, re.S)
     documented = EnvSpec.from_dict(json.loads(block))
-    for env in ("beta", "gamma", "prod"):
-        configured = EnvSpec.from_dict(load_config(env).raw["job_types"]["model_selection"]["protocol"]["rl"]["env"])
-        assert configured == documented
+    configured = EnvSpec.from_dict(load_config("beta").raw["job_types"]["model_selection"]["protocol"]["rl"]["env"])
+    assert configured == documented
+    for env in ("gamma", "prod"):
+        legacy = EnvSpec.from_dict(load_config(env).raw["job_types"]["model_selection"]["protocol"]["rl"]["env"])
+        assert legacy.window == 20 and legacy.features == ("log_return_window", "current_weights")
+        assert legacy.episode_sessions == 0 and legacy.rebalance_fraction == 1

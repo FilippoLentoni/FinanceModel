@@ -79,6 +79,8 @@ def build_run_spec(run: Mapping[str, Any], *, simulation: Mapping[str, Any], ima
         spec["staging"] = {"plan_id": run["plan_id"]}  # contracts 1.1.0 job-submission plan_id
     if run.get("dataset_id"):
         spec["dataset_id"] = run["dataset_id"]
+    if run.get("policy_source"):
+        spec["policy_source"] = dict(run["policy_source"])
     if run.get("production_strategy"):
         spec["production_strategy"] = dict(run["production_strategy"])  # frozen at submission (M2)
     if run.get("model_version"):

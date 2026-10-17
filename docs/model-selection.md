@@ -5,6 +5,19 @@ experiment runs only when the user asks for it, through the agent or the job API
 it. The protocol in `config/<env>.json` (`job_types.model_selection.protocol`) is **configuration
 pending user review**. Each run freezes a copy of it at submission and records its `protocol_id`.
 
+Beta now runs a PPO stability experiment: compact 37-value state, observed drawdown, randomized
+64-session training episodes, softmax scale 1, 0.25 rebalances, turnover penalty 0.001, and an ensemble
+of all five seeds. PPO optimizer diagnostics and improvement over the initial checkpoint are recorded
+under training reward. Gamma/prod retain the original settings. This is a bundle comparison against
+the initial run, not an attribution experiment for any individual change. The existing test path has
+been inspected: repeated runs flag it as development evidence and cannot pass promotion. See
+[the beta specification](../openspec/changes/improve-ppo-stability/specs/rl-stability/spec.md).
+
+Large responses retain every validation checkpoint curve. Only verbose optimizer histories are
+sampled (initial, selected checkpoint, final and uniformly spaced updates); their original counts and
+compaction flags are reported. `full_diagnostics_artifact_id` identifies the evidence artifact with
+the entire unabridged summary and histories. Artifact identifiers carry no storage location.
+
 ## Protocol
 
 | Item | Value |
@@ -12,7 +25,7 @@ pending user review**. Each run freezes a copy of it at submission and records i
 | Data | **2025-2026 only.** The snapshot is cut to `data_start` = 2025-01-01, and nothing earlier is visible to any strategy. |
 | Train / calibrate | 2025-01-01 .. 2025-12-31 |
 | Validate (tuning, model choice) | 2026-01-01 .. 2026-06-30 |
-| Untouched test | 2026-07-01 .. latest session of the snapshot, evaluated **once**, after the selection is frozen |
+| Test / development after inspection | 2026-07-01 .. latest session of the snapshot, evaluated **once**, after the selection is frozen |
 | Universe | equity-etf-daily research universe: VOO, GOOGL, NFLX, AAPL, NVDA, plus cash (the residual weight) |
 | Evaluator | `finplan_model.evaluate.evaluate`, with the same simulation configuration for every family: costs (1 bp fee, 1 bp half-spread, linear-participation slippage), daily rebalance (user decision 28), next-open execution, long-only, max weight 1 |
 | Selection rule | highest **validation** Sharpe ratio, net of costs. Ties go to the first entry in the declared grid and family order. A rule that names the test split or a holdout fails with `OPERATION_NOT_PERMITTED`. |
@@ -25,14 +38,14 @@ pending user review**. Each run freezes a copy of it at submission and records i
 | Traditional | `min_variance` | lookback 20, 60, 120 sessions | Ledoit-Wolf covariance, cash at its minimum |
 | Traditional | `mean_variance` | lookback 20, 60, 120 x risk aversion 1, 5, 20 | Ledoit-Wolf covariance, historical mean, free cash |
 | Traditional | `scenario_cvar` | lookback 60, 120 x alpha 0.90, 0.95 | 500 bootstrap scenarios, seed 0, minimum CVaR |
-| RL | `ppo` | reward `risk_penalty` 0.5, 2.0 | 30,000 steps, lr 3e-4, n_steps 256, batch 64, 10 epochs, gamma 0.9, GAE 0.95, clip 0.2, MLP 64x64; validation checkpoint every 2,048 steps, patience 5 |
-| RL | `sac` | reward `risk_penalty` 0.5, 2.0 | 8,000 steps, lr 3e-4, buffer 50,000, learning starts at 500, batch 128, tau 0.005, gamma 0.9, MLP 64x64; validation checkpoint every 1,000 steps, patience 4 |
+| RL | `ppo` | reward `risk_penalty` 0.5, 2.0 | 30,000 steps, lr 3e-4, n_steps 256, batch 64, 10 epochs, gamma 0.99, GAE 0.95, clip 0.2, MLP 64x64; validation checkpoint every 2,048 steps, patience 5 |
+| RL | `sac` | reward `risk_penalty` 0.5, 2.0 | 8,000 steps, lr 3e-4, buffer 50,000, learning starts at 500, batch 128, tau 0.005, gamma 0.99, MLP 64x64; validation checkpoint every 1,000 steps, patience 4 |
 
 - **Seeds.** Each RL configuration trains with seeds 0, 1, 2, 3 and 4 (at least 3).
 - **Torch and determinism.** Training uses CPU torch on one thread. Evaluation is deterministic.
 - **RL choice.** For each RL algorithm, the job picks the checkpoint per seed by validation Sharpe
   (the untrained policy is the step-0 checkpoint). It then picks the configuration with the highest
-  mean validation Sharpe across seeds, and the best seed within that configuration.
+  mean validation Sharpe across all requested seeds. Beta averages the target weights of all five seeds; gamma/prod retain the original best-seed protocol. Incomplete seed grids are excluded.
 - **Environment.** State, action and reward are defined in [rl-environment.md](rl-environment.md).
 
 ## Steps inside the job

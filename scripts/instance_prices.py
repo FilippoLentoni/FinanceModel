@@ -87,12 +87,12 @@ def instance_types(cfg: EnvConfig) -> list[str]:
     return sorted(out)
 
 
-def _hourly_usd(price_list: Sequence[Any]) -> float | None:
+def _hourly_usd(price_list: Sequence[Any], component: str = COMPONENT) -> float | None:
     best: float | None = None
     for item in price_list:
         prod = json.loads(item) if isinstance(item, str) else item
         attrs = (prod.get("product") or {}).get("attributes") or {}
-        if attrs.get("component") != COMPONENT:
+        if attrs.get("component") != component:
             continue
         for term in ((prod.get("terms") or {}).get("OnDemand") or {}).values():
             for dim in (term.get("priceDimensions") or {}).values():
@@ -110,21 +110,25 @@ def _hourly_usd(price_list: Sequence[Any]) -> float | None:
 def fetch_prices(pricing: Any, region: str, types: Iterable[str], *, now: datetime | None = None) -> dict[str, Any]:
     """The ``instance-prices`` document for ``types`` in ``region`` (Price List API, on-demand)."""
     prices: dict[str, float] = {}
+    components: dict[str, str] = {}
     for itype in sorted(set(types)):
+        component = "Training" if itype.startswith(("ml.g", "ml.p")) else COMPONENT
         resp = pricing.get_products(
             ServiceCode=SERVICE_CODE,
             Filters=[
                 {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
                 {"Type": "TERM_MATCH", "Field": "instanceName", "Value": itype},
-                {"Type": "TERM_MATCH", "Field": "component", "Value": COMPONENT},
+                {"Type": "TERM_MATCH", "Field": "component", "Value": component},
             ],
             FormatVersion="aws_v1",
             MaxResults=100,
         )
-        usd = _hourly_usd(resp.get("PriceList") or [])
+        products = resp.get("PriceList") or []
+        usd = _hourly_usd(products, component)
         if usd is None:
-            raise PriceUnavailable(f"the Price List API returned no on-demand {COMPONENT} price for {itype} in {region}")
+            raise PriceUnavailable(f"the Price List API returned no on-demand {component} price for {itype} in {region}")
         prices[itype] = usd
+        components[itype] = component
     return {
         "retrieved_at": utc_iso(now or datetime.now(UTC)),
         "currency": "USD",
@@ -132,6 +136,7 @@ def fetch_prices(pricing: Any, region: str, types: Iterable[str], *, now: dateti
         "source": "AWS Price List API",
         "service_code": SERVICE_CODE,
         "component": COMPONENT,
+        "components_by_instance": components,
         "region": region,
     }
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 
@@ -35,6 +35,7 @@ class PriceArrays:
     exec_price: np.ndarray  # T x n, executable price (carried mark when the bar is missing)
     volume: np.ndarray  # T x n, 0 when unknown
     has_bar: np.ndarray  # T x n, bool
+    decision_times: tuple[datetime, ...] | None = None  # exact source decision cutoffs; required for opt-in news
 
     @classmethod
     def from_market(cls, market: MarketData, universe: Sequence[str] | None = None, *, execution_timing: str = "next_open") -> PriceArrays:
@@ -51,6 +52,16 @@ class PriceArrays:
             for k, s in enumerate(sessions):
                 bar = market.bar(iid, s)
                 if bar is not None:
+                    # The learner slices these arrays directly. It cannot use
+                    # PointInTimeView's late-arrival filtering, so reject an
+                    # unsupported vintage rather than leak an unavailable bar.
+                    if bar.available_at > market.decision_time(s):
+                        raise FinplanError.precondition(
+                            "RL price arrays require bars available by their decision cutoff",
+                            reason="rl_price_availability_mismatch", instrument_id=iid,
+                            session_date=s.isoformat(), available_at=bar.available_at.isoformat(),
+                            decision_time=market.decision_time(s).isoformat(),
+                        )
                     px = bar.price(field)
                     exec_p[k, j] = px if px is not None else mark
                     mark = float(bar.close)
@@ -62,7 +73,7 @@ class PriceArrays:
                     exec_p[k, j] = mark
         if np.isnan(close).any():
             raise FinplanError.validation("every instrument needs a bar on the first session of the RL data", pointer="/universe", session_date=sessions[0].isoformat())
-        return cls(tuple(sessions), instruments, close, exec_p, vol, has)
+        return cls(tuple(sessions), instruments, close, exec_p, vol, has, tuple(market.decision_time(s) for s in sessions))
 
     def index_of(self, day: date, *, side: str = "left") -> int:
         """First session on or after ``day`` (``left``) or last session on or before it (``right``)."""

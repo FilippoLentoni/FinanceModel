@@ -99,6 +99,8 @@ def test_control_plane_functions_rules_and_schedule(assembly):
             assert props["Runtime"] == "python3.12" and props["Architectures"] == ["arm64"]
             assert props["Environment"]["Variables"]["FINPLAN_ENVIRONMENT"] == env
             assert props["Environment"]["Variables"]["FINPLAN_RUNS_TABLE"] == f"finplan-{env}-financemodel-job-control"
+        assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["MemorySize"] == 2048
+        assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["Timeout"] == 29
         assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["Environment"]["Variables"]["FINPLAN_DISPATCHER_FUNCTION"] == n.function_name(env, n.DISPATCHER)
         groups = assembly.resources(name, "AWS::Logs::LogGroup")
         assert len(groups) == len(fns) and all(g["Properties"]["RetentionInDays"] == 30 for g in groups.values())
@@ -110,7 +112,8 @@ def test_control_plane_functions_rules_and_schedule(assembly):
         training = rules[n.env_name(env, n.TRAINING_STATE_CHANGE_RULE)]["Properties"]
         assert training["EventPattern"] == {"source": ["aws.sagemaker"], "detail-type": ["SageMaker Training Job State Change"], "detail": {"TrainingJobName": [{"prefix": f"fm-{env}-"}]}}
         assert training["Targets"][0]["RetryPolicy"]["MaximumRetryAttempts"] == 4
-        (sched,) = assembly.resources(name, "AWS::Scheduler::Schedule").values()
+        schedules = assembly.resources(name, "AWS::Scheduler::Schedule")
+        sched = next(s for s in schedules.values() if s["Properties"]["Name"] == n.env_name(env, n.DISPATCHER))
         assert sched["Properties"]["ScheduleExpression"] == "rate(1 minute)" and sched["Properties"]["State"] == "DISABLED"
         assert sched["Metadata"]["logical-role"] == "job-dispatcher-schedule"
 
@@ -133,7 +136,8 @@ def test_dispatcher_schedule_is_deployed_disarmed(assembly):
 
     for env in ENVS:
         name = f"finplan-{env}-financemodel-control"
-        (sched,) = assembly.resources(name, "AWS::Scheduler::Schedule").values()
+        schedules = assembly.resources(name, "AWS::Scheduler::Schedule")
+        sched = next(s for s in schedules.values() if s["Properties"]["Name"] == n.env_name(env, n.DISPATCHER))
         props = sched["Properties"]
         assert props["State"] == "DISABLED" and props["ScheduleExpression"] == "rate(1 minute)"
         assert props["Name"] == n.env_name(env, n.DISPATCHER)

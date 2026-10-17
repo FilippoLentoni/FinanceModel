@@ -109,6 +109,60 @@ def test_approval_on_dynamodb(dynamo):
     assert status["state"] == "queued"
 
 
+def test_advisory_activation_writes_a_complete_dynamodb_audit(dynamo):
+    from types import SimpleNamespace
+
+    from finplan_model.control.production_strategy import InMemoryStrategyParameter
+    from finplan_model.core.artifacts import InMemoryArtifactStore
+    from finplan_model.rl.advisory import activate
+
+    h = Harness(store=dynamo)
+    artifacts = InMemoryArtifactStore()
+    source_run, export_run = h.ids.run_id(), h.ids.run_id()
+    bundle = {"format": "finplan-strategy-bundle/1", "mode": "advisory_paper",
+              "strategy_id": "equal_weight", "source_run_id": source_run, "members": []}
+    ref = artifacts.put_json(bundle, kind="policy_inference").to_dict()
+    parameter = InMemoryStrategyParameter()
+    h.deps.artifacts, h.deps.advisory_parameter = artifacts, parameter
+    h.deps.run_io = SimpleNamespace(get_result=lambda run_id: {"artifacts": [ref]})
+    h.service._get = lambda run_id: {"state": "succeeded", "job_type": "prepare_policy"}
+    principal = Principal.from_arn("arn:aws:sts::<account-id>:assumed-role/finplan-beta-financemodel-pipeline-stage-role/operator")
+
+    response = activate(h.service, principal, {"export_run_id": export_run, "confirmed_by_user": True})
+    assert json.loads(parameter.read()) == response["advisory_policy"]
+    items = dynamo.client.query(TableName=dynamo.table, KeyConditionExpression="pk = :pk",
+                                ExpressionAttributeValues={":pk": {"S": "AUDIT#production-strategy"}})["Items"]
+    assert len(items) == 1
+    audit = json.loads(items[0]["doc"]["S"])
+    assert audit["audit_id"].startswith("corr_") and audit["new"]["export_run_id"] == export_run
+    assert audit["event"] == "advisory_policy_selected"
+
+
+def test_scoped_advisory_pin_preserves_default_and_other_portfolios(dynamo):
+    from types import SimpleNamespace
+    from finplan_model.control.production_strategy import InMemoryStrategyParameter
+    from finplan_model.core.artifacts import InMemoryArtifactStore
+    from finplan_model.paper_profile import DAILY_INSTRUMENTS, identity
+    from finplan_model.rl.advisory import activate
+
+    h=Harness(store=dynamo);artifacts=InMemoryArtifactStore();pid='pf_01JABCDEFGHJKMNPQRSTVWXY01'
+    bundle={'format':'finplan-strategy-bundle/1','mode':'advisory_paper','strategy_id':'equal_weight',
+            'source_run_id':h.ids.run_id(),'members':[],'instruments':sorted(DAILY_INSTRUMENTS)}
+    ref=artifacts.put_json(bundle,kind='policy_inference').to_dict()
+    old={'export_run_id':'old-default-export','artifact':{'checksum':'unchanged'},'portfolio_policies':{'other':{'export_run_id':'other-export'}}}
+    parameter=InMemoryStrategyParameter(json.dumps(old));h.deps.artifacts=artifacts;h.deps.advisory_parameter=parameter
+    h.deps.run_io=SimpleNamespace(get_result=lambda run_id:{'artifacts':[ref]})
+    profile={'caller_id':'caller','profile_id':'daily8','identity':identity('caller','daily8'),'initial_cash':100,'instruments':list(DAILY_INSTRUMENTS),'news_required':False}
+    h.deps.platform=SimpleNamespace(get_portfolio=lambda p:{'portfolio_id':p,'synthetic':True,'settings':{'paper_research_profile':profile}})
+    h.service._get=lambda rid:{'state':'succeeded','job_type':'prepare_policy'}
+    principal=Principal.from_arn('arn:aws:sts::<account-id>:assumed-role/finplan-beta-financemodel-pipeline-stage-role/operator')
+    run=h.ids.run_id();activate(h.service,principal,{'export_run_id':run,'confirmed_by_user':True,'portfolio_id':pid})
+    selected=json.loads(parameter.read())
+    assert selected['artifact']==old['artifact'] and selected['export_run_id']==old['export_run_id']
+    assert selected['portfolio_policies']['other']==old['portfolio_policies']['other']
+    assert selected['portfolio_policies'][pid]['export_run_id']==run
+
+
 # ---------------------------------------------------------------- SSM settings
 @pytest.fixture
 def ssm():
@@ -132,7 +186,7 @@ def test_ssm_settings_read_runtime_values(ssm):
     s = SsmSettings(ssm, cfg)
     assert s.instance_prices()["usd_per_hour"]["ml.m5.xlarge"] == 0.25
     assert s.auto_approve_usd() == 0.5
-    assert s.lease_limits() == {"cpu": 2, "gpu": 0}
+    assert s.lease_limits() == {"cpu": 2, "gpu": 1}
     assert s.approver_role_name() == "finplan-beta-financemodel-approver-role"
     assert s.production_candidate_principals() == ["finplan-beta-financialplanning-candidate-role"]
     assert s.budget_allocation() == {"cpu_research": 7, "gpu": 25}
@@ -147,7 +201,7 @@ def test_ssm_settings_defaults_and_invalid_values(ssm):
     cfg = env_config()
     s = SsmSettings(ssm, cfg)
     assert s.auto_approve_usd() == 0.0  # FM-OQ-3 default
-    assert s.lease_limits() == {"cpu": 1, "gpu": 0}
+    assert s.lease_limits() == {"cpu": 1, "gpu": 1}
     assert s.budget_allocation()["cpu_research"] == 7 and s.budget_allocation()["gpu"] == 25
     assert s.budget_state() is None and s.instance_prices() is None
     ssm.put_parameter(Name=cfg.ssm["lease_limits"], Value="not json", Type="String")

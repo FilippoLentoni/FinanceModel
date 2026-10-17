@@ -39,7 +39,8 @@ RUN_ID_RE = re.compile(rf"^run_{_ULID}\Z")
 MODEL_VERSION_RE = re.compile(rf"^mv_{_ULID}\Z")
 SNAPSHOT_ID_RE = re.compile(rf"^snap_{_ULID}\Z")
 CONFIGURATION_ID_RE = re.compile(r"^cfg_[0-9a-f]{64}\Z")
-_PATTERNS = {"run_id": RUN_ID_RE, "model_version": MODEL_VERSION_RE, "input_snapshot_id": SNAPSHOT_ID_RE, "configuration_id": CONFIGURATION_ID_RE}
+_PATTERNS = {"run_id": RUN_ID_RE, "model_version": MODEL_VERSION_RE, "input_snapshot_id": SNAPSHOT_ID_RE, "configuration_id": CONFIGURATION_ID_RE,
+             "plan_id": re.compile(rf"^pl_{_ULID}\Z"), "portfolio_id": re.compile(rf"^pf_{_ULID}\Z"), "decision_id": re.compile(rf"^pd_{_ULID}\Z")}
 
 
 class IdMinter:

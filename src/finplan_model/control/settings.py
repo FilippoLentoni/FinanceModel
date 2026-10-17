@@ -203,6 +203,17 @@ class SsmSettings:
         doc = self._json(self.cfg.ssm["budget_allocation"])
         return dict(contract_budget.DEFAULT_ALLOCATION) if doc is None else dict(doc)
 
+    def cost_ceiling_usd(self) -> float:
+        import math
+        raw = self._get("/finplan/shared/financialplanning/config/cost-ceiling-usd")
+        try:
+            value = float(raw) if raw is not None else float(contract_budget.DEFAULT_CEILING_USD)
+        except (TypeError, ValueError):
+            value = float("nan")
+        if not math.isfinite(value) or value <= 0:
+            raise FinplanError.precondition("invalid project cost ceiling", reason="setting_invalid", setting="cost-ceiling-usd")
+        return value
+
     def budget_state(self) -> Any:
         return self._get(self.cfg.ssm["budget_state"])
 
@@ -217,6 +228,11 @@ class SsmSettings:
 
     def job_definition(self, job_type: str) -> Mapping[str, Any] | None:
         doc = self._json(job_definition_parameter(self.cfg.env, job_type))
+        if isinstance(doc, Mapping) and job_type == "swarm_mode_a":
+            image = self._get(self.cfg.ssm_name("config", "vllm-image"))
+            if not image:
+                return None
+            doc = {**doc, "image_uri": image, "image_digest": image.rsplit("@", 1)[-1]}
         return doc if isinstance(doc, Mapping) else None
 
     def job_role_arn(self) -> str | None:

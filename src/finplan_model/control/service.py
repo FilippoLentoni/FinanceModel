@@ -40,7 +40,8 @@ from finplan_model.core.ids import IdMinter, request_hash, require_id
 from finplan_model.core.outcome import require_valid
 from finplan_model.core.platform import PlatformClient, SnapshotReader
 from finplan_model.jobs.runio import RunIO
-from finplan_model.jobs.spec import build_run_spec, simulation_config_for
+from finplan_model.jobs.spec import build_run_spec, simulation_config_for, universe_for
+from finplan_model.selection.recursive_profiles import PROFILES as RESEARCH_PROFILES
 
 from . import costs
 from . import production_strategy as ps
@@ -69,6 +70,9 @@ class ServiceDeps:
     run_io: RunIO
     clock: Clock
     ids: IdMinter
+    artifacts: Any = None
+    advisory_parameter: Any = None
+    offline_batch: Any = None
     platform: PlatformClient | None = None
     model_version_resolver: Callable[[str | None, str | None], str | None] | None = None
     kick: Callable[[str], None] | None = None
@@ -211,7 +215,31 @@ class JobService:
         key = body.get("idempotency_key")
         scope_key = None
         if not dry_run and isinstance(key, str) and _IDEM_KEY.match(key):
-            scope_key = idempotency_scope_key(principal.arn, self.env, "submit_job", key)
+            scope_principal = principal.arn
+            # On-demand and scheduled reviews share one durable weekly submission identity.
+            # Otherwise the same S3 reservation would submit twice from the two Lambda roles.
+            weekly_roles = (
+                f"finplan-{self.env}-financemodel-job-api-handler-classical-role",
+                f"finplan-{self.env}-financemodel-job-api-handler-research-role",
+            )
+            request_configuration = body.get("configuration")
+            request_payload = (
+                request_configuration.get("payload")
+                if isinstance(request_configuration, Mapping)
+                else None
+            )
+            if (
+                self.env == "beta"
+                and principal.role_name in weekly_roles
+                and isinstance(request_payload, Mapping)
+                and request_payload.get("objective") == "classical_weekly_review"
+            ):
+                scope_principal = (
+                    principal.arn.rsplit("/", 1)[0] + "/" + weekly_roles[1]
+                )
+            scope_key = idempotency_scope_key(
+                scope_principal, self.env, "submit_job", key
+            )
             replay = self._replay(scope_key, body)
             if replay is not None:
                 return replay
@@ -247,18 +275,40 @@ class JobService:
             if universe and not disclosures:
                 raise FinplanError.validation("the universe snapshot carries no bias disclosures", pointer="/input_snapshot_id", reason="bias_disclosures_missing")
         payload = body["configuration"]["payload"]
+        policy_source = None
+        if sub.job_type.name == "prepare_policy":
+            from finplan_model.jobs.policy_export import freeze_policy_source
+            source_id = payload.get("policy_source_run_id")
+            source_run = self._get(source_id)
+            if sub.purpose != "research" or source_run.get("state") != "succeeded" or source_run.get("job_type") not in ("model_selection", "recursive_evaluate"):
+                raise FinplanError.precondition("only succeeded model-selection research policies can be exported", reason="policy_source_invalid")
+            source_result = self.d.run_io.get_result(source_id) or {}
+            source_spec = self.d.run_io.get_spec(source_id, None)
+            policy_source = freeze_policy_source(source_result, source_spec, source_id, payload.get('policy_strategy_id', 'ppo'), artifacts=self.d.artifacts)
         simulation = simulation_config_for(self.cfg.simulation_defaults, payload)
+        if sub.job_type.name in ("swarm_mode_a", "jev_backtest") and self.d.platform is not None:
+            from datetime import date
+            from finplan_model.benchmarks.protocol import daily_scope
+            from finplan_model.jobs.market_loader import load_market
+            market, _ = load_market(self.d.platform, str(body["input_snapshot_id"]))
+            window = body["evaluation_window"]
+            daily_scope(market, payload.get("universe"), date.fromisoformat(window["start"]), date.fromisoformat(window["end"]), frequency=simulation["rebalance_frequency"])
         selection: dict[str, Any] = {}
-        if sub.job_type.name == "model_selection":
+        if sub.job_type.name in ("model_selection", "recursive_evaluate"):
             selection = self._selection_fields(sub, dataset_id, all_runs)
         est = costs.estimate(self.cfg, sub.job_type, instance_type=sub.instance_type, instance_count=sub.instance_count, max_runtime_seconds=sub.max_runtime_seconds, prices=self.d.settings.instance_prices(), now=self.now())
         if all_runs is None:
             all_runs = list(iter_runs(self.store))
-        remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id)
+        ceiling = getattr(self.d.settings, "cost_ceiling_usd", lambda: None)()
+        remaining = costs.check_budget(est, allocation=self.d.settings.budget_allocation(), budget_state=self.d.settings.budget_state(), runs=all_runs, correlation_id=correlation_id, ceiling_usd=ceiling)
         block = est.block(remaining, synthetic=synthetic)
         require_valid(block, "cost-estimate")
+        if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(selection.get('selection_protocol',{}).get('rl',{}).get('env',{}).get('features',[])):
+            self._freeze_gdelt_corpus(selection['selection_protocol'],sub)
         if dry_run:
             resp = {"run_id": None, "configuration_id": sub.configuration_id, "state": None, "dry_run": True, "cost_estimate": block, "message": "Dry run: the request is valid and estimated; no run was recorded and no job started."}
+            if selection.get('selection_protocol',{}).get('rl',{}).get('gdelt_corpus_request'):
+                resp['message']='Dry run: budget and registered configuration validated; source_freeze_pending_cpu_setup. Full source coverage and integrity must pass inside the bounded CPU job before any learner starts.'
             if synthetic:
                 resp["synthetic"] = True
             self._log("submit_dry_run", correlation_id=correlation_id, job_type=sub.job_type.name, estimate=est.estimated_usd_upper_bound)
@@ -268,7 +318,37 @@ class JobService:
             raise FinplanError(ErrorCode.RATE_LIMITED, "the job queue is full; retry later", details={"max_depth": int(self.cfg.queue["max_depth"])})
         gpu = sub.job_type.compute_class == "gpu" or est.budget_category == "gpu"
         threshold = sub.job_type.auto_approve_usd if sub.job_type.auto_approve_usd is not None else self.d.settings.auto_approve_usd()
-        needs_approval = gpu or est.estimated_usd_upper_bound > threshold + 1e-12
+        # This dedicated beta controller has user-authorized weekly compute only. It cannot
+        # approve arbitrary jobs, submit production candidates, or bypass global/category limits.
+        weekly_controller = principal.role_name in (
+            f"finplan-{self.env}-financemodel-job-api-handler-classical-role",
+            f"finplan-{self.env}-financemodel-job-api-handler-research-role",
+        )
+        if weekly_controller:
+            external_proposal = sub.job_type.name in ("swarm_mode_a", "jev_backtest")
+            if external_proposal:
+                if self.env != "beta" or sub.purpose != "research" or sub.max_runtime_seconds > 900 or sub.instance_count != 1 or not str(body.get("idempotency_key", "")).startswith("recursive-benchmark-"):
+                    raise FinplanError(ErrorCode.FORBIDDEN, "the research controller may only propose bounded identified benchmarks")
+                threshold = 0.
+            elif (
+                self.env != "beta"
+                or sub.job_type.name not in ("run_benchmark", "recursive_evaluate")
+                or sub.purpose != "research"
+                or payload.get("objective") not in ("classical_weekly_review", *RESEARCH_PROFILES)
+                or sub.max_runtime_seconds > 900
+                or sub.instance_count != 1
+                or not str(body.get("idempotency_key", "")).startswith(
+                    "classical-weekly-"
+                )
+                or est.estimated_usd_upper_bound > 0.50
+            ):
+                raise FinplanError(
+                    ErrorCode.FORBIDDEN,
+                    "weekly controller may submit only its bounded research benchmark",
+                )
+            else:
+                threshold = 0.50
+        needs_approval = gpu or sub.job_type.name in ("jev_backtest", "rl_weight_staging") or est.estimated_usd_upper_bound > threshold + 1e-12
         state = "awaiting_approval" if needs_approval else "queued"
         now = self.ts()
         run_id = self.d.ids.run_id()
@@ -329,6 +409,7 @@ class JobService:
             "dataset_id": dataset_id,
             "plan_id": body.get("plan_id"),
             "production_strategy": production,
+            "policy_source": policy_source,
             "bias_disclosures": disclosures,
             "sagemaker_job": sub.job_type.sagemaker_job,
             **selection,
@@ -360,7 +441,12 @@ class JobService:
         from finplan_model.selection.protocol import validate_protocol
 
         protocol = validate_protocol(sub.job_type.protocol or {})
-        prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") == "model_selection" and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
+        from finplan_model.selection.recursive_profiles import profile_protocol,DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE
+        objective=sub.body['configuration']['payload'].get('objective')
+        manual_profile=sub.job_type.name=='model_selection' and objective in (DAILY_HISTORY_PROFILE,GDELT_PROFILE,GDELT_INTRADAY_PROFILE,GDELT_PRICE_CONTROL_PROFILE)
+        if sub.job_type.name == "recursive_evaluate" or manual_profile:
+            protocol = validate_protocol(profile_protocol(protocol, sub.body["configuration"]["payload"].get("objective")))
+        prior = sum(1 for r in (runs if runs is not None else iter_runs(self.store)) if r.get("job_type") in ("model_selection", "recursive_evaluate") and r.get("state") == "succeeded" and r.get("dataset_id") == dataset_id)
         incumbent = None
         raw = self.d.settings.production_strategy()
         if raw:
@@ -374,6 +460,30 @@ class JobService:
         if incumbent:
             out["incumbent_strategy"] = incumbent
         return out
+
+    def _freeze_gdelt_corpus(self,protocol,sub):
+        """Only after producer cost/budget checks; no learner runs in the API."""
+        from datetime import date,timedelta
+        from finplan_model.rl.gdelt import freeze_from_api
+        intraday='gdelt_intraday_organization_tone_v1' in protocol['rl']['env']['features']
+        if intraday:
+            from finplan_model.rl.gdelt_intraday import freeze_from_api
+        if self.d.platform is None or self.d.artifacts is None:
+            raise FinplanError.precondition('GDELT training requires central archive and immutable research storage',reason='gdelt_training_source_missing')
+        snap=SnapshotReader(self.d.platform).resolve(str(sub.body['input_snapshot_id']))
+        if intraday:
+            from finplan_model.rl.gdelt_setup import source_request
+            protocol['rl']['gdelt_corpus_request']=source_request(snap,protocol,str(sub.body['input_snapshot_id']),universe_for(sub.body['configuration']['payload']),self.ts())
+            return
+        last=date.fromisoformat(snap.record['coverage']['end'])-timedelta(days=1)
+        symbols=sorted(sub.body['configuration']['payload']['universe'])
+        kwargs={}
+        dataset,evidence=freeze_from_api(self.d.platform,symbols,protocol['splits']['train']['start'],last.isoformat(),self.now().isoformat(),**kwargs)
+        ref=self.d.artifacts.put_json(dataset,kind='run_artifact',domain='finance')
+        protocol['rl']['gdelt_corpus']={'artifact':ref.to_dict(),'checksum':evidence['checksum'],
+                                       'feature_version':dataset['feature_version'],'availability_mode':dataset['availability_mode'],
+                                       'source_days':evidence['source_days'],
+                                       **({'required_session_days':evidence['required_session_days']} if intraday else {})}
 
     def _production_strategy(self, body: Mapping[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         """M2: resolve the strategy from the SSM key at submission and re-validate it (nothing starts otherwise)."""
@@ -680,6 +790,16 @@ class JobService:
             kind, request = build_job_request(run, attempt=attempt, image_uri=image_uri, role_arn=str(self.d.settings.job_role_arn() or ""), run_spec_checksum="pending", output_bucket=self.d.settings.research_storage() if kind == "training" else None)
             checksum = self.d.run_io.put_spec(run["run_id"], spec)
             request["Environment"]["FINPLAN_RUN_SPEC_SHA256"] = checksum
+            if run["job_type"] == "swarm_mode_a":
+                if self.d.offline_batch is None:
+                    raise FinplanError.precondition("isolated Qwen batch hand-off is not configured", reason="qwen_offline_handoff_missing")
+                handoff = self.d.offline_batch.prepare(run, spec, jd)
+                request["InputDataConfig"] = [{"ChannelName": name, "DataSource": {"S3DataSource": {"S3DataType": "S3Prefix", "S3Uri": uri, "S3DataDistributionType": "FullyReplicated"}}, "InputMode": "File"} for name, uri in handoff["channels"].items()]
+                request["AlgorithmSpecification"]["ContainerEntrypoint"] = ["python", "/opt/ml/input/data/code/bootstrap.py"]
+                request["AlgorithmSpecification"].pop("ContainerArguments", None)
+                request["ResourceConfig"]["VolumeSizeInGB"] = 200
+                request["EnableNetworkIsolation"] = True
+                request["Environment"].update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", FINPLAN_OFFLINE_BUNDLE_SHA256=handoff["bundle_checksum"], FINPLAN_OFFLINE_CODE_SHA256=handoff["code_checksum"])
         except FinplanError as err:
             self._fail(run, err, reason="start_precondition")
             return "failed"
@@ -808,6 +928,8 @@ class JobService:
         job_doc = None
         try:
             job_doc = self.d.run_io.get_result(run["run_id"])
+            if job_doc is None and run["job_type"] == "swarm_mode_a" and self.d.offline_batch is not None and (desc.get("ModelArtifacts") or {}).get("S3ModelArtifacts"):
+                job_doc = self.d.offline_batch.import_result(run, desc)
         except FinplanError:
             job_doc = None
         outcome, result, error = self._final_result(run, outcome, job_doc)
@@ -939,6 +1061,12 @@ class JobService:
             self._log("event_kind_mismatch_ignored", run, job_name=name, sagemaker_job=kind)
             return {"ignored": "job_kind_mismatch"}
         status = str(job_status(detail, kind) or "")
+        if run["job_type"] == "swarm_mode_a" and status in SAGEMAKER_TERMINAL:
+            # EventBridge's compact terminal event may omit the model artifact location.
+            # Read the authoritative Training Job description before importing isolated output.
+            description = self._describe(name, kind)
+            if description is not None:
+                detail = {**detail, **description}
         new = self._apply_status(run, status, detail, source="event")
         # A run that is still active needs lease heartbeats: re-arm the tick (a deploy may have reset
         # the schedule to its deployed DISABLED state while the job was running).

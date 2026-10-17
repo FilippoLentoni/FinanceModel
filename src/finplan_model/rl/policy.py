@@ -19,9 +19,27 @@ import numpy as np
 from finplan_model.sim.market import HoldingsView, PointInTimeView
 from finplan_model.sim.strategy import TargetWeights
 
-from .spec import EnvSpec, build_observation, softmax_weights
+from .spec import EnvSpec, allocation_action, build_observation
 
-__all__ = ["RLPolicyStrategy"]
+__all__ = ["RLPolicyStrategy", "EnsemblePolicyStrategy"]
+
+
+class EnsemblePolicyStrategy:
+    """Equal-weight portfolio targets from every seed; never average neural-network parameters."""
+    family = "reinforcement_learning"
+    makes_predictions = False
+    has_randomness = False
+
+    def __init__(self, name: str, members: list[RLPolicyStrategy]) -> None:
+        if not members:
+            raise ValueError("an ensemble needs at least one policy")
+        self.name, self.members = name, members
+
+    def decide(self, view: PointInTimeView, holdings: HoldingsView) -> TargetWeights:
+        targets = [member.decide(view, holdings) for member in self.members]
+        weights = {i: float(np.mean([t.weights.get(i, 0.0) for t in targets])) for i in view.instruments}
+        cash = float(np.mean([t.cash for t in targets]))
+        return TargetWeights(weights, cash, targets[0].solution_status, {"policy_seeds": [m.seed for m in self.members], "aggregation": "mean_target_weights"})
 
 
 class RLPolicyStrategy:
@@ -29,21 +47,32 @@ class RLPolicyStrategy:
     makes_predictions = False
     has_randomness = False  # deterministic evaluation; training randomness is recorded as the seed
 
-    def __init__(self, name: str, predict: Callable[[np.ndarray], Any], spec: EnvSpec, *, seed: int, configuration_id: str, details: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, name: str, predict: Callable[[np.ndarray], Any], spec: EnvSpec, *, seed: int, configuration_id: str, details: Mapping[str, Any] | None = None, news_provider=None) -> None:
+        self.news_provider=news_provider
+        if {"etf_news_metadata_v1","gdelt_organization_tone_v1","gdelt_intraday_organization_tone_v1"} & set(spec.features) and news_provider is None:
+            from finplan_model.core.errors import FinplanError
+            raise FinplanError.precondition("Selected ETF news policy requires explicit news provider",reason="news_provider_missing")
         self.name = name
         self._predict = predict
         self.spec = spec
         self.seed = int(seed)
         self.configuration_id = configuration_id
         self.details = dict(details or {})
+        self._peak = 0.0
 
     def decide(self, view: PointInTimeView, holdings: HoldingsView) -> TargetWeights:
         instruments = view.instruments
+        self._peak = max(self._peak, holdings.value)
+        drawdown = max(0.0, min(1.0, 1 - holdings.value / self._peak)) if self._peak > 0 else 0.0
         _, px = view.price_matrix("close", lookback=self.spec.window + 1)
         w_now = holdings.weights
         if px.shape[0] < self.spec.window + 1:
             return TargetWeights({i: float(w_now.get(i, 0.0)) for i in instruments}, float(holdings.cash_weight), "no_effect", {"reason": "insufficient_history", "observations": int(px.shape[0]), "window": self.spec.window})
         cur = np.array([float(w_now.get(i, 0.0)) for i in instruments])
-        obs = build_observation(self.spec, px, cur, float(holdings.cash_weight))
-        weights, cash = softmax_weights(self._predict(obs), len(instruments), self.spec.action_scale)
+        kwargs={}
+        if {'etf_news_metadata_v1','gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(self.spec.features):
+            cutoff=view.decision_time.isoformat()
+            kwargs={'news_dataset':self.news_provider(instruments,cutoff),'instruments':tuple(instruments),'decision_time':cutoff,'news_training':False}
+        obs = build_observation(self.spec, px, cur, float(holdings.cash_weight), drawdown=drawdown,**kwargs)
+        weights, cash = allocation_action(self.spec, self._predict(obs), cur, float(holdings.cash_weight))
         return TargetWeights({i: float(weights[k]) for k, i in enumerate(instruments)}, cash, "feasible", {"policy_seed": self.seed, "configuration_id": self.configuration_id, "transform": "softmax"})

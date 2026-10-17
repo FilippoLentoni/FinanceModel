@@ -171,6 +171,8 @@ def enforced_role_names(env: str, outputs: Mapping[str, str]) -> list[str]:
     if outputs.get("JobRoleRef"):
         names.append(n.role_name(env, n.JOB_EXECUTION))
     names += [n.deploy_role_name(env), n.exec_role_name(env), n.stage_role_name(env)]
+    if env == "beta" and outputs.get("ClassicalFunctionRef"):
+        names += [n.role_name(env, n.CLASSICAL_INFERENCE), n.role_name(env, n.RESEARCH_CONTROLLER)]
     # The account-level pipeline and build roles are published once, by the bootstrap, at
     # /finplan/shared/financemodel/config/budget-enforced-role-names (contracts 1.0.0, D16;
     # infra.stacks.naming.tooling_role_names); a pipeline (environment writer) never writes shared.
@@ -190,12 +192,16 @@ def planned_parameters(env: str, info: ReleaseInfo, outputs: Mapping[str, str], 
     add("job-api-role-ref", "job", "job-api-role-ref", outputs.get("JobApiRoleRef"))
     add("job-role-ref", "job", "job-role-ref", outputs.get("JobRoleRef"))
     add("job-endpoint", "api", "job-endpoint", outputs.get("JobEndpoint"))
+    add("strategy-function-ref", "api", "strategy-function-ref", outputs.get("StrategyFunctionRef"))
+    add("classical-function-ref", "api", "classical-function-ref", outputs.get("ClassicalFunctionRef"))
     add("registry-ref", "model", "registry-ref", outputs.get("RegistryRef"))
     add("approver-role-ref", "config", "approver-role-ref", outputs.get("ApproverRoleRef"))
     if info.image_repository and info.image_digest:
         uri = image_uri(account, info.region, info.image_repository, info.image_digest)
         for jt in deployed_job_types:
             doc = {"job_type": jt, "image_uri": uri, "image_digest": info.image_digest, "release_id": info.release_id, "deployed": True}
+            if jt == "swarm_mode_a":
+                doc.update({"offline_code_release": info.release_id, "serving_mode": "offline_vllm_training", "external_image_parameter": _name(env, "config", "vllm-image")})
             add(f"job-{jt.replace('_', '-')}", "job", jt.replace("_", "-"), json.dumps(doc, sort_keys=True, separators=(",", ":")))
     add("budget-enforced-role-names", "config", "budget-enforced-role-names", ",".join(enforced_role_names(env, outputs)))
     return plan
@@ -303,13 +309,29 @@ def publish_release(
     if env == "prod" and not approval:
         raise ManifestError("prod manifests require the approval record (approved_by, approved_at)")
     outputs = stack_outputs(cfn, env)
-    for required in REQUIRED_OUTPUTS:
+    required_outputs = REQUIRED_OUTPUTS
+    if env == "beta" and tuple(int(p) for p in info.contract_version.split(".")[:2]) >= (1, 2):
+        required_outputs += ("StrategyFunctionRef",)
+    if env == "beta" and tuple(int(p) for p in info.contract_version.split(".")[:2]) >= (1, 4):
+        required_outputs += ("ClassicalFunctionRef",)
+    for required in required_outputs:
         if not outputs.get(required):
             raise ManifestError(f"the {env} deploy did not produce the output {required}")
     if seed is not None and info.image_digest:
         seed(outputs)
     types = job_types if job_types is not None else deployed_job_types(env)
     plan = planned_parameters(env, info, outputs, account=account, deployed_job_types=types)
+    if "swarm_mode_a" in types and s3 is not None:
+        from scripts.qwen_code import publish as publish_qwen_code
+        code_file = ROOT / "cdk.out" / "qwen-code.zip"
+        if not code_file.is_file():
+            raise ManifestError("Qwen code channel is missing from the immutable assembly")
+        code = publish_qwen_code(s3, outputs["ResearchStorageRef"], info.release_id, code_file.read_bytes())
+        name = _name(env, "job", "swarm-mode-a")
+        key = "job-swarm-mode-a"
+        doc = json.loads(plan[key][1])
+        doc.update(code)
+        plan[key] = (name, json.dumps(doc, sort_keys=True, separators=(",", ":")))
     for _key, (name, value) in sorted(plan.items()):
         _put(ssm, env, name, value)
     pointer = _name(env, "release", "current-release-id")

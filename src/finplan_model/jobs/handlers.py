@@ -56,6 +56,7 @@ class JobInputs:
     market: MarketData
     snapshot: SnapshotContent
     artifacts: ArtifactStore
+    platform: Any = None
 
     @property
     def sim_config(self) -> SimulationConfig:
@@ -163,6 +164,9 @@ def run_daily_recommendation(inp: JobInputs) -> dict[str, Any]:
 
 
 def run_benchmark(inp: JobInputs) -> dict[str, Any]:
+    if inp.spec["configuration"]["payload"].get("objective") == "classical_weekly_review":
+        from finplan_model.classical.benchmark import run_weekly_benchmark
+        return run_weekly_benchmark(inp)
     section = _bias(inp)
     main = str(inp.spec["strategy"])
     names = [main, *[c for c in CONTROLS if c != main]]
@@ -213,7 +217,17 @@ def report(inp: JobInputs) -> dict[str, Any]:
 def model_selection(inp: JobInputs) -> dict[str, Any]:
     from finplan_model.selection.job import run_model_selection
 
-    return run_model_selection(inp)
+    result = run_model_selection(inp)
+    from finplan_model.selection.recursive_profiles import STATE_PROFILES
+    profile = inp.spec.get("configuration", {}).get("payload", {}).get("objective")
+    if profile in STATE_PROFILES:
+        result["payload"]["state_ablation"] = {
+            "profile": profile, "feature_additions": list(STATE_PROFILES[profile]),
+            "comparison": "matched PPO state study; reward/action/seeds/splits fixed",
+            "news_training": "not_eligible_without_frozen_point_in_time_coverage",
+            "automatic_activation": False,
+        }
+    return result
 
 
 HANDLERS: dict[str, Handler] = {
@@ -223,9 +237,16 @@ HANDLERS: dict[str, Handler] = {
     "daily_recommendation": run_daily_recommendation,
     "report": report,
     "model_selection": model_selection,
+    "recursive_evaluate": model_selection,
 }
 
 
 def register_handler(job_type: str, handler: Handler) -> None:
     """Later task groups or changes register additional job types here."""
     HANDLERS[job_type] = handler
+
+from .policy_export import run_prepare_policy
+HANDLERS["prepare_policy"] = run_prepare_policy
+
+from finplan_model.benchmarks.jobs import jev_backtest, rl_weight_staging, swarm_mode_a
+HANDLERS.update(jev_backtest=jev_backtest, rl_weight_staging=rl_weight_staging, swarm_mode_a=swarm_mode_a)

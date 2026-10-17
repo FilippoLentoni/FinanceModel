@@ -140,7 +140,8 @@ def test_config_files_validate_and_expose_ssm_names():
     assert beta.ssm["run_staging_ref"] == "/finplan/beta/financialplanning/config/run-staging-ref"
     assert beta.ssm["budget_allocation"] == "/finplan/shared/financialplanning/config/budget-allocation"
     assert beta.job_type("run_benchmark").budget_category == "cpu_research"
-    assert all(jt.compute_class == "cpu" for jt in beta.job_types.values())
+    assert {name for name, jt in beta.job_types.items() if jt.compute_class == "gpu"} == {"swarm_mode_a"}
+    assert beta.job_type("swarm_mode_a").max_runtime_seconds == 900
     assert beta.served_contract_majors == (1,)
     assert SimulationConfig.from_dict(beta.simulation_defaults) == SimulationConfig()
 

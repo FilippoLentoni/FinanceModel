@@ -108,7 +108,7 @@ def run_job(
             # the snapshot's declared cash assumption replaces the configured cash rate
             spec = {**spec, "simulation": {**dict(spec["simulation"]), "cash_rate_annual": cash_assumption(content)["annual_rate"]}}
         ctx = replace(ctx, synthetic=bool(market.synthetic or spec.get("synthetic")))
-        doc = handler(JobInputs(ctx=ctx, spec=spec, market=market, snapshot=content, artifacts=artifacts))
+        doc = handler(JobInputs(ctx=ctx, spec=spec, market=market, snapshot=content, artifacts=artifacts, platform=platform))
         if spec["purpose"] == "production_candidate":
             from finplan_model.staging import StagingTarget, stage_run_output
 

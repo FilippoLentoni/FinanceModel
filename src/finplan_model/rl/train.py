@@ -115,6 +115,45 @@ def load_predictor(algorithm: str, model_bytes: bytes) -> Callable[[np.ndarray],
     return lambda obs: model.predict(obs, deterministic=True)[0]
 
 
+def preflight_news_training(arrays,spec,*,train_window,validation_window,news_provider):
+    """Validate all possible selection decisions before importing or creating a learner."""
+    groups={'etf_news_metadata_v1','gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(spec.features)
+    if not groups:return None
+    from .spec import build_observation
+    if news_provider is None or arrays.decision_times is None or not getattr(news_provider,'corpus_checksum',None):
+        raise FinplanError.precondition('news training requires an immutable corpus provider and source cutoffs',reason='news_training_corpus_missing')
+    t0,t1=train_window;v0,v1=validation_window
+    if t1>=v0 or t0+spec.window+1>t1 or v0<spec.window or v1<=v0:
+        raise FinplanError.precondition('news study needs nonoverlapping train and validation windows with history',reason='news_training_windows_invalid')
+    checked=0
+    for start,stop in ((t0+spec.window,t1),(v0,v1)):
+        for k in range(start,stop):
+            cutoff=arrays.decision_times[k].isoformat()
+            build_observation(spec,arrays.close[k-spec.window:k+1],np.zeros(len(arrays.instruments)),1.,drawdown=0.,
+                news_dataset=news_provider(arrays.instruments,cutoff),instruments=arrays.instruments,decision_time=cutoff,news_training=True)
+            checked+=1
+    return {'corpus_checksum':news_provider.corpus_checksum,'decision_count':checked,'training_rights_required':'research_and_training','feature_group':next(iter(groups))}
+
+
+def preflight_training(arrays, spec, *, train_window, validation_window):
+    """Refuse overlapping/empty trajectories before creating any learner."""
+    t0, t1 = train_window
+    v0, v1 = validation_window
+    n = len(arrays.sessions)
+    if not (0 <= t0 < t1 < v0 < v1 < n) or t0 + spec.window >= t1 or v0 < spec.window:
+        raise FinplanError.precondition(
+            "training and validation must be chronological nonoverlapping trajectories with warmup",
+            reason="training_windows_invalid",
+        )
+    prices = np.asarray(arrays.close)
+    if prices.shape != (n, len(arrays.instruments)) or not np.isfinite(prices).all() or np.any(prices <= 0):
+        raise FinplanError.precondition("aligned positive finite price history is required", reason="training_prices_invalid")
+    if arrays.decision_times is not None:
+        times = arrays.decision_times
+        if len(times) != n or any(t.tzinfo is None or t.utcoffset() is None for t in times) or any(a >= b for a, b in zip(times, times[1:])):
+            raise FinplanError.precondition("decision cutoffs must be aware and strictly increasing", reason="training_cutoffs_invalid")
+
+
 def train_policy(
     arrays: PriceArrays,
     spec: EnvSpec,
@@ -128,6 +167,7 @@ def train_policy(
     configuration_id: str,
     metric: str = "sharpe",
     deadline: float | None = None,
+    news_provider=None,
 ) -> TrainedPolicy:
     if algorithm not in ALGORITHM_PARAMS:
         raise FinplanError.validation("unknown RL algorithm", pointer="/rl/algorithms", algorithm=algorithm)
@@ -136,8 +176,10 @@ def train_policy(
     hp = dict(hyperparameters)
     total = int(hp.get("total_timesteps", 10000))
     check_step_limit(total)
+    preflight_training(arrays, spec, train_window=train_window, validation_window=validation_window)
     eval_every = max(1, int(hp.get("eval_every", 1000)))
     patience = max(1, int(hp.get("patience", 5)))
+    news_preflight=preflight_news_training(arrays,spec,train_window=train_window,validation_window=validation_window,news_provider=news_provider)
     import torch
     from stable_baselines3.common.callbacks import BaseCallback
 
@@ -145,8 +187,8 @@ def train_policy(
     started = time.monotonic()
     t0, t1 = train_window
     v0, v1 = validation_window
-    train_env = PortfolioEnv(arrays, spec, config, i0=t0, i1=t1, mode="train")
-    val_env = PortfolioEnv(arrays, spec, config, i0=v0, i1=v1, mode="eval", schedule=calendar_schedule(arrays, v0, v1, spec.decision_frequency))
+    train_env = PortfolioEnv(arrays, spec, config, i0=t0, i1=t1, mode="train",news_provider=news_provider)
+    val_env = PortfolioEnv(arrays, spec, config, i0=v0, i1=v1, mode="eval", schedule=calendar_schedule(arrays, v0, v1, spec.decision_frequency),news_provider=news_provider)
     model = _algo(algorithm)("MlpPolicy", train_env, seed=int(seed), device="cpu", verbose=0, **_kwargs(algorithm, hp))
 
     class Select(BaseCallback):
@@ -160,6 +202,15 @@ def train_policy(
             self.last_eval = -1
             self.stopped = "completed"
             self.episode_rewards: list[float] = []
+            self.updates: list[dict[str, Any]] = []
+
+        def _on_rollout_start(self) -> None:
+            # SB3 exposes the previous optimizer update here, before the next rollout.
+            keys = ("explained_variance", "approx_kl", "clip_fraction", "entropy_loss", "value_loss", "policy_gradient_loss", "std", "n_updates")
+            row = {key: float(self.model.logger.name_to_value["train/" + key])
+                   for key in keys if "train/" + key in self.model.logger.name_to_value}
+            if row and len(self.updates) < 2000:
+                self.updates.append({"step": int(self.num_timesteps), **{k: v if math.isfinite(v) else None for k, v in row.items()}})
 
         def _evaluate(self) -> bool:
             res = val_env.evaluate(lambda obs: self.model.predict(obs, deterministic=True)[0])
@@ -206,6 +257,8 @@ def train_policy(
         "last_decile_mean_episode_reward": None if not rewards else round(float(np.mean(rewards[-k:])), 6),
         "best_validation_" + metric: None if not math.isfinite(cb.best) else round(cb.best, 6),
         "note": "shaped training reward (reward_scale x (log return - risk, drawdown and turnover penalties)); not portfolio performance",
+        "optimizer_updates": cb.updates,
+        "checkpoint_improved_over_initial": cb.best_step > 0,
     }
     return TrainedPolicy(
         algorithm=algorithm,
@@ -219,4 +272,5 @@ def train_policy(
         validation_curve=cb.curve,
         training_reward=training_reward,
         seconds=time.monotonic() - started,
+        extra={"news_preflight":news_preflight} if news_preflight else {},
     )
