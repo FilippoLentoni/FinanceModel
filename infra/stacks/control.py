@@ -139,7 +139,7 @@ class ControlStack(ModelStack):
 
         # ---------------------------------------------------------------- control-plane functions
         env_vars = {"FINPLAN_ENVIRONMENT": env, "FINPLAN_RUNS_TABLE": n.env_name(env, n.CONTROL_TABLE), "FINPLAN_CONFIG_DIR": "/var/task/config", "FINPLAN_DISPATCH_SCHEDULE": n.env_name(env, n.DISPATCHER)}
-        api_fn = self._function("JobApiHandler", n.JOB_API_HANDLER, "job-api-handler", control_role_policy(env, "api", partition=p, region=r, account=a), code, {**env_vars, "FINPLAN_DISPATCHER_FUNCTION": n.function_name(env, n.DISPATCHER)}, timeout=29, memory=512)
+        api_fn = self._function("JobApiHandler", n.JOB_API_HANDLER, "job-api-handler", control_role_policy(env, "api", partition=p, region=r, account=a), code, {**env_vars, "FINPLAN_DISPATCHER_FUNCTION": n.function_name(env, n.DISPATCHER)}, timeout=29, memory=2048)
         dispatcher = self._function("JobDispatcher", n.DISPATCHER, "job-dispatcher-schedule", control_role_policy(env, "dispatcher", partition=p, region=r, account=a), code, env_vars, timeout=60, memory=512)
         state = self._function("JobStateHandler", n.STATE_HANDLER, "job-state-change-rule", control_role_policy(env, "state", partition=p, region=r, account=a), code, env_vars, timeout=60, memory=512)
         cdk.CfnOutput(self, "JobApiRoleRef", value=self.roles[n.JOB_API_HANDLER].role_arn, description="Published at /finplan/<env>/financemodel/job/job-api-role-ref")

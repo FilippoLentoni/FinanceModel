@@ -138,4 +138,4 @@ def freeze_from_api(client,symbols,start_date,end_date,decision_at,*,availabilit
             raise FinplanError.precondition('intraday response lacks required audited source days',reason='gdelt_coverage_missing')
         docs.extend(w for w in r['documents'] if w['document']['source_day'] in expected);reads.append(r['coverage'])
     dataset=corpus(docs,symbols,availability_mode=availability_mode)
-    return dataset,{'checksum':FrozenGdeltProvider(dataset).corpus_checksum,'reads':reads,'source_days':len(docs),'required_session_days':sorted(required) if required is not None else None,'availability_mode':availability_mode}
+    return dataset,{'checksum':sha256_checksum(canonical_json_bytes(dataset)),'reads':reads,'source_days':len(docs),'required_session_days':sorted(required) if required is not None else None,'availability_mode':availability_mode}

@@ -178,7 +178,10 @@ def test_promotion_check_criteria_v1_against_the_incumbent(outcome):
 
 def test_caveats_flag_thin_rl_data_and_hindsight_bias(outcome):
     kinds = {c["kind"]: c["text"] for c in outcome.summary["caveats"]}
-    assert "250 training days is thin for reinforcement learning" in kinds["thin_rl_training_data"]
+    train = outcome.summary["data"]["splits"]["train"]
+    assert str(train["sessions"]) in kinds["thin_rl_training_data"]
+    assert train["start"] in kinds["thin_rl_training_data"] and train["end"] in kinds["thin_rl_training_data"]
+    assert "one calendar year" not in kinds["thin_rl_training_data"]
     assert "hindsight" in kinds["hindsight_and_survivorship"].lower() and "survivorship" in kinds["hindsight_and_survivorship"].lower()
     assert {"short_single_test_period", "validation_reuse", "reward_is_not_performance"} <= set(kinds)
 

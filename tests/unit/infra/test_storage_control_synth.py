@@ -99,6 +99,8 @@ def test_control_plane_functions_rules_and_schedule(assembly):
             assert props["Runtime"] == "python3.12" and props["Architectures"] == ["arm64"]
             assert props["Environment"]["Variables"]["FINPLAN_ENVIRONMENT"] == env
             assert props["Environment"]["Variables"]["FINPLAN_RUNS_TABLE"] == f"finplan-{env}-financemodel-job-control"
+        assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["MemorySize"] == 2048
+        assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["Timeout"] == 29
         assert by_name[n.function_name(env, n.JOB_API_HANDLER)]["Properties"]["Environment"]["Variables"]["FINPLAN_DISPATCHER_FUNCTION"] == n.function_name(env, n.DISPATCHER)
         groups = assembly.resources(name, "AWS::Logs::LogGroup")
         assert len(groups) == len(fns) and all(g["Properties"]["RetentionInDays"] == 30 for g in groups.values())

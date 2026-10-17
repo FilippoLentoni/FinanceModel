@@ -107,15 +107,19 @@ def test_cross_field_source_audit_inconsistency_fails_closed(mutation):
     else:d['features'][0]['article_count']=0
     with pytest.raises(FinplanError):corpus([wrap(d)],['AAPL','VOO'])
 
-def test_training_freeze_requires_actual_session_audits_not_unused_calendar_days():
+@pytest.mark.parametrize('captured',[4,3])
+def test_training_freeze_requires_actual_session_audits_not_unused_calendar_days(captured):
     from finplan_model.rl.gdelt_intraday import freeze_from_api
     class Client:
         def get_gdelt_intraday_metadata(self,symbols,start,end,decision_at,*,availability_mode):
+            source=archive('2026-10-09',captured=captured)['document']
+            source['features'][0].update(article_count=7,cluster_count=3,tone=1.0)
             return {'contract_version':'1.11.0','feature_version':FEATURE_VERSION,'symbols':symbols,'decision_at':decision_at,'availability_mode':availability_mode,
-                    'coverage':{'start_date':start,'end_date':end,'expected_days':3,'captured_days':1,'complete':False,'missing_days':['2026-10-10','2026-10-11']},'documents':[archive('2026-10-09')]}
+                    'coverage':{'start_date':start,'end_date':end,'expected_days':3,'captured_days':1,'complete':False,'missing_days':['2026-10-10','2026-10-11']},'documents':[wrap(source)]}
     frozen,evidence=freeze_from_api(Client(),['AAPL','VOO'],'2026-10-09','2026-10-11','2026-10-12T13:00:00Z',required_days=['2026-10-09'])
     assert len(frozen['documents'])==1 and evidence['required_session_days']==['2026-10-09']
     assert evidence['reads'][0]['complete'] is False
+    assert evidence['checksum']==FrozenGdeltProvider(frozen).corpus_checksum
     with pytest.raises(FinplanError,match='audited source days'):
         freeze_from_api(Client(),['AAPL','VOO'],'2026-10-09','2026-10-11','2026-10-12T13:00:00Z',required_days=['2026-10-09','2026-10-10'])
 
