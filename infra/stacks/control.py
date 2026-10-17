@@ -267,7 +267,7 @@ class ControlStack(ModelStack):
         # API Gateway's Lambda integration URI (its "account" field is the literal service name ``lambda``)
         invoke = {k: ":".join(["arn", p, "apigateway", r, "lambda", f"path/2015-03-31/functions/{f.function_arn}/invocations"]) for k, f in fns.items()}
         body = openapi_body(env, invoke, str(contract_version))
-        policy = control_policies.job_api_resource_policy(env, invoker_role_patterns=job_api_invoker_patterns(env), approver_role=n.role_name(env, n.APPROVER), partition=p, account=a)
+        policy = control_policies.job_api_resource_policy(env, invoker_role_patterns=job_api_invoker_patterns(env), approver_role=n.role_name(env, n.APPROVER), dev_desktop_roles=self.cfg.dev_desktop_role_names, partition=p, account=a)
         api = apigw.CfnRestApi(
             self,
             "JobApi",

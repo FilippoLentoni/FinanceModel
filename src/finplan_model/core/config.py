@@ -107,6 +107,11 @@ class EnvConfig:
     raw: Mapping[str, Any] = field(repr=False)
 
     @property
+    def dev_desktop_role_names(self) -> tuple[str, ...]:
+        """Exact operator role names, never enabled outside beta."""
+        return tuple(self.raw.get("dev_desktop_access", {}).get("role_names", ())) if self.env == "beta" else ()
+
+    @property
     def region(self) -> str:
         return str(self.raw["region"])
 
@@ -204,6 +209,17 @@ def validate_config(env: str, raw: Mapping[str, Any]) -> list[str]:
             problems.append(f"{env}: missing key {key!r}")
     if problems:
         return problems
+    access = raw.get("dev_desktop_access", {})
+    if not isinstance(access, dict) or set(access) - {"role_names"}:
+        problems.append(f"{env}: invalid dev_desktop_access")
+    else:
+        names = access.get("role_names", [])
+        if not isinstance(names, list) or any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", n) for n in names):
+            problems.append(f"{env}: dev_desktop_access requires exact IAM role names")
+        elif len(names) != len(set(names)):
+            problems.append(f"{env}: duplicate dev_desktop_access role names")
+        if names and env != "beta":
+            problems.append(f"{env}: dev_desktop_access is beta-only")
     if raw["environment"] != env:
         problems.append(f"{env}: environment field is {raw['environment']!r}")
     if not re.fullmatch(r"[a-z]{2}-[a-z]+-[0-9]", str(raw["region"])):

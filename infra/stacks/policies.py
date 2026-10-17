@@ -394,7 +394,7 @@ def _others(env: str, partition: str, account: str) -> list[str]:
     return [role_arn(f"finplan-{o}-*", partition=partition, account=account) for o in n.ENVIRONMENTS if o != env]
 
 
-def research_bucket_policy(env: str, bucket_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT) -> list[dict[str, Any]]:
+def research_bucket_policy(env: str, bucket_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT, dev_desktop_roles: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """Research storage (WS-01): other environments' principals denied; object access only for
     FinanceModel principals of this environment. TLS-only and Block Public Access are set by the stack."""
     objects = f"{bucket_arn}/*"
@@ -406,23 +406,23 @@ def research_bucket_policy(env: str, bucket_arn: str, *, partition: str = PARTIT
             "Principal": "*",
             "Action": list(_OBJECT_ACTIONS),
             "Resource": objects,
-            "Condition": {"ArnNotLike": {"aws:PrincipalArn": [role_arn(f"finplan-{env}-financemodel-*", partition=partition, account=account)]}},
+            "Condition": {"ArnNotLike": {"aws:PrincipalArn": [role_arn(f"finplan-{env}-financemodel-*", partition=partition, account=account), *[role_arn(name, partition=partition, account=account) for name in dev_desktop_roles if env == "beta"]]}},
         },
     ]
 
 
-def registry_bucket_policy(env: str, bucket_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT) -> list[dict[str, Any]]:
+def registry_bucket_policy(env: str, bucket_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT, dev_desktop_roles: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """The model registry (REG-02): research-storage isolation plus write-once records (every PutObject
     must carry ``If-None-Match``) and no deletes at all."""
     objects = f"{bucket_arn}/*"
     return [
-        *research_bucket_policy(env, bucket_arn, partition=partition, account=account),
+        *research_bucket_policy(env, bucket_arn, partition=partition, account=account, dev_desktop_roles=dev_desktop_roles),
         {"Sid": "DenyPutWithoutIfNoneMatch", "Effect": "Deny", "Principal": "*", "Action": "s3:PutObject", "Resource": objects, "Condition": {"Null": {"s3:if-none-match": "true"}}},
         {"Sid": "DenyDeleteRegistryRecords", "Effect": "Deny", "Principal": "*", "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"], "Resource": objects},
     ]
 
 
-def control_table_policy(env: str, table_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT) -> dict[str, Any]:
+def control_table_policy(env: str, table_arn: str, *, partition: str = PARTITION, account: str = ACCOUNT, dev_desktop_roles: tuple[str, ...] = ()) -> dict[str, Any]:
     """Run/lease/idempotency table: data access only for FinanceModel principals of this environment.
     No stream action is listed (DynamoDB table resource policies reject them)."""
     return {
@@ -434,7 +434,7 @@ def control_table_policy(env: str, table_arn: str, *, partition: str = PARTITION
                 "Principal": "*",
                 "Action": list(DYNAMODB_DATA_ACTIONS),
                 "Resource": [table_arn, f"{table_arn}/index/*"],
-                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [role_arn(f"finplan-{env}-financemodel-*", partition=partition, account=account)]}},
+                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [role_arn(f"finplan-{env}-financemodel-*", partition=partition, account=account), *[role_arn(name, partition=partition, account=account) for name in dev_desktop_roles if env == "beta"]]}},
             }
         ],
     }

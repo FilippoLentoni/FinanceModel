@@ -67,7 +67,7 @@ class StorageStack(ModelStack):
                 ),
             ],
         )
-        for st in research_bucket_policy(env, self.research.bucket_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID):
+        for st in research_bucket_policy(env, self.research.bucket_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID, dev_desktop_roles=cfg.dev_desktop_role_names):
             self.research.add_to_resource_policy(iam.PolicyStatement.from_json(st))
 
         self.registry = self._bucket(
@@ -76,7 +76,7 @@ class StorageStack(ModelStack):
             "model-registry",
             lifecycle=[s3.LifecycleRule(id="abort-multipart", abort_incomplete_multipart_upload_after=Duration.days(int(ret["incomplete_multipart_days"])))],
         )
-        for st in registry_bucket_policy(env, self.registry.bucket_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID):
+        for st in registry_bucket_policy(env, self.registry.bucket_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID, dev_desktop_roles=cfg.dev_desktop_role_names):
             self.registry.add_to_resource_policy(iam.PolicyStatement.from_json(st))
 
         table_name = n.env_name(env, n.CONTROL_TABLE)
@@ -95,7 +95,7 @@ class StorageStack(ModelStack):
             encryption=dynamodb.TableEncryption.AWS_MANAGED,
             deletion_protection=env == "prod",
             removal_policy=cdk.RemovalPolicy.RETAIN,
-            resource_policy=iam.PolicyDocument.from_json(control_table_policy(env, table_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID)),
+            resource_policy=iam.PolicyDocument.from_json(control_table_policy(env, table_arn, partition=Aws.PARTITION, account=Aws.ACCOUNT_ID, dev_desktop_roles=cfg.dev_desktop_role_names)),
         )
         for gsi in spec["global_secondary_indexes"]:
             self.table.add_global_secondary_index(

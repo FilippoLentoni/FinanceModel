@@ -1,6 +1,7 @@
 {
   "$comment": "FinanceModel configuration for beta. Settings, defaults and SSM parameter NAMES only; never account IDs, ARNs, bucket, role or endpoint values, prices or secrets. Live values (instance prices, auto-approve threshold, lease limits, research storage reference) are read at run time from /finplan/beta/financemodel/config/*. Defaults are configuration pending user review (design D3, D4, D7; FM-OQ-3, FM-OQ-5).",
   "environment": "beta",
+  "dev_desktop_access": {"role_names": ["finplan-devdesktop"]},
   "region": "us-east-2",
   "phase": 1,
   "served_contract_majors": [

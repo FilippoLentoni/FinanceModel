@@ -49,13 +49,15 @@ def job_api_resource_policy(
     *,
     invoker_role_patterns: list[str],
     approver_role: str | None = None,
+    dev_desktop_roles: tuple[str, ...] = (),
     api_resource: str = "execute-api:/*",
     partition: str = "${AWS::Partition}",
     account: str = "${AWS::AccountId}",
 ) -> dict[str, Any]:
     approver = approver_role or approver_role_name(env)
     approver_arn = _role_arn(approver, partition, account)
-    invokers = sorted({_role_arn(p, partition, account) for p in invoker_role_patterns} | {approver_arn})
+    operators = [_role_arn(name, partition, account) for name in dev_desktop_roles] if env == "beta" else []
+    invokers = sorted({_role_arn(p, partition, account) for p in invoker_role_patterns} | {approver_arn, *operators})
     approve = f"{api_resource}/POST/v1/jobs/*/approve"
     trigger_arn = _role_arn(daily_trigger_role_name(env), partition, account)
     statements: list[dict[str, Any]] = [
@@ -90,7 +92,7 @@ def job_api_resource_policy(
                 "Principal": {"AWS": "*"},
                 "Action": "execute-api:Invoke",
                 "Resource": f"{api_resource}/PUT/v1/production-strategy",
-                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [_role_arn(p, partition, account) for p in strategy_writer_role_patterns(env)]}},
+                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [_role_arn(p, partition, account) for p in strategy_writer_role_patterns(env)] + operators}},
             },
             {
                 "Sid": "DenyApproveExceptApproverRole",
@@ -98,7 +100,7 @@ def job_api_resource_policy(
                 "Principal": {"AWS": "*"},
                 "Action": "execute-api:Invoke",
                 "Resource": approve,
-                "Condition": {"ArnNotEquals": {"aws:PrincipalArn": approver_arn}},
+                "Condition": {"ArnNotEquals": {"aws:PrincipalArn": [approver_arn, *operators] if operators else approver_arn}},
             },
             {
                 "Sid": "DenyApproveToolAgentPipelineRoles",

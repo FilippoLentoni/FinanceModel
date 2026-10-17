@@ -577,7 +577,7 @@ class JobService:
             return replay
         run = self._get(run_id)
         approver = self.d.settings.approver_role_name()
-        if principal.arn != run["principal"] and (not approver or principal.role_name != approver):
+        if principal.arn != run["principal"] and principal.role_name not in self.cfg.dev_desktop_role_names and (not approver or principal.role_name != approver):
             raise FinplanError(ErrorCode.FORBIDDEN, "only the submitting principal or the approver may cancel this run")
         run = self._cancel(run, reason="cancelled_by_caller")
         resp = status_document(run, self.now())
@@ -627,7 +627,7 @@ class JobService:
         if unknown:
             raise FinplanError.validation("unknown field in approve request", pointer="")
         run = self._get(run_id)
-        principal.require_approver(self.d.settings.approver_role_name(), submitter=run["principal"])
+        principal.require_approver(self.d.settings.approver_role_name(), submitter=run["principal"], operator_role_names=self.cfg.dev_desktop_role_names)
         if run.get("approval") and run["state"] != "awaiting_approval":
             return status_document(run, self.now())  # already approved (idempotent)
         if run["state"] != "awaiting_approval":

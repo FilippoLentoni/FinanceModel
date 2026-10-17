@@ -89,7 +89,7 @@ class Principal:
         if not self.role_name or self.role_name not in set(granted_role_names):
             raise FinplanError(ErrorCode.FORBIDDEN, "the caller is not granted the production_candidate purpose", details={"purpose": "production_candidate"})
 
-    def require_approver(self, approver_role_name: str | None, *, submitter: str) -> None:
+    def require_approver(self, approver_role_name: str | None, *, submitter: str, operator_role_names: tuple[str, ...] = ()) -> None:
         """Approval only by the configured human approver role, never by the submitter or a tool/agent/pipeline role."""
         name = self.role_name or ""
         reason = denied_approver_reason(name) if name else "unknown_principal"
@@ -97,5 +97,5 @@ class Principal:
             raise FinplanError(ErrorCode.FORBIDDEN, "this principal may not approve runs", details={"reason": reason})
         if self.arn == submitter:
             raise FinplanError(ErrorCode.FORBIDDEN, "the submitting principal may not approve its own run", details={"reason": "submitter_cannot_approve"})
-        if not approver_role_name or name != approver_role_name:
+        if name not in operator_role_names and (not approver_role_name or name != approver_role_name):
             raise FinplanError(ErrorCode.FORBIDDEN, "only the approver role may approve runs", details={"reason": "not_approver_role"})
