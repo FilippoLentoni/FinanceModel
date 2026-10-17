@@ -234,7 +234,8 @@ def build_observation(spec: EnvSpec, closes: np.ndarray, weights: np.ndarray, ca
             raise FinplanError.precondition("ETF news state requires explicit source data, instrument order and decision cutoff", reason="news_state_input_missing")
         if len(instruments)!=len(weights) or len(set(instruments))!=len(instruments) or set(instruments)-FINANCIAL_NEWS_UNIVERSE:
             raise FinplanError.validation("ETF news state requires matching ETF instrument order", pointer="/observation/instruments")
-        require_valid(news_dataset,"api/research-news-response")
+        from .etf_news import validate_corpus
+        news_dataset=validate_corpus(news_dataset)
         if set(instruments)!=set(news_dataset['symbols']) or dt(news_dataset['decision_at'])!=dt(decision_time):
             raise FinplanError.precondition("news dataset query must match observation cutoff and universe", reason="news_state_query_mismatch")
         features,_,_=extract(news_dataset,symbols=instruments,decision_time=decision_time,training=news_training)

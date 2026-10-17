@@ -215,16 +215,30 @@ def test_saved_asset_outside_approved_universe_fails_without_issuing_proposal(co
     assert not context.platform.portfolio_decisions
 
 
-def test_classical_universe_bound_still_rejects_more_than_five_approved_assets(context, monkeypatch):
+def test_classical_universe_bound_rejects_more_than_nine_approved_assets(context, monkeypatch):
     from types import SimpleNamespace
     from finplan_model.jobs.market_loader import load_market
 
     _, content = load_market(context.platform, context.sid)
-    monkeypatch.setattr("finplan_model.classical.service.load_market", lambda *args: (SimpleNamespace(instruments=(*context.market.instruments, "EXTRA")), content))
+    monkeypatch.setattr("finplan_model.classical.service.load_market", lambda *args: (SimpleNamespace(instruments=(*context.market.instruments, "EXTRA1", "EXTRA2", "EXTRA3", "EXTRA4", "EXTRA5")), content))
     with pytest.raises(FinplanError) as error:
-        context.service.recommend({"portfolio_id": context.pid})
+        context.service.recommend({"input_snapshot_id":context.sid,"as_of":context.dates[-1].isoformat(),
+                                   "holdings":{"weights":[],"cash_weight":1.,"portfolio_value":10000.,"high_watermark":10000.}})
     assert error.value.details["reason"] == "classical_universe_bound"
     assert not context.platform.portfolio_decisions
+
+
+def test_original_complete_five_asset_book_survives_source_universe_expansion(context,monkeypatch):
+    from dataclasses import replace
+    from finplan_model.jobs.market_loader import load_market
+    from finplan_model.sim.market import MarketData
+    market,content=load_market(context.platform,context.sid)
+    bars=[b for i in market.instruments for b in market.bars_of(i)]
+    bars += [replace(b,instrument_id=i) for i in ('AMZN','MSFT','META','TSLA') for b in market.bars_of('AAPL')]
+    expanded=MarketData(market.sessions,bars,synthetic=True)
+    monkeypatch.setattr('finplan_model.classical.service.load_market',lambda *args:(expanded,content))
+    out=context.service.recommend({'portfolio_id':context.pid})
+    assert {r['instrument_id'] for r in out['recommendation']['target_weights']}==set(context.market.instruments)
 
 
 def test_performance_uses_recorded_revision_and_costs_not_unchanged_holdings(context):

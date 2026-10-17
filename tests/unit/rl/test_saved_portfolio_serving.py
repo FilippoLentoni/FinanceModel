@@ -106,6 +106,22 @@ def test_repeated_recommendations_do_not_change_state_or_selection(context):
     assert context.proposals[0]["execution"]["transaction_cost_bps"] == 2.
 
 
+def test_saved_book_scoped_policy_routes_without_changing_default(context):
+    parameter=context.service.d.advisory_parameter
+    pointer=json.loads(parameter.read())
+    original=json.loads(context.service.d.artifacts.get(pointer['artifact']))
+    scoped={**original,'source_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY02'}
+    ref=context.service.d.artifacts.put_json(scoped,kind='policy_inference').to_dict()
+    pointer['portfolio_policies']={PID:{'export_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY03','artifact':ref}}
+    context.service.d.advisory_parameter=SimpleNamespace(read=lambda:json.dumps(pointer))
+    rec=request(context,{})['recommendation']
+    assert rec['policy_source_run_id']==scoped['source_run_id']
+    explicit=request(context,{'input_snapshot_id':SID,'as_of':'2026-10-09',
+                              'holdings':{'weights':[],'cash_weight':1.,'portfolio_value':10000.,'high_watermark':10000.}})['recommendation']
+    assert explicit['policy_source_run_id']==original['source_run_id']
+    assert json.loads(context.service.d.advisory_parameter.read())['artifact']==pointer['artifact']
+
+
 def test_saved_recommendation_fails_closed_if_decision_cannot_be_persisted(context):
     def unavailable(*_):
         raise FinplanError.dependency_unavailable("decision storage unavailable")

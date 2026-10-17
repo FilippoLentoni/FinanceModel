@@ -17,6 +17,14 @@ def freeze_corpus(client, symbols, end, days=14):
     """Union bounded seven-day API reads; retain original provenance and availability."""
     if days != 14:
         raise ValueError('this checkpoint requires fourteen calendar days')
+    if len(symbols)>5:
+        from .etf_news import PARTITIONED_FORMAT,validate_corpus
+        frozen=[freeze_corpus(client,symbols[k:k+4],end,days) for k in range(0,len(symbols),4)]
+        doc={'format':PARTITIONED_FORMAT,'symbols':list(symbols),'decision_at':dt(end).isoformat(),'parts':[d for d,m in frozen]}
+        merged=validate_corpus(doc)
+        return doc,{'start':(dt(end)-timedelta(days=days)).isoformat(),'end':dt(end).isoformat(),
+                    'partitions':[m for d,m in frozen],'delivery_count':len(merged['deliveries']),
+                    'checksum':FrozenEtfNewsProvider(doc).corpus_checksum}
     finish=dt(end); start=finish-timedelta(days=days); deliveries={}; reads=[]; template=None
     for cutoff in (start+timedelta(days=6), start+timedelta(days=12), finish):
         doc=client.get_research_news(symbols, cutoff.isoformat())
@@ -62,7 +70,8 @@ def prepare(dataset, prices, *, now=None):
         train,_,_=extract(dataset,symbols=symbols,decision_time=cutoff,training=True)
         coverage.append({'decision_at':cutoff,'inference_missing':{s:infer[s]['missing'] for s in symbols},'training_missing':{s:train[s]['missing'] for s in symbols},'event_count':{s:infer[s]['event_count'] for s in symbols}})
     if any(any(r['training_missing'].values()) for r in coverage):
-        statuses={r['rights']['status'] for r in dataset['deliveries']}
+        from .etf_news import validate_corpus
+        statuses={r['rights']['status'] for r in validate_corpus(dataset)['deliveries']}
         blockers.append('rights_review_pending' if 'research_only' in statuses else 'training_rights_or_coverage_missing')
     if any(any(r['inference_missing'].values()) for r in coverage):blockers.append('forward_news_coverage_missing')
     plan={'schema':'finplan.ppo_forward_checkpoint/1','status':'blocked' if blockers else 'ready','blockers':sorted(set(blockers)),

@@ -67,9 +67,15 @@ class ClassicalService:
             metadata=self.d.platform.get_portfolio(saved['portfolio_id'])
             research_profile=metadata.get('settings',{}).get('paper_research_profile')
             instruments=approved_profile_instruments(metadata,portfolio_id=saved['portfolio_id'],available_instruments=market.instruments)
-        if not 1 <= len(instruments) <= 5:
+            legacy={'AAPL','GOOGL','NFLX','NVDA','VOO'}
+            recorded={row['instrument_id'] for row in saved['paper_state']['positions']}
+            if research_profile is None and recorded==legacy and legacy<=set(instruments):
+                # Preserve the complete original investable book when source
+                # ingestion grows to a superset. Zero quantities remain eligible.
+                instruments=sorted(legacy)
+        if not 1 <= len(instruments) <= 9:
             raise FinplanError.precondition(
-                "classical beta attribution supports one to five instruments",
+                "classical beta attribution supports one to nine instruments",
                 reason="classical_universe_bound",
             )
         as_of = completed_date(self, body, market, instruments)
@@ -121,14 +127,14 @@ class ClassicalService:
             },
         }
         news_evidence={}
-        if research_profile is not None:
+        if research_profile is not None and research_profile.get('news_required',True):
             from finplan_model.etf_news import dt,extract
             cutoff=market.decision_time(as_of).isoformat() if 'as_of' in body else self.now().isoformat()
             created=content.snapshot.record.get('created_at')
             if not created or dt(created)>dt(cutoff):raise FinplanError.precondition('price snapshot unavailable at news recommendation cutoff',reason='snapshot_vintage_unavailable')
-            corpus=self.d.platform.get_research_news(instruments,cutoff)
-            from finplan_model.core.outcome import require_valid
-            require_valid(corpus,'api/research-news-response')
+            from finplan_model.rl.etf_news import read_partitioned_news,validate_corpus
+            corpus=read_partitioned_news(self.d.platform,instruments,cutoff)
+            validate_corpus(corpus)
             if set(corpus['symbols'])!=set(instruments) or dt(corpus['decision_at'])!=dt(cutoff):raise FinplanError.precondition('news response does not match requested formation cutoff',reason='news_query_mismatch')
             features,provenance,_=extract(corpus,symbols=instruments,decision_time=cutoff)
             if any(features[s]['missing'] for s in instruments):raise FinplanError.precondition('isolated news-aware portfolio requires licensed current coverage for every instrument',reason='news_serving_coverage_missing')

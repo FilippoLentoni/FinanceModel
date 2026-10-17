@@ -33,8 +33,23 @@ def activate(service, principal, body):
     if bundle.get('mode')!='advisory_paper' or bundle.get('format') != 'finplan-strategy-bundle/1' or (bundle.get('strategy_id') in ('ppo','sac') and len(bundle.get('members',[]))!=5):
         raise FinplanError.precondition('only a complete frozen research strategy may be pinned',reason='policy_members_missing')
     doc={'export_run_id':run_id,'artifact':refs[0],'source_run_id':bundle['source_run_id'],'strategy_id':bundle['strategy_id'],'mode':'advisory_paper','set_at':service.ts(),'set_by':principal.role_name}
-    service.store.append_audit({'event':'advisory_policy_selected','audit_id':service.d.ids.correlation_id(),'at':service.ts(),'old':service.d.advisory_parameter.read(),'new':doc,'actor':principal.role_name})
-    service.d.advisory_parameter.write(json.dumps(doc,sort_keys=True))
+    previous=service.d.advisory_parameter.read()
+    if body.get('portfolio_id'):
+        portfolio_id=body['portfolio_id'];require_id('portfolio_id',portfolio_id)
+        from finplan_model.paper_profile import approved_profile_instruments
+        portfolio=service.d.platform.get_portfolio(portfolio_id)
+        if not portfolio.get('settings',{}).get('paper_research_profile'):
+            raise FinplanError.precondition('scoped activation requires an explicit isolated paper profile',reason='paper_profile_identity')
+        names=approved_profile_instruments(portfolio,portfolio_id=portfolio_id,available_instruments=bundle['instruments'])
+        if set(names)!=set(bundle['instruments']):raise FinplanError.precondition('scoped policy and paper profile universes differ',reason='paper_profile_policy_incompatible')
+        if not previous:raise FinplanError.precondition('scoped activation preserves an existing default policy',reason='no_advisory_policy')
+        saved=json.loads(previous);saved.setdefault('portfolio_policies',{})[portfolio_id]=doc
+    else:
+        saved=doc
+        if previous and json.loads(previous).get('portfolio_policies'):
+            saved['portfolio_policies']=json.loads(previous)['portfolio_policies']
+    service.store.append_audit({'event':'advisory_policy_selected','audit_id':service.d.ids.correlation_id(),'at':service.ts(),'old':previous,'new':saved,'actor':principal.role_name})
+    service.d.advisory_parameter.write(json.dumps(saved,sort_keys=True))
     return {'advisory_policy':doc}
 
 
@@ -46,10 +61,12 @@ def recommendation(service, body):
     if not raw:
         raise FinplanError.precondition('no advisory policy is pinned',reason='no_advisory_policy')
     pinned=json.loads(raw)
+    snapshot_id,saved=resolve_inputs(service,body)
+    if saved is not None:
+        pinned=pinned.get('portfolio_policies',{}).get(saved['portfolio_id'],pinned)
     bundle=json.loads(service.d.artifacts.get(pinned['artifact']))
     if bundle.get('format') != 'finplan-strategy-bundle/1' or bundle.get('mode') != 'advisory_paper':
         raise FinplanError.precondition('the selected strategy artifact format is unsupported',reason='policy_format_invalid')
-    snapshot_id,saved=resolve_inputs(service,body)
     if saved is not None:
         from finplan_model.paper_profile import approved_profile_instruments
         metadata=service.d.platform.get_portfolio(saved['portfolio_id'])
@@ -75,10 +92,13 @@ def recommendation(service, body):
         decision_cutoff=market.decision_time(as_of).isoformat() if 'as_of' in body else service.now().isoformat()
         created=content.snapshot.record.get('created_at')
         if not created or dt(created)>dt(decision_cutoff):raise FinplanError.precondition('price snapshot unavailable at news-policy decision',reason='snapshot_vintage_unavailable')
-        news_kwargs={'news_dataset':service.d.platform.get_research_news(bundle['instruments'],decision_cutoff),'decision_time':decision_cutoff}
+        from .etf_news import read_partitioned_news
+        news_kwargs={'news_dataset':read_partitioned_news(service.d.platform,bundle['instruments'],decision_cutoff),'decision_time':decision_cutoff}
     rec=recommend(bundle,px,holdings,**news_kwargs) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
+    rec['decision_at']=decision_cutoff
+    if news_kwargs:rec['decision_timing']='current_news_with_latest_completed_prices'
     provenance = {
         'implementation': implementation_identity(bundle),
         'policy_artifact': pinned['artifact'],

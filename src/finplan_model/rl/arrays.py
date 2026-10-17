@@ -52,6 +52,16 @@ class PriceArrays:
             for k, s in enumerate(sessions):
                 bar = market.bar(iid, s)
                 if bar is not None:
+                    # The learner slices these arrays directly. It cannot use
+                    # PointInTimeView's late-arrival filtering, so reject an
+                    # unsupported vintage rather than leak an unavailable bar.
+                    if bar.available_at > market.decision_time(s):
+                        raise FinplanError.precondition(
+                            "RL price arrays require bars available by their decision cutoff",
+                            reason="rl_price_availability_mismatch", instrument_id=iid,
+                            session_date=s.isoformat(), available_at=bar.available_at.isoformat(),
+                            decision_time=market.decision_time(s).isoformat(),
+                        )
                     px = bar.price(field)
                     exec_p[k, j] = px if px is not None else mark
                     mark = float(bar.close)

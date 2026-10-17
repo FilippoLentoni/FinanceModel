@@ -134,6 +134,25 @@ def preflight_news_training(arrays,spec,*,train_window,validation_window,news_pr
     return {'corpus_checksum':news_provider.corpus_checksum,'decision_count':checked,'training_rights_required':'research_and_training','feature_group':'etf_news_metadata_v1'}
 
 
+def preflight_training(arrays, spec, *, train_window, validation_window):
+    """Refuse overlapping/empty trajectories before creating any learner."""
+    t0, t1 = train_window
+    v0, v1 = validation_window
+    n = len(arrays.sessions)
+    if not (0 <= t0 < t1 < v0 < v1 < n) or t0 + spec.window >= t1 or v0 < spec.window:
+        raise FinplanError.precondition(
+            "training and validation must be chronological nonoverlapping trajectories with warmup",
+            reason="training_windows_invalid",
+        )
+    prices = np.asarray(arrays.close)
+    if prices.shape != (n, len(arrays.instruments)) or not np.isfinite(prices).all() or np.any(prices <= 0):
+        raise FinplanError.precondition("aligned positive finite price history is required", reason="training_prices_invalid")
+    if arrays.decision_times is not None:
+        times = arrays.decision_times
+        if len(times) != n or any(t.tzinfo is None or t.utcoffset() is None for t in times) or any(a >= b for a, b in zip(times, times[1:])):
+            raise FinplanError.precondition("decision cutoffs must be aware and strictly increasing", reason="training_cutoffs_invalid")
+
+
 def train_policy(
     arrays: PriceArrays,
     spec: EnvSpec,
@@ -156,6 +175,7 @@ def train_policy(
     hp = dict(hyperparameters)
     total = int(hp.get("total_timesteps", 10000))
     check_step_limit(total)
+    preflight_training(arrays, spec, train_window=train_window, validation_window=validation_window)
     eval_every = max(1, int(hp.get("eval_every", 1000)))
     patience = max(1, int(hp.get("patience", 5)))
     news_preflight=preflight_news_training(arrays,spec,train_window=train_window,validation_window=validation_window,news_provider=news_provider)

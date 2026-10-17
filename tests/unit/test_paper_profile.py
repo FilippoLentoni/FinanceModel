@@ -31,3 +31,12 @@ def test_profile_universe_is_explicit_and_defaults_preserved():
     assert approved_profile_instruments({'portfolio_id':'old'},portfolio_id='old',available_instruments=['VOO','AAPL'])==['AAPL','VOO']
     profile['identity']='tampered'
     with pytest.raises(Exception):approved_profile_instruments(p,portfolio_id='new',available_instruments=['VOO','GOOGL'])
+
+
+def test_eight_asset_profile_preserves_explicit_price_only_or_news_requirement():
+    from finplan_model.paper_profile import DAILY_INSTRUMENTS
+    profile={'caller_id':'caller','profile_id':'daily8','identity':identity('caller','daily8'),'initial_cash':100,'instruments':list(DAILY_INSTRUMENTS),'news_required':False}
+    portfolio={'portfolio_id':'new','synthetic':True,'settings':{'paper_research_profile':profile}}
+    assert approved_profile_instruments(portfolio,portfolio_id='new',available_instruments=[*DAILY_INSTRUMENTS,'NFLX'])==sorted(DAILY_INSTRUMENTS)
+    profile['news_required']='false'
+    with pytest.raises(Exception):approved_profile_instruments(portfolio,portfolio_id='new',available_instruments=DAILY_INSTRUMENTS)

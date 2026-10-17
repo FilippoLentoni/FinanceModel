@@ -25,6 +25,9 @@ def dt(value):
 
 def extract(dataset,*,symbols,decision_time,training=False):
     """Refuse to infer availability from article dates; deduplicate source revisions."""
+    if dataset.get('format') == 'finplan.partitioned-etf-news/1':
+        from .rl.etf_news import validate_corpus
+        dataset=validate_corpus(dataset)
     cutoff=dt(decision_time);features={};provenance=[];context=[]
     for symbol in symbols:
         rows={}

@@ -13,12 +13,24 @@ STATE_PROFILES = {
     "recursive_ppo_state_sequence": ("recent_returns",),
     "recursive_ppo_state_combined": ("cross_asset_risk", "market_regime", "recent_returns"),
 }
-PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES)
+DAILY_HISTORY_PROFILE = "recursive_ppo_daily_history"
+PROFILES = ("recursive_ppo_features", "recursive_ppo_turnover", "recursive_ppo_horizon", *STATE_PROFILES, DAILY_HISTORY_PROFILE)
 
 
 def profile_protocol(base, profile):
     if profile not in PROFILES:
         raise FinplanError.validation("unknown released recursive PPO profile", pointer="/configuration/payload/objective")
+    if profile == DAILY_HISTORY_PROFILE:
+        # A separately versioned hypothesis: more market regimes in training,
+        # with all hyperparameters unchanged from the released state baseline.
+        # 2026 is development evidence; existing dataset-wide access accounting
+        # keeps previously observed paths ineligible for production promotion.
+        p=profile_protocol(base,"recursive_ppo_state_baseline")
+        p["data_start"]="2013-01-01"
+        p["splits"]={"train":{"start":"2013-01-01","end":"2024-12-31"},
+                     "validation":{"start":"2025-01-01","end":"2025-12-31"},
+                     "test":{"start":"2026-01-01","end":None}}
+        return p
     p = copy.deepcopy(base)
     if profile in STATE_PROFILES:
         # Exactly one independent state change against the same released baseline.
