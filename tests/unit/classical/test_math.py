@@ -40,6 +40,15 @@ def test_exact_shapley_additive_and_interacting_efficiency():
     assert interaction["coalition_count"] == 4
 
 
+def test_eight_asset_shapley_is_bounded_exact_and_reconciles():
+    names=[f'synthetic_{k}' for k in range(8)]
+    result=exact_shapley(names,lambda mask:sum(k+1 for k in range(8) if mask & (1<<k)))
+    assert result['coalition_count']==256
+    assert [r['value'] for r in result['contributions']]==pytest.approx(range(1,9))
+    assert result['reconciliation_residual']==pytest.approx(0)
+    with pytest.raises(ValueError):exact_shapley([str(k) for k in range(10)],lambda mask:0)
+
+
 @pytest.mark.parametrize("algorithm", ["min_variance", "mean_variance", "cvar"])
 def test_convex_solver_and_instrument_keep_evidence(algorithm):
     x = inputs(algorithm)

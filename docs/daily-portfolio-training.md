@@ -3,9 +3,11 @@
 The requested eight-symbol portfolio uses GOOGL, AMZN, NVDA, MSFT, AAPL, META,
 TSLA and VOO. Existing five-symbol books and the VOO/GOOGL USD100 profile retain
 their identities. A new isolated USD100 profile can explicitly set
-`news_required: false` while using a price-only actor; the agent must disclose that
-news was not consumed. Current metadata collection is not sufficient to claim a
-news-trained policy.
+`news_required: false` to disable its mandatory paid-headline path. A price-only
+actor must disclose that news was not consumed. The released eight-asset
+classical numeric adapter separately requires GDELT machine metadata and records
+its actual sensitivity inputs. A news-trained PPO requires its compatible
+versioned actor and complete eligible training corpus.
 
 PPO needs many ordered transitions, not many files. An approved price snapshot
 with years of daily sessions can supply historical environment trajectories.

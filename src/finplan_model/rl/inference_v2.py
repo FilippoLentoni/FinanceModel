@@ -133,6 +133,21 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
         raise FinplanError.precondition("the exported policy has no members", reason="policy_members_missing")
     kwargs={}
     news_evidence={}
+    if 'gdelt_organization_tone_v1' in spec.features:
+        from finplan_model.core.artifacts import canonical_json_bytes
+        from .gdelt import extract,FEATURE_VERSION
+        identity=bundle.get('training_gdelt_corpus_checksum','')
+        if len(bundle.get('members',[]))!=5 or bundle.get('gdelt_feature_protocol')!=FEATURE_VERSION or not isinstance(identity,str) or len(identity)!=71 or not identity.startswith('sha256:'):
+            raise FinplanError.precondition('GDELT actor requires a complete ensemble and frozen numeric training source',reason='gdelt_policy_provenance_missing')
+        if news_dataset is None or decision_time is None:
+            raise FinplanError.precondition('GDELT actor requires actual source metadata and decision cutoff',reason='gdelt_serving_input_missing')
+        features,proof=extract(news_dataset,symbols=instruments,decision_time=decision_time)
+        kwargs={'news_dataset':news_dataset,'instruments':tuple(instruments),'decision_time':decision_time}
+        news_evidence={'consumed':True,'feature_protocol':FEATURE_VERSION,'training_corpus_checksum':identity,
+                       'decision_time':decision_time,'features':features,'provenance':proof,
+                       'corpus_checksum':sha256_checksum(canonical_json_bytes(news_dataset)),
+                       'max_source_age_hours':48.,'freshness_basis':'source_available_at',
+                       'limitations':['prior_UTC_day_archive_not_same_morning_breaking_news','organization_tone_not_calibrated_stock_sentiment','VOO_Vanguard_mentions_not_constituent_weighted_news']}
     if 'etf_news_metadata_v1' in spec.features:
         if len(bundle.get('members',[]))!=5:raise FinplanError.precondition('news-aware serving requires the complete five-seed ensemble',reason='news_policy_members_missing')
         corpus_identity=bundle.get('training_news_corpus_checksum','')

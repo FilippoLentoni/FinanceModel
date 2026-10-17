@@ -217,10 +217,14 @@ def solve(inputs, *, force_keep=None):
 
 
 def exact_shapley(names, value):
-    """Every coalition evaluated once, max 5 dimensions (32 coalition values)."""
+    """Every coalition once, max nine dimensions (512 bounded objective values).
+
+    Instrument attribution evaluates the frozen objective, not 512 optimizations.
+    Plan-change attribution keeps four groups and sixteen optimization hybrids.
+    """
     n = len(names)
-    if not 1 <= n <= 5:
-        raise ValueError("exact Shapley is bounded to 1..5 dimensions")
+    if not 1 <= n <= 9:
+        raise ValueError("exact Shapley is bounded to 1..9 dimensions")
     vals = {mask: np.asarray(value(mask), dtype=float) for mask in range(1 << n)}
     if any(not np.isfinite(v).all() for v in vals.values()):
         raise ValueError("nonfinite coalition value")

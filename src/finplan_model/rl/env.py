@@ -155,7 +155,7 @@ class Accounting:
         peak = max(book.log, default=value)
         drawdown = max(0.0, min(1.0, 1 - value / peak)) if peak > 0 else 0.0
         kwargs={}
-        if 'etf_news_metadata_v1' in spec.features:
+        if {'etf_news_metadata_v1','gdelt_organization_tone_v1'} & set(spec.features):
             from finplan_model.core.errors import FinplanError
             if self.news_provider is None or self.a.decision_times is None:
                 raise FinplanError.precondition('ETF news observation requires a provider and exact decision timestamps',reason='news_provider_missing')
@@ -224,7 +224,7 @@ class PortfolioEnv(gym.Env):
         if mode not in ("train", "eval"):
             raise ValueError(mode)
         self.arrays, self.env_spec, self.cfg = arrays, spec, config
-        if 'etf_news_metadata_v1' in spec.features and (news_provider is None or arrays.decision_times is None):
+        if {'etf_news_metadata_v1','gdelt_organization_tone_v1'} & set(spec.features) and (news_provider is None or arrays.decision_times is None):
             from finplan_model.core.errors import FinplanError
             raise FinplanError.precondition('Selected ETF news state requires explicit provider and source decision times',reason='news_provider_missing')
         self.acc = Accounting(arrays, config,news_provider=news_provider,news_training=mode=='train')

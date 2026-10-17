@@ -117,7 +117,8 @@ def load_predictor(algorithm: str, model_bytes: bytes) -> Callable[[np.ndarray],
 
 def preflight_news_training(arrays,spec,*,train_window,validation_window,news_provider):
     """Validate all possible selection decisions before importing or creating a learner."""
-    if 'etf_news_metadata_v1' not in spec.features:return None
+    groups={'etf_news_metadata_v1','gdelt_organization_tone_v1'} & set(spec.features)
+    if not groups:return None
     from .spec import build_observation
     if news_provider is None or arrays.decision_times is None or not getattr(news_provider,'corpus_checksum',None):
         raise FinplanError.precondition('news training requires an immutable corpus provider and source cutoffs',reason='news_training_corpus_missing')
@@ -131,7 +132,7 @@ def preflight_news_training(arrays,spec,*,train_window,validation_window,news_pr
             build_observation(spec,arrays.close[k-spec.window:k+1],np.zeros(len(arrays.instruments)),1.,drawdown=0.,
                 news_dataset=news_provider(arrays.instruments,cutoff),instruments=arrays.instruments,decision_time=cutoff,news_training=True)
             checked+=1
-    return {'corpus_checksum':news_provider.corpus_checksum,'decision_count':checked,'training_rights_required':'research_and_training','feature_group':'etf_news_metadata_v1'}
+    return {'corpus_checksum':news_provider.corpus_checksum,'decision_count':checked,'training_rights_required':'research_and_training','feature_group':next(iter(groups))}
 
 
 def preflight_training(arrays, spec, *, train_window, validation_window):

@@ -94,11 +94,21 @@ def recommendation(service, body):
         if not created or dt(created)>dt(decision_cutoff):raise FinplanError.precondition('price snapshot unavailable at news-policy decision',reason='snapshot_vintage_unavailable')
         from .etf_news import read_partitioned_news
         news_kwargs={'news_dataset':read_partitioned_news(service.d.platform,bundle['instruments'],decision_cutoff),'decision_time':decision_cutoff}
+    if 'gdelt_organization_tone_v1' in bundle.get('environment',{}).get('features',[]):
+        from .gdelt import read_live
+        from finplan_model.etf_news import dt
+        if 'as_of' in body:
+            raise FinplanError.precondition('historical GDELT serving requires an explicit morning cutoff; frozen decision replay remains available',reason='gdelt_historical_cutoff_required')
+        decision_cutoff=service.now().isoformat()
+        created=content.snapshot.record.get('created_at')
+        if not created or dt(created)>dt(decision_cutoff):raise FinplanError.precondition('price snapshot unavailable at the decision cutoff',reason='snapshot_vintage_unavailable')
+        source,_,_=read_live(service.d.platform,bundle['instruments'],decision_cutoff)
+        news_kwargs={'news_dataset':source,'decision_time':decision_cutoff}
     rec=recommend(bundle,px,holdings,**news_kwargs) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
     rec['decision_at']=decision_cutoff
-    if news_kwargs:rec['decision_timing']='current_news_with_latest_completed_prices'
+    if news_kwargs:rec['news_timing']='eligible_news_at_decision_with_completed_prices'
     provenance = {
         'implementation': implementation_identity(bundle),
         'policy_artifact': pinned['artifact'],

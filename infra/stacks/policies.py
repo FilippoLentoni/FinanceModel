@@ -196,7 +196,7 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
                     }
                 },
             },
-            {"Sid": "PlatformSnapshotReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*")},
+            {"Sid": "PlatformSnapshotReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/gdelt-metadata")},
             {
                 "Sid": "ReadOwnReferences",
                 "Effect": "Allow",
@@ -248,6 +248,7 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
         {"Sid": "ReadInferenceConfiguration", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
         {"Sid": "ReadFrozenStrategy", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
         {"Sid": "ReadApprovedSnapshots", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*")},
+        {"Sid": "ReadVersionedNewsState", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/research-news/latest", "v1/gdelt-metadata")},
         {"Sid": "ReadSavedPortfolio", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/plans/*", "v1/portfolios/*", "v1/portfolios/*/state")},
         {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
         {"Sid": "DenyTrainingAndWrites", "Effect": "Deny", "Action": ["sagemaker:*", "s3:PutObject", "s3:DeleteObject", "ssm:PutParameter", "ssm:DeleteParameter", "dynamodb:*"], "Resource": "*"},
@@ -267,7 +268,7 @@ def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, par
         {"Sid": "ClassicalBoundedIndex", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "classical/index/*"}}},
         {"Sid": "ClassicalBoundedLookup", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": ["classical/claims/*.json", "classical/records/ca_*.json"]}, "NumericLessThanEquals": {"s3:max-keys": 1}}},
         {"Sid": "DenyClassicalEvidenceOverwrite", "Effect": "Deny", "Action": ["s3:PutObject"], "Resource": [research+"/classical/*"], "Condition": {"Null": {"s3:if-none-match": "true"}}},
-        {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/plans/*", "v1/portfolios/*", "v1/portfolios/*/state", "v1/crypto-research/latest", "v1/research-news/latest")},
+        {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/plans/*", "v1/portfolios/*", "v1/portfolios/*/state", "v1/crypto-research/latest", "v1/research-news/latest", "v1/gdelt-metadata")},
         {"Sid": "ReadPaperLifecycle", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/portfolios/*/history", "v1/portfolios/*/decisions", "v1/portfolio-decisions/*")},
         {"Sid": "RecordPaperProposal", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/POST/v1/portfolios/*/decisions", partition=partition, region=region, account=account)]},
         {"Sid": "ReadFrozenPolicyEvidence", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [research+"/artifacts/policy_inference/*"]},
@@ -313,7 +314,7 @@ def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, regi
         {"Sid": "ListRunHandOff", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": ["runs/*"]}}},
         {"Sid": "ModelRegistry", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": [f"{registry}/identity/*", f"{registry}/versions/*", f"{registry}/events/*", f"{registry}/runs/*"]},
         {"Sid": "ListModelRegistry", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [registry]},
-        {"Sid": "PlatformReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/staged-outputs/*", "v1/publications/*", "v1/plan-versions/*")},
+        {"Sid": "PlatformReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/staged-outputs/*", "v1/publications/*", "v1/plan-versions/*", "v1/gdelt-metadata")},
         _log_statement(env, logical, partition=partition, region=region, account=account),
     ]
     if kind == "api":

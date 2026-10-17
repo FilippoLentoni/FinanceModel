@@ -49,7 +49,7 @@ class RLPolicyStrategy:
 
     def __init__(self, name: str, predict: Callable[[np.ndarray], Any], spec: EnvSpec, *, seed: int, configuration_id: str, details: Mapping[str, Any] | None = None, news_provider=None) -> None:
         self.news_provider=news_provider
-        if "etf_news_metadata_v1" in spec.features and news_provider is None:
+        if {"etf_news_metadata_v1","gdelt_organization_tone_v1"} & set(spec.features) and news_provider is None:
             from finplan_model.core.errors import FinplanError
             raise FinplanError.precondition("Selected ETF news policy requires explicit news provider",reason="news_provider_missing")
         self.name = name
@@ -70,7 +70,7 @@ class RLPolicyStrategy:
             return TargetWeights({i: float(w_now.get(i, 0.0)) for i in instruments}, float(holdings.cash_weight), "no_effect", {"reason": "insufficient_history", "observations": int(px.shape[0]), "window": self.spec.window})
         cur = np.array([float(w_now.get(i, 0.0)) for i in instruments])
         kwargs={}
-        if 'etf_news_metadata_v1' in self.spec.features:
+        if {'etf_news_metadata_v1','gdelt_organization_tone_v1'} & set(self.spec.features):
             cutoff=view.decision_time.isoformat()
             kwargs={'news_dataset':self.news_provider(instruments,cutoff),'instruments':tuple(instruments),'decision_time':cutoff,'news_training':False}
         obs = build_observation(self.spec, px, cur, float(holdings.cash_weight), drawdown=drawdown,**kwargs)

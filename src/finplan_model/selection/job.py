@@ -198,6 +198,9 @@ def select_models(
     data_start = date.fromisoformat(proto["data_start"])
     test_end = date.fromisoformat(proto["splits"]["test"]["end"]) if proto["splits"]["test"].get("end") else None
     mkt = restrict_market(market, data_start, test_end)
+    if proto['rl'].get('decision_timing')=='next_session_morning':
+        from finplan_model.rl.gdelt import morning_market
+        mkt=morning_market(mkt)
     names = sorted(universe or mkt.instruments)
     missing = [i for i in names if i not in mkt.instruments]
     if missing:
@@ -316,6 +319,9 @@ def select_models(
     gate = promotion_check(selected, inc, incumbent_source)
     if prior_test_accesses:
         gate.update(result="research_only", reason="test_period_reused_for_development")
+    development=bool(proto['rl'].get('development_evaluation'))
+    if development:
+        gate.update(result='research_only',reason='predeclared_development_period_not_untouched_holdout')
     n_train = len([s for s in mkt.sessions if windows["train"][0] <= s <= windows["train"][1]])
     summary: dict[str, Any] = {
         "schema": SCHEMA,
@@ -343,7 +349,8 @@ def select_models(
         "rl": rl_section,
         "training_reward": {"note": "shaped RL training rewards; reported separately and never as portfolio performance", "reward_formula": _reward_formula(), "runs": training_reward},
         "promotion_check": gate,
-        "test_access": {"evaluated_once_in_this_run": True, "split_evaluations": dict(ev.calls), "prior_runs_on_this_test_period": int(prior_test_accesses), "test_reuse": int(prior_test_accesses) > 0},
+        "test_access": {"evaluated_once_in_this_run": True, "split_evaluations": dict(ev.calls), "prior_runs_on_this_test_period": int(prior_test_accesses), "test_reuse": int(prior_test_accesses) > 0,
+                        'evaluation_role':'development' if development or prior_test_accesses else 'test','predeclared_development':development},
         "caveats": caveats(n_train, windows, mkt, rl_section, reused=bool(prior_test_accesses)),
         "compute": {"phase_seconds": phases, "wall_seconds": round(clock() - t_start, 3)},
     }
@@ -398,6 +405,12 @@ def _run_rl(
         if not corpus.get('dataset'):raise FinplanError.precondition('news-aware job requires frozen licensed corpus',reason='news_training_corpus_missing')
         news_provider=FrozenEtfNewsProvider(corpus['dataset'])
         if news_provider.corpus_checksum!=corpus.get('checksum'):raise FinplanError.precondition('news corpus checksum mismatch',reason='news_training_corpus_integrity')
+    if 'gdelt_organization_tone_v1' in base.features:
+        from finplan_model.rl.gdelt import FrozenGdeltProvider
+        corpus=rl_proto.get('gdelt_corpus') or {}
+        if not corpus.get('dataset'):raise FinplanError.precondition('GDELT-aware job requires a frozen numeric corpus',reason='gdelt_training_corpus_missing')
+        news_provider=FrozenGdeltProvider(corpus['dataset'])
+        if news_provider.corpus_checksum!=corpus.get('checksum'):raise FinplanError.precondition('GDELT corpus checksum mismatch',reason='gdelt_training_corpus_integrity')
     if base.decision_frequency != config.rebalance_frequency:
         # every family must decide on the same schedule (user decision 28: daily)
         raise FinplanError.validation(
@@ -526,6 +539,10 @@ def run_model_selection(inp: Any) -> dict[str, Any]:
         raise FinplanError.validation("model_selection runs with purpose research or holdout_evaluation", pointer="/purpose")
     section = _bias(inp)
     protocol = validate_protocol(spec.get("selection_protocol"))
+    frozen_gdelt=protocol['rl'].get('gdelt_corpus') or {}
+    if frozen_gdelt.get('artifact'):
+        import json
+        protocol['rl']['gdelt_corpus']={**frozen_gdelt,'dataset':json.loads(inp.artifacts.get(frozen_gdelt['artifact']))}
     reserve = float(protocol["runtime"]["reserve_seconds"])
     max_runtime = float(spec.get("max_runtime_seconds") or 0)
     deadline = started + max(0.0, max_runtime - reserve) if max_runtime else None

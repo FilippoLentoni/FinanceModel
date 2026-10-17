@@ -148,6 +148,32 @@ class ClassicalService:
                 'news_inputs_checksum':sha256_checksum(canonical_json_bytes(inputs)),
                 'assumptions':{'sentiment_mean_shift_per_session':.0005,'uncertainty_risk_scale':.25},'accuracy_improvement':'not_established'}
             inputs['news_evidence']=news_evidence
+        elif research_profile is not None and len(instruments)==8:
+            from finplan_model.rl.gdelt import read_live,FEATURE_VERSION
+            from finplan_model.etf_news import dt
+            if 'as_of' in body:
+                raise FinplanError.precondition('historical numeric news recommendation requires an explicit morning cutoff; frozen replay remains available',reason='gdelt_historical_cutoff_required')
+            cutoff=self.now().isoformat();created=content.snapshot.record.get('created_at')
+            if not created or dt(created)>dt(cutoff):raise FinplanError.precondition('price snapshot unavailable at numeric news cutoff',reason='snapshot_vintage_unavailable')
+            source,features,proof=read_live(self.d.platform,instruments,cutoff)
+            price_inputs=copy.deepcopy(inputs);inputs['decision_time']=cutoff
+            mean=np.asarray(inputs['expected_returns'])
+            tone=np.array([features[s]['tone_scaled'] for s in instruments])
+            scale=1+.25*np.array([features[s]['cluster_count_log_scaled'] for s in instruments])
+            shifted=mean+.0005*tone
+            inputs['expected_returns']=shifted.tolist()
+            inputs['covariance']=(np.asarray(inputs['covariance'])*np.outer(scale,scale)).tolist()
+            inputs['scenarios']=((np.asarray(inputs['scenarios'])-mean)*scale+shifted).tolist()
+            news_evidence={'consumed':True,'feature_protocol':FEATURE_VERSION,'decision_time':cutoff,
+                           'features':features,'provenance':proof,'corpus_checksum':sha256_checksum(canonical_json_bytes(source)),
+                           'price_only_inputs_checksum':sha256_checksum(canonical_json_bytes(price_inputs)),
+                           'news_inputs_checksum':sha256_checksum(canonical_json_bytes(inputs)),
+                           'max_source_age_hours':48.,'freshness_basis':'source_available_at',
+                           'sensitivity_assumptions':{'unit_tone_mean_shift_per_session':.0005,'unit_log_mention_intensity_volatility_scale':.25,
+                                                      'coefficients_estimated_from_returns':False},
+                           'limitations':['research_sensitivity_not_learned_news_forecast','organization_tone_not_calibrated_stock_sentiment',
+                                          'prior_UTC_day_archive_not_same_morning_breaking_news','news_coverage_intensity_can_reflect_company_popularity']}
+            inputs['news_evidence']=news_evidence
         solution = solve(inputs)
         if solution["status"] != "optimal":
             raise FinplanError.precondition(
@@ -209,6 +235,9 @@ class ClassicalService:
                 "hindsight_selected_universe",
             ],
         }
+        if news_evidence:
+            rec['news_timing']='eligible_news_at_decision_with_completed_prices'
+            rec['decision_at']=inputs['decision_time']
         with_quantities(rec, metadata)
         explanation = explain(inputs, solution)
         payload = {

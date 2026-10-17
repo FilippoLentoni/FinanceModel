@@ -102,3 +102,16 @@ def test_daily_history_is_separate_frozen_profile_and_preserves_legacy():
     assert DEFAULT_PROTOCOL==before
     legacy=profile_protocol(before,'recursive_ppo_state_baseline')
     assert legacy['splits']['train']['start']=='2025-01-01'
+
+
+def test_predeclared_development_cannot_promote_even_with_a_new_dataset_identity():
+    from finplan_model.selection.job import select_models
+    from finplan_model.sim.config import SimulationConfig
+    from tests.unit.rl.support import tiny_protocol
+    p=tiny_protocol();p['rl']['algorithms']=['ppo'];p['rl']['development_evaluation']=True
+    cfg=SimulationConfig.from_dict({**sim_config().to_dict(),'rebalance_frequency':'daily'})
+    result=select_models(market(),cfg,protocol=p,prior_test_accesses=0)
+    assert result.summary['test_access']['prior_runs_on_this_test_period']==0
+    assert result.summary['test_access']['evaluation_role']=='development'
+    assert result.summary['promotion_check']['result']=='research_only'
+    assert result.summary['promotion_check']['reason']=='predeclared_development_period_not_untouched_holdout'
