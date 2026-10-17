@@ -1,0 +1,11 @@
+## Implementation
+- [x] Inventory implemented controls, optimizers, RL feature variants and LLM frameworks
+- [x] Implement exact pre-inference solver/actor/public prompt capture and isolated variant registry
+- [x] Implement bounded dated constituent/RSS collection and actual headless Codex reviewer
+- [x] Implement durable hourly and interim commands with permanent slot IDs and crash handling
+- [x] Add common forward point-quote evaluator without manufacturing daily bars or hindsight fills
+- [x] Implement frozen pending forecasts and durable reconciliation query interfaces
+- [x] Validate focused solver, RL, simulator and quote tests; controlled hourly retry against mocked Dynamo/S3
+- [ ] Complete final full unit/contract/build gates for final committed revision
+- [ ] Deploy beta and verify real immutable input/output/portfolio/observation round trips
+- [ ] Observe required actual recurring EC2 cycles and verify complete HTML/export reconciliation

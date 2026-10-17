@@ -43,7 +43,7 @@ from .constraints import apply_constraints
 from .market import HoldingsView, MarketData
 from .strategy import FALLBACK_STATUSES, NO_EFFECT, Strategy, TargetWeights, aggregate_solution_status, coerce_target
 
-__all__ = ["Fill", "SimulationResult", "Simulator", "rebalance_sessions"]
+__all__ = ["ExecutionKernel", "Fill", "SimulationResult", "Simulator", "rebalance_sessions"]
 
 
 @dataclass
@@ -152,20 +152,10 @@ def _r(x: float) -> float:
     return 0.0 if x == 0 else x
 
 
-class Simulator:
-    def __init__(self, config: SimulationConfig, market: MarketData, *, universe: Sequence[str] | None = None) -> None:
-        if config.venue != "paper":  # defensive: SimulationConfig.from_dict already refuses
-            raise FinplanError.not_permitted("simulation venue must be 'paper'")
-        self.cfg = config
-        self.market = market
-        self.universe: tuple[str, ...] = tuple(sorted(universe or market.instruments))
-        missing = [i for i in self.universe if i not in market.instruments]
-        if missing:
-            raise FinplanError.validation("universe instruments missing from the market data", pointer="/universe", instruments=missing[:10])
-
-    # ------------------------------------------------------------------ helpers
-    def _exec_field(self) -> str:
-        return "open" if self.cfg.execution_timing == "next_open" else "close"
+class ExecutionKernel:
+    """Shared numerical fill/cost mechanics for daily and actual point-price evaluation."""
+    def __init__(self, config: SimulationConfig) -> None:
+        self.cfg=config
 
     def _cost_rates(self, qty: float, volume: float | None) -> tuple[float, float, float, float]:
         participation = abs(qty) / volume if volume else 0.0
@@ -182,6 +172,35 @@ class Simulator:
         return math.copysign(min(abs(qty), limit), qty)
 
     # ------------------------------------------------------------------ run
+    def _fill(self, book: "_Book", s_iso: str, dsess: str, i: str, q: float, price: float, volume: float | None) -> Fill:
+        notional = abs(q) * price
+        part, fr, sr, slr = self._cost_rates(q, volume)
+        fill = Fill(s_iso, dsess, i, _r(q), price, notional, part, notional * fr + self.cfg.fees.fixed_per_trade, notional * sr, notional * slr)
+        self._apply_fill(book, fill)
+        return fill
+
+    def _apply_fill(self, book: "_Book", fill: Fill) -> None:
+        """Ledger posting of one fill: cash pays the notional and every cost component."""
+        book.cash -= fill.quantity * fill.price + fill.fee + fill.spread_cost + fill.slippage_cost
+        book.shares[fill.instrument_id] += fill.quantity
+
+
+
+class Simulator(ExecutionKernel):
+    def __init__(self, config: SimulationConfig, market: MarketData, *, universe: Sequence[str] | None = None) -> None:
+        if config.venue != "paper":  # defensive: SimulationConfig.from_dict already refuses
+            raise FinplanError.not_permitted("simulation venue must be 'paper'")
+        self.cfg = config
+        self.market = market
+        self.universe: tuple[str, ...] = tuple(sorted(universe or market.instruments))
+        missing = [i for i in self.universe if i not in market.instruments]
+        if missing:
+            raise FinplanError.validation("universe instruments missing from the market data", pointer="/universe", instruments=missing[:10])
+
+    # ------------------------------------------------------------------ helpers
+    def _exec_field(self) -> str:
+        return "open" if self.cfg.execution_timing == "next_open" else "close"
+
     def run(self, strategy: Strategy, *, start: date | None = None, end: date | None = None,
             initial_book: HoldingsView | None = None) -> SimulationResult:
         cfg = self.cfg
@@ -380,18 +399,6 @@ class Simulator:
         if abs(rem) > 1e-12:
             self._unfilled(log, carry, s_iso, dsess, i, rem, "participation_cap")
         return q_fill
-
-    def _fill(self, book: "_Book", s_iso: str, dsess: str, i: str, q: float, price: float, volume: float | None) -> Fill:
-        notional = abs(q) * price
-        part, fr, sr, slr = self._cost_rates(q, volume)
-        fill = Fill(s_iso, dsess, i, _r(q), price, notional, part, notional * fr + self.cfg.fees.fixed_per_trade, notional * sr, notional * slr)
-        self._apply_fill(book, fill)
-        return fill
-
-    def _apply_fill(self, book: "_Book", fill: Fill) -> None:
-        """Ledger posting of one fill: cash pays the notional and every cost component."""
-        book.cash -= fill.quantity * fill.price + fill.fee + fill.spread_cost + fill.slippage_cost
-        book.shares[fill.instrument_id] += fill.quantity
 
     def _unfilled(self, log: list[dict[str, Any]], carry: dict[str, tuple[str, float]], s_iso: str, dsess: str, i: str, qty: float, reason: str) -> None:
         handling = "carried_over" if self.cfg.liquidity.unfilled == "carry_over" else "cancelled"

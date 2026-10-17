@@ -107,7 +107,20 @@ def recommendation(service, body):
         if not created or dt(created)>dt(decision_cutoff):raise FinplanError.precondition('price snapshot unavailable at the decision cutoff',reason='snapshot_vintage_unavailable')
         source,_,_=read_live(service.d.platform,bundle['instruments'],decision_cutoff)
         news_kwargs={'news_dataset':source,'decision_time':decision_cutoff}
-    rec=recommend(bundle,px,holdings,**news_kwargs) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings)
+    captured_inputs=[]
+    def capture_actual(prepared):
+        from finplan_model.core.artifacts import canonical_json_bytes,sha256_checksum
+        payload={'schema_version':'finplan-served-actual-input/1','captured_at':service.now().isoformat(),
+                 'availability_cutoff':service.now().isoformat(),'native_data_decision_time':decision_cutoff,
+                 'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,
+                 'snapshot_created_at':content.snapshot.record.get('created_at'),'policy_artifact':pinned['artifact'],
+                 'policy_configuration_id':bundle['configuration_id'],'prepared':prepared}
+        ref=service.d.artifacts.put_json(payload,kind='run_artifact',domain='finance')
+        service.store.append_audit({'event':'capture_actual_served_model_input','audit_id':service.d.ids.correlation_id(),
+            'at':service.now().isoformat(),'input_snapshot_id':snapshot_id,'configuration_id':bundle['configuration_id'],'artifact':ref.to_dict()})
+        captured_inputs.append({'payload':payload,'artifact':ref.to_dict(),'checksum':sha256_checksum(canonical_json_bytes(payload))})
+    rec=recommend(bundle,px,holdings,**news_kwargs,input_capture=capture_actual) if bundle.get('members') else recommend_baseline(bundle,market,as_of,holdings,input_capture=capture_actual)
+    rec.setdefault('diagnostics',{})['actual_model_inputs']=captured_inputs
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
     rec['decision_at']=decision_cutoff

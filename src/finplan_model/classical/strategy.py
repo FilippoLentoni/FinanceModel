@@ -43,6 +43,9 @@ class ClassicalStrategy:
             "covariance": estimate_covariance(returns, "ledoit_wolf").tolist(),
             "scenarios": returns.tolist(),
         }
+        capture = getattr(self, "input_capture", None)
+        if capture is not None:
+            capture(inputs)
         result = solve(inputs)
         if result["status"] != "optimal":
             return TargetWeights(

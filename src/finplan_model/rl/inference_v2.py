@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from finplan_model.core.artifacts import sha256_checksum
+from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
 from finplan_model.core.errors import FinplanError
 from finplan_model.sim.config import SimulationConfig
 from finplan_model.sim.constraints import apply_constraints
@@ -123,7 +123,7 @@ def allocation_response(bundle, holdings, proposed, proposed_cash, *, solution_s
             "limitations": ["research_only", "hindsight_selected_universe", "no_trade_execution", "uses_completed_close_next_session_decision"]}
 
 
-def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[str, Any], *, news_dataset=None, decision_time=None) -> dict[str, Any]:
+def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[str, Any], *, news_dataset=None, decision_time=None, input_capture=None) -> dict[str, Any]:
     spec = EnvSpec.from_dict(bundle["environment"])
     instruments = list(bundle["instruments"])
     current, cash, value, peak = portfolio_state(instruments, holdings)
@@ -164,6 +164,18 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
         kwargs={'news_dataset':news_dataset,'instruments':tuple(instruments),'decision_time':decision_time}
         news_evidence={'consumed':True,'training_news_corpus_checksum':bundle['training_news_corpus_checksum'],'decision_time':decision_time,'corpus_checksum':sha256_checksum(canonical_json_bytes(news_dataset)),'features':features,'provenance':provenance}
     obs = build_observation(spec, prices, current, cash, drawdown=1 - value / peak,**kwargs)
+    if input_capture is not None:
+        from finplan_model.forward.observation_names import observation_names
+        names=observation_names(spec,instruments)
+        if len(names)!=len(obs):raise ValueError("observation name/order length mismatch")
+        input_capture({"boundary": "frozen_actor", "policy_source_run_id": bundle["source_run_id"],
+                       "configuration_id": bundle["configuration_id"], "instruments": instruments,
+                       "prices": prices.tolist(), "holdings": dict(holdings), "environment": dict(bundle["environment"]),
+                       "observation": obs.tolist(), "observation_dtype": str(obs.dtype),
+                       "feature_order": list(spec.features), "observation_names":names,"named_observation":[{"name":n,"value":float(v),"index":k} for k,(n,v) in enumerate(zip(names,obs))], "news_evidence": news_evidence,
+                       "news_dataset": news_dataset if news_evidence.get("consumed") else None,
+                       "policy_checksum": sha256_checksum(canonical_json_bytes(bundle)),
+                       "normalization": {"return_scale": spec.return_scale, "obs_clip": spec.obs_clip}})
     targets = [allocation_action(spec, actor_action(m["actor"], obs), current, cash) for m in bundle["members"]]
     return allocation_response(
         bundle, holdings, np.mean([t[0] for t in targets], axis=0),

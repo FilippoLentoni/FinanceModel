@@ -111,6 +111,11 @@ class _Optimizer(BaselineStrategy):
     # ------------------------------------------------------------------ quadratic programs
     def _solve_qp(self, view: PointInTimeView, holdings: HoldingsView, cov: np.ndarray, mu: np.ndarray, risk_aversion: float) -> TargetWeights:
         """min  risk_aversion * w'Σw - (mu'w + r_c * cash)   over the constraint set."""
+        capture = getattr(self, "input_capture", None)
+        if capture is not None:
+            capture({"boundary": "scipy_slsqp", "instruments": list(view.instruments),
+                     "mean": mu.tolist(), "covariance": cov.tolist(), "risk_aversion": risk_aversion,
+                     "parameters": dict(self.params), "units": "per_session_simple_return"})
         n = len(view.instruments)
         lb, ub = self.bounds(view.instruments)
         interval = self.invested_interval(lb, ub, self.params["cash_policy"])
@@ -302,6 +307,13 @@ class ScenarioCVaR(_Optimizer):
                 c[n] = -rc
             a_ub = np.vstack([a_ub, cvar_row])
             b_ub = np.append(b_ub, self.params["cvar_limit"])
+        capture = getattr(self, "input_capture", None)
+        if capture is not None:
+            capture({"boundary": "scipy_highs", "instruments": list(view.instruments),
+                     "scenarios": scen.tolist(), "parameters": dict(self.params), "scenario_provenance": meta,
+                     "linear_program": {"c": c.tolist(), "a_ub": a_ub.tolist(), "b_ub": b_ub.tolist(),
+                                        "a_eq": a_eq.tolist(), "b_eq": b_eq.tolist(), "bounds": bounds},
+                     "units": "per_session_simple_return"})
         res = linprog(c, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq, bounds=bounds, method="highs")
         status = SOLVER_STATUS_MAP["highs"].get(int(res.status), "infeasible")
         if status != "optimal":
