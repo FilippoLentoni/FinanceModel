@@ -374,6 +374,8 @@ class ClassicalService:
                 "previous plan date follows current plan",
                 pointer="/previous_analysis_id",
             )
+        from finplan_model.comparison_timing import news_alignment
+        timing=news_alignment(a['recommendation'],b['recommendation'],same_model=x['implementation']==y['implementation'] and x['settings']==y['settings'],same_snapshot=a['recommendation'].get('input_snapshot_id')==b['recommendation'].get('input_snapshot_id'),pointer='/previous_analysis_id')
         previous_result, previous_reproduction = self.reproduce(a)
         current_result, current_reproduction = self.reproduce(b)
         reproduction = {
@@ -442,7 +444,7 @@ class ClassicalService:
                         for i in range(4)
                     ],
                 },
-                {"previous": reference(a), "current": reference(b)},
+                {"previous": reference(a), "current": reference(b), "timing_alignment_version":"formation-news/1"},
                 portfolio_id=a.get("portfolio_id"),
             )
         shapley = exact_shapley(names, lambda mask: coalition_values[mask])
@@ -512,13 +514,14 @@ class ClassicalService:
                     "previous_as_of": x["as_of"],
                     "current_as_of": y["as_of"],
                     "implementation": x["implementation"],
+                    **timing,
                 },
                 "reproduction": reproduction,
                 "status": "available",
                 "shapley": shapley,
                 "changes": changes,
             },
-            {"previous": reference(a), "current": reference(b)},
+            {"previous": reference(a), "current": reference(b), "timing_alignment_version":"formation-news/1"},
             portfolio_id=a.get("portfolio_id"),
         )
 

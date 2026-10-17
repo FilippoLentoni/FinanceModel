@@ -39,6 +39,7 @@ def model_identity(doc):
     provenance = doc["provenance"]
     return {
         "algorithm": doc["algorithm"],
+        **({'news_feature_protocol':doc['recommendation']['diagnostics']['news_evidence']['feature_protocol']} if doc.get('recommendation',{}).get('diagnostics',{}).get('news_evidence',{}).get('consumed') is True and doc['recommendation']['diagnostics']['news_evidence'].get('feature_protocol') else {}),
         **{key: provenance[key] for key in (
             "implementation", "settings", "policy_artifact", "export_run_id",
             "policy_source_run_id", "configuration_id",
@@ -108,6 +109,8 @@ def compare_decisions(service, body):
     ar, br = a["recommendation"], b["recommendation"]
     if ar["as_of"] > br["as_of"]:
         raise FinplanError.validation("previous decision date follows current decision", pointer="/previous_decision_id")
+    from finplan_model.comparison_timing import news_alignment
+    timing=news_alignment(ar,br,same_model=model_identity(a)==model_identity(b),same_snapshot=a['input_snapshot_id']==b['input_snapshot_id'])
     weights = [{r["instrument_id"]: r["weight"] for r in rec["target_weights"]} for rec in (ar, br)]
     trades = [{r["instrument_id"]: r for r in rec["decisions"]} for rec in (ar, br)]
     payload = {
@@ -115,7 +118,7 @@ def compare_decisions(service, body):
         "previous_decision_id": a["decision_id"], "current_decision_id": b["decision_id"],
         "previous_decision_ref": decision_ref(a), "current_decision_ref": decision_ref(b),
         "status": "available",
-        "alignment": {"previous_algorithm": a["algorithm"], "current_algorithm": b["algorithm"], "previous_as_of": ar["as_of"], "current_as_of": br["as_of"], "snapshot_changed": a["input_snapshot_id"] != b["input_snapshot_id"], "portfolio_revision_changed": a["portfolio_revision"] != b["portfolio_revision"], "model_provenance_changed": model_identity(a) != model_identity(b)},
+        "alignment": {"previous_algorithm": a["algorithm"], "current_algorithm": b["algorithm"], "previous_as_of": ar["as_of"], "current_as_of": br["as_of"], "snapshot_changed": a["input_snapshot_id"] != b["input_snapshot_id"], "portfolio_revision_changed": a["portfolio_revision"] != b["portfolio_revision"], "model_provenance_changed": model_identity(a) != model_identity(b), **timing},
         "changes": [{"instrument_id": name, "previous_action": trades[0].get(name, {}).get("action", "not_in_universe"), "current_action": trades[1].get(name, {}).get("action", "not_in_universe"), "previous_target_weight": weights[0].get(name, 0.), "current_target_weight": weights[1].get(name, 0.), "target_weight_change": weights[1].get(name, 0.) - weights[0].get(name, 0.), "previous_delta_quantity": trades[0].get(name, {}).get("delta_quantity"), "current_delta_quantity": trades[1].get(name, {}).get("delta_quantity")} for name in sorted(set(weights[0]) | set(weights[1]))],
         "attribution": {"status": "not_available", "reason": "Observed input/output differences are not causal feature attribution"},
     }
@@ -125,7 +128,7 @@ def compare_decisions(service, body):
     elif a["algorithm"] in ("ppo", "sac") and b["algorithm"] in ("ppo", "sac"):
         payload["policy_replay"] = {"previous": replay(service, a), "current": replay(service, b)}
         payload["input_differences"] = {"previous": a["provenance"].get("policy_inputs"), "current": b["provenance"].get("policy_inputs")}
-    return service.issue("comparison", payload, {"previous": decision_ref(a), "current": decision_ref(b)}, portfolio_id=a["portfolio_id"])
+    return service.issue("comparison", payload, {"previous": decision_ref(a), "current": decision_ref(b), "timing_alignment_version":"formation-news/1"}, portfolio_id=a["portfolio_id"])
 
 
 def _history(service, pid):
