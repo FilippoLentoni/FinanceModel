@@ -25,6 +25,7 @@ from .runtime import evaluate_approach,input_market,validate_policy
 from .research import review,stamp
 from .forecasts import freeze,reconcile,freeze_outcome
 from .paper import apply_next_session,apply_forward_quotes
+from .policy_artifacts import freeze_policy_references,restore_frozen_policies
 
 DEFAULT_EXPERIMENT='beta-forward-hourly-v1'
 REGION='us-east-2'
@@ -91,6 +92,7 @@ def load_current_inputs(session=None,cohort=None):
     setting=json.loads(param('/finplan/beta/financemodel/config/advisory-policy'))
     artifacts=S3ArtifactStore(s3,param('/finplan/beta/financemodel/config/research-storage-ref'))
     policy=json.loads(artifacts.get(setting['artifact']))
+    policy_refs={sha256_checksum(canonical_json_bytes(policy)):copy.deepcopy(setting['artifact'])}
     served_policy=copy.deepcopy(policy);served_ref=copy.deepcopy(setting['artifact'])
     if cohort=='eight_assets':
         listing=s3.list_objects_v2(Bucket=artifacts._bucket,Prefix='artifacts/policy_inference/',MaxKeys=100)
@@ -136,14 +138,18 @@ def load_current_inputs(session=None,cohort=None):
     exports=[]
     for item in listed.get('Contents',[]):
         if item['Size']>2_000_000:raise ValueError('frozen policy export exceeds bound')
-        data=s3.get_object(Bucket=artifacts._bucket,Key=item['Key'])['Body'].read()
+        stored=s3.get_object(Bucket=artifacts._bucket,Key=item['Key']);data=stored['Body'].read()
+        if stored.get('Metadata',{}).get('checksum')!=sha256_checksum(data):raise ValueError('frozen export metadata/content checksum mismatch')
         exports.append({'artifact':{'artifact_id':item['Key'].rsplit('/',1)[-1],'kind':'policy_inference','checksum':sha256_checksum(data),'content_type':'application/json','size_bytes':len(data)}})
     # Canonical originally selected models and every distinct evaluated export,
     # without a second alias/book for the same selected source artifact.
-    bundles=[json.loads(artifacts.get(ref)) for ref in [v['artifact'] for v in setting.get('portfolio_policies',{}).values()]+[r['artifact'] for r in exports]]
+    bundles=[]
+    for ref in [v['artifact'] for v in setting.get('portfolio_policies',{}).values()]+[r['artifact'] for r in exports]:
+        bundle=json.loads(artifacts.get(ref));bundles.append(bundle)
+        policy_refs[sha256_checksum(canonical_json_bytes(bundle))]=copy.deepcopy(ref)
     policies=assign_policy_variants(policy,bundles)
     policies['hosted_langgraph']=served_policy
-    source['served_advisory_policy']=served_policy;source['served_advisory_policy_ref']=served_ref
+    source['served_advisory_policy']={k:copy.deepcopy(served_policy[k]) for k in ('strategy_id','configuration_id','instruments','environment')};source['served_advisory_policy_ref']=served_ref
     source['code_versions']={'financemodel':os.environ.get('FINPLAN_MODEL_SOURCE_COMMIT','workspace_commit_not_supplied'),
                              'financialplanning':os.environ.get('FINPLAN_PLATFORM_SOURCE_COMMIT','workspace_commit_not_supplied'),
                              'financeagent':os.environ.get('FINPLAN_AGENT_SOURCE_COMMIT','workspace_commit_not_supplied')}
@@ -167,7 +173,7 @@ def load_current_inputs(session=None,cohort=None):
         except Exception as exc:
             source['native_policy_inputs'][aid]={'status':'unavailable','reason':type(exc).__name__+': '+str(exc),
                'query':{'symbols':universe,'availability_mode':'platform','native_formation':'09:00 America/New_York'},'acquired_at':stamp()}
-    source['frozen_policies']=copy.deepcopy(policies)
+    source['frozen_policy_refs']=freeze_policy_references(policies,policy_refs)
     return source,policies
 
 
@@ -382,7 +388,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     prior_shared_id=identifier('mi',experiment,'__shared__',slot,'shared_source')
     prior_shared=backend.repo.get('research_input',prior_shared_id)
     if prior_shared:
-        source=backend.read_input(prior_shared_id)['payload'];policies=source.get('frozen_policies',policies or {})
+        source=backend.read_input(prior_shared_id)['payload'];policies,restore_errors=restore_frozen_policies(source,strict=False)
         at=source['availability_cutoff']
     elif source is None:
         persisted_registry=backend.read_registry(experiment)
@@ -427,7 +433,8 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     shared_id=identifier('mi',experiment,'__shared__',slot,'shared_source')
     existing=backend.repo.get('research_input',shared_id)
     if existing:
-        shared=existing.doc;source=backend.read_input(shared_id)['payload'];policies=source.get('frozen_policies',policies);at=source['availability_cutoff']
+        shared=existing.doc;source=backend.read_input(shared_id)['payload'];policies,restore_errors=restore_frozen_policies(source,strict=False);at=source['availability_cutoff']
+        source['model_identity_blockers']={**source.get('model_identity_blockers',{}),**restore_errors}
     else:
         if not missed:
             research=research or _current_news(backend,experiment.removesuffix('-cohort8'),at)
@@ -520,8 +527,10 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
 def run_interim(slot,experiment,output,*,backend=None):
     """Thirty-minute collection + actual Codex review, persisted separately, never a primary fill."""
     native_slot=datetime.fromisoformat(slot.replace('Z','+00:00'))
-    if native_slot.tzinfo is None or native_slot.minute not in (0,30) or native_slot.second or native_slot.microsecond:raise ValueError('interim slot must be timezone-aware and half-hour aligned')
-    slot=native_slot.astimezone(UTC).isoformat().replace('+00:00','Z')
+    if native_slot.tzinfo is None:raise ValueError('interim slot must be timezone-aware and half-hour aligned')
+    native_slot=native_slot.astimezone(UTC)
+    if native_slot.minute not in (0,30) or native_slot.second or native_slot.microsecond:raise ValueError('interim slot must be timezone-aware and half-hour aligned')
+    slot=native_slot.isoformat().replace('+00:00','Z')
     backend=backend or evidence_backend();interim=experiment+'-interim';output=Path(output);output.mkdir(parents=True,exist_ok=True)
     aid='direct_codex_news';rid=identifier('mr',interim,aid,slot);iid=identifier('mi',interim,aid,slot,'model_input')
     def receipt():

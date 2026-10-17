@@ -117,3 +117,26 @@ remain denied. Higher-environment policy grants are unchanged. Exact payloads,
 checksums and references are returned in diagnostics and on actor failures so the
 existing platform graph activity trace can index the original evidence. Classical
 replays use their existing immutable classical-analysis store instead.
+
+Hourly source bundles freeze every model's original `policy_inference` artifact
+reference, canonical model checksum, configuration, algorithm, fixed instruments
+and ordered feature specification in `frozen_policy_refs`. They do not duplicate
+actor weights into every hourly input/report. Crash recovery reads those original
+immutable bytes and verifies both artifact and model identity; it never selects
+SSM's newer policy or recomputes an input vector. One inaccessible or mismatched
+artifact gives that approach an explicit unavailable precondition while other
+books continue. Older archived `frozen_policies` bundles remain readable. Exact
+prepared solver arrays and policy observations are still captured separately at
+the actual inference boundary and remain downloadable in the input explorer.
+
+The bounded evaluated-checkpoint inventory includes 70 real PPO checkpoints and
+10 real SAC checkpoints, linked to succeeded research runs and original evaluated
+configurations/seeds. CPU export performs no training. The 2026-10-17 provenance
+review exported 75 distinct PPO single/selected-ensemble inference artifacts,
+conditionally created 72 and read-verified three already existing. Together with
+existing SAC and ensemble artifacts this produced 85 immutable inference exports.
+Each distinct export has its own book; identical artifact aliases are deduplicated.
+An incompatible fixed-universe export remains visibly unavailable in that cohort,
+without projecting its frozen input shape onto another universe. The selected
+GDELT ensemble retains its verified original news protocol; this does not invent
+independent exported news-seed models or missing ETF-news/daily-GDELT policies.
