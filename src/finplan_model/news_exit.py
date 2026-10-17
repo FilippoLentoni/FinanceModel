@@ -18,7 +18,7 @@ def check(evidence):
     optimizers=evidence.get('optimizer_recommendations',{})
     for algorithm in ('min_variance','mean_variance','cvar'):consumed(optimizers.get(algorithm),algorithm)
     consumed(evidence.get('ppo_recommendation'),'ppo')
-    for name in ('optimization','ppo'):
+    for name in ('min_variance','mean_variance','cvar','ppo'):
         hosted=evidence.get('hosted',{}).get(name,{})
         if hosted.get('http_status')!=200 or hosted.get('claim_check')!='passed' or not hosted.get('tool_evidence_correlated'):
             failures.append('hosted_'+name+':actual_model_evidence_missing')
