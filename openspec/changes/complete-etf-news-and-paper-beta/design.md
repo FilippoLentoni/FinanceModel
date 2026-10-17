@@ -18,3 +18,17 @@ Publish additive code without contract changes. Run fixture verification, then r
 
 ## Strict completion update
 The user requires actual hosted optimizer and PPO consumption. The saved USD100 profile therefore requires fresh licensed news in numerical solver inputs, with formation time equal to actual issuance unless explicitly historical. Existing compatible-state inference must consume the same versioned inputs; training validates frozen coverage and training rights before creating a learner. Current research-only forward metadata cannot train a policy. A valid compatible source artifact and hosted source/observation evidence are mandatory; tasks remain open until these exist. Public-domain historical archives need separately audited historical availability and explicit no-event coverage, not backdated retrieval.
+
+## Selected daily universe (October 17, 2026)
+The user selected GOOGL, AMZN, NVDA, MSFT, AAPL, META, TSLA and the S&P 500.
+Represent the index using VOO, not an orderable index ticker. Collect eight
+separate symbol-scoped news searches per trading day and persist raw/curated
+records centrally. Preserve the $10 cumulative data limit and current authorized
+expiry. Observed expected cost is $0.088/day, $0.88 for ten sessions; quotes
+remain authoritative. Keep old receipts and their original symbol scope.
+The existing API permits at most five symbols per response; capture the eight
+assets in two four-symbol batches. This does not constitute an eight-asset PPO
+training integration. Aligned approved price ingestion for all eight assets,
+explicit daily collection/no-news/failure status, compatible multi-batch PPO
+state integration and deployed recommendation evidence remain required. Do not
+claim an old two-asset profile or policy covers the new investment universe.

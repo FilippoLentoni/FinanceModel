@@ -14,7 +14,7 @@ PROTOCOL='etf-search-metadata/1'
 FEATURE_ORDER=('sentiment','event_count','uncertainty','age_hours','missing')
 ETF_UNIVERSE=frozenset(('SPY','VOO','VTI','QQQ','IWM','DIA','AGG','BND','TLT','GLD','VEA','VWO'))
 
-FINANCIAL_NEWS_UNIVERSE=ETF_UNIVERSE|{'GOOGL'}
+FINANCIAL_NEWS_UNIVERSE=ETF_UNIVERSE|{'GOOGL','AMZN','NVDA','MSFT','AAPL','META','TSLA'}
 
 
 def dt(value):

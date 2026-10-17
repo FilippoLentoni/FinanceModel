@@ -21,3 +21,8 @@ zero learners. The October30 timer is active. Those explicit blockers mean the
 scheduled capture/readiness check is not a promise of automatic training. The
 Model runner supports explicit candidate execution only with actual approved
 prices, eligible news and fresh whole-run budget evidence.
+
+## Eight-asset selection follow-up
+- [x] Configure eight separate daily news profiles and preserve legacy receipt scope, cumulative caps and immutable centralized publication.
+- [x] Batch the scheduled corpus checkpoint within existing five-symbol response bounds.
+- [ ] Complete approved daily price coverage, centralized per-symbol/day status and compatible eight-asset PPO training/state integration; validate and release through beta.

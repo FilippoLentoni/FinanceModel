@@ -52,3 +52,14 @@ The operator SHALL collect ETF/macro and GOOGL research once per trading day at 
 #### Scenario: Additional data accumulates
 - **WHEN** a later versioned experiment uses a larger retained corpus
 - **THEN** the protocol preserves actual availability and nonoverlapping selection and test windows, and makes no automatic improvement or promotion claim
+
+### Requirement: User-selected investment universe
+Daily collection SHALL cover GOOGL, AMZN, NVDA, MSFT, AAPL, META, TSLA and VOO separately, retaining immutable provenance and the cumulative $10 cap. The S&P 500 index SHALL be represented by VOO. Existing response bounds SHALL be respected through batching until compatible broader contracts and models are released.
+
+#### Scenario: A symbol has no eligible articles
+- **WHEN** a symbol search returns no eligible news or retrieval fails
+- **THEN** daily coverage distinguishes no news, rejected results and retrieval failure; no missing input is fabricated
+
+#### Scenario: Training the selected universe
+- **WHEN** a PPO experiment targets the eight assets
+- **THEN** aligned prices and time-valid news cover the declared universe and dates, and compatible state/artifact evidence is required before claiming completion
