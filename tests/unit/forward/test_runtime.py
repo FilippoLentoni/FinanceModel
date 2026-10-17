@@ -172,3 +172,18 @@ def test_codex_capture_never_substitutes_shared_raw_history_for_consumed_input()
     assert 'price_history' not in captured[0]['numeric']
     assert captured[0]['collected_not_consumed']['price_history']['status']=='not_supplied_to_this_approach'
     assert captured[0]['numeric']['prepared']['actual_source']['market_descriptors']['trend']=='positive'
+
+
+def test_codex_prepared_but_not_invoked_news_is_not_consumed():
+    from finplan_model.core.errors import FinplanError
+    selected=[{'headline':'Controlled public headline','url':'https://example.org/controlled'}]
+    def blocked(base,source,holdings,before):
+        before({'boundary':'headless_codex_public_request','invocation_state':'not_invoked',
+                'actual_source':{'news':selected},'messages':[{'role':'user','content':'Controlled prepared request'}]})
+        raise FinplanError.precondition('request exceeds approved budget',reason='review_prompt_budget')
+    outcome,captured=run('direct_codex_news',external_adapters={'codex':blocked})
+    assert outcome['status']=='unavailable' and outcome['reason']=='review_prompt_budget'
+    assert captured[0]['invocation_state']=='not_invoked'
+    assert captured[0]['news']['consumed'] is False and captured[0]['news']['items']==[]
+    assert captured[0]['news']['context_status']=='prepared_not_supplied'
+    assert captured[0]['numeric']['prepared']['actual_source']['news']==selected

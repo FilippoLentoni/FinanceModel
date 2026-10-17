@@ -134,7 +134,6 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
     kwargs={}
     news_evidence={}
     if {'gdelt_organization_tone_v1','gdelt_intraday_organization_tone_v1'} & set(spec.features):
-        from finplan_model.core.artifacts import canonical_json_bytes
         from .gdelt import extract,FEATURE_VERSION
         intraday='gdelt_intraday_organization_tone_v1' in spec.features
         if intraday:
@@ -156,7 +155,6 @@ def recommend(bundle: Mapping[str, Any], prices: np.ndarray, holdings: Mapping[s
         corpus_identity=bundle.get('training_news_corpus_checksum','')
         if bundle.get('news_feature_protocol')!='etf-search-metadata/1' or not isinstance(corpus_identity,str) or len(corpus_identity)!=71 or not corpus_identity.startswith('sha256:'):
             raise FinplanError.precondition('news-aware actor lacks frozen training corpus identity',reason='news_policy_training_provenance_missing')
-        from finplan_model.core.artifacts import canonical_json_bytes
         from finplan_model.etf_news import extract
         if news_dataset is None or decision_time is None:raise FinplanError.precondition('news-aware actor requires licensed point-in-time data',reason='news_serving_input_missing')
         features,provenance,_=extract(news_dataset,symbols=instruments,decision_time=decision_time)

@@ -98,8 +98,12 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
                              'prepared_context':copy.deepcopy(prepared['news_evidence']),
                              'metadata_only':True,'text_status':'No article text supplied to policy'}
         elif approach.adapter=='codex':
-            payload['news']={'consumed':True,'layer':'selected_headlines','items':copy.deepcopy(prepared.get('actual_source',source).get('news',[])),
-                             'prepared_context':copy.deepcopy(prepared.get('messages',prepared)), 'metadata_only':False}
+            invoked=payload['invocation_state']!='not_invoked'
+            payload['news']={'consumed':invoked,'layer':'selected_headlines' if invoked else 'prepared_not_supplied',
+                             'items':copy.deepcopy(prepared.get('actual_source',source).get('news',[])) if invoked else [],
+                             'prepared_context':copy.deepcopy(prepared.get('messages',prepared)), 'metadata_only':False,
+                             'context_status':'supplied_at_invocation' if invoked else 'prepared_not_supplied',
+                             'reason':'Exact selected public news supplied' if invoked else 'Reviewer not invoked; prepared news context was not consumed'}
         try:
             capture(payload)
         except Exception:
