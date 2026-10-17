@@ -44,3 +44,7 @@ Evaluation can represent excluded data using explicit missingness, provided a so
 supplied. No provider is inferred, no historic data is manufactured and no checkpoint is retrained
 or activated by selecting the feature. Existing job protocols remain unchanged unless explicitly
 configured and wired with a frozen provider. No measured accuracy improvement is claimed.
+
+A realized-outcome matched experiment runner and separate VOO/GOOGL $100 paper-profile helper are
+now available; see docs/matched-news-shadow.md. They preserve publication/snapshot vintage blockers.
+Optimizer sensitivity alone remains distinct from this costed out-of-sample shadow study.

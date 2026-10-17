@@ -310,3 +310,16 @@ def test_sandbox_strategy_uses_same_solver_and_inputs_as_mcp(context):
     assert list(result.weights.values()) == pytest.approx(
         [w["weight"] for w in p["target_weights"]], abs=1e-8
     )
+
+
+def test_separate_small_paper_profile_uses_only_its_declared_universe(context):
+    from finplan_model.paper_profile import identity
+    profile={'identity':identity('synthetic-caller','small-100'),'caller_id':'synthetic-caller','profile_id':'small-100','initial_cash':100,'instruments':['VOO','GOOGL']}
+    context.platform.portfolios[context.pid]={'portfolio_id':context.pid,'synthetic':True,'settings':{'paper_research_profile':profile}}
+    context.state['paper_state'].update(positions=[{'instrument_id':s,'quantity':0.} for s in ('VOO','GOOGL')],cash_balance=100.,high_watermark=100.)
+    before=copy.deepcopy(context.state)
+    out=context.service.recommend({'portfolio_id':context.pid,'algorithm':'mean_variance','settings':{'cash_weight':.1}})
+    rec=out['recommendation']
+    assert {r['instrument_id'] for r in rec['target_weights']}=={'VOO','GOOGL'}
+    assert rec['portfolio_state']['portfolio_value']==pytest.approx(100.)
+    assert context.state==before

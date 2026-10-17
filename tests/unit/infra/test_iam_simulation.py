@@ -267,3 +267,12 @@ def test_classical_missing_key_probe_is_one_key_and_own_evidence_only(logical):
     assert decision(role, "s3:PutObject", record) == "explicitDeny"
     assert decision(role, "s3:DeleteObject", record) == "explicitDeny"
     assert decision(role, "sagemaker:CreateProcessingJob", "*") == "explicitDeny"
+
+
+def test_classical_profile_metadata_is_read_only():
+    env='beta';logical=n.CLASSICAL_INFERENCE
+    role={'identity':[pol.classical_role_policy(env,logical,**C)],'boundary':cb.env_permission_boundary(env,**C)}
+    resource=f'arn:aws:execute-api:us-east-2:{ACCT}:example/api/GET/v1/portfolios/pf_example'
+    assert allowed(role,'execute-api:Invoke',resource)
+    assert not allowed(role,'execute-api:Invoke',resource.replace('/GET/','/PUT/'))
+    assert not allowed(role,'execute-api:Invoke',resource.replace('/GET/','/POST/'))

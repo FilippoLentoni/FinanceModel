@@ -59,6 +59,8 @@ class PlatformClient(Protocol):
 
     def get_plan(self, plan_id: str) -> dict[str, Any]: ...
 
+    def get_portfolio(self, portfolio_id: str) -> dict[str, Any]: ...
+
     def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]: ...
 
     def create_portfolio_decision(self, portfolio_id: str, body: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -290,6 +292,7 @@ class FixturePlatformClient:
         self.staged_outputs: dict[str, dict[str, Any]] = {}
         self.plans: dict[str, dict[str, Any]] = {}
         self.portfolio_states: dict[str, dict[str, Any]] = {}
+        self.portfolios: dict[str, dict[str, Any]] = {}
         self.portfolio_decisions: dict[str, dict[str, Any]] = {}
         self.portfolio_history: dict[str, list[dict[str, Any]]] = {}
         self.calls: list[tuple[str, str]] = []
@@ -306,6 +309,12 @@ class FixturePlatformClient:
         if plan_id not in self.plans:
             raise FinplanError(ErrorCode.NOT_FOUND, "plan not found")
         return {"plan": json.loads(json.dumps(self.plans[plan_id]))}
+
+    def get_portfolio(self, portfolio_id):
+        self.calls.append(('get_portfolio',portfolio_id))
+        if portfolio_id in self.portfolios:return json.loads(json.dumps(self.portfolios[portfolio_id]))
+        if portfolio_id not in self.portfolio_states:raise FinplanError(ErrorCode.NOT_FOUND,'portfolio not found')
+        return {'portfolio_id':portfolio_id,'synthetic':True,'settings':{}}
 
     def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]:
         self.calls.append(("get_portfolio_state", portfolio_id))
@@ -478,6 +487,10 @@ class HttpPlatformClient:
     def get_plan(self, plan_id: str) -> dict[str, Any]:
         require_id("plan_id", plan_id)
         return self._json("GET", f"/v1/plans/{plan_id}")
+
+    def get_portfolio(self, portfolio_id):
+        require_id('portfolio_id',portfolio_id)
+        return self._json('GET',f'/v1/portfolios/{portfolio_id}')
 
     def get_portfolio_state(self, portfolio_id: str) -> dict[str, Any]:
         require_id("portfolio_id", portfolio_id)

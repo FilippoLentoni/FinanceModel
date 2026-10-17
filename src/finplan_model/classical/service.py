@@ -61,6 +61,10 @@ class ClassicalService:
         # A zero holding is a portfolio state, not removal from the investable universe.
         # Keep approved assets eligible after a full exit and when starting from cash.
         instruments = sorted(market.instruments)
+        if saved is not None:
+            from finplan_model.paper_profile import approved_profile_instruments
+            metadata=self.d.platform.get_portfolio(saved['portfolio_id'])
+            instruments=approved_profile_instruments(metadata,portfolio_id=saved['portfolio_id'],available_instruments=market.instruments)
         if not 1 <= len(instruments) <= 5:
             raise FinplanError.precondition(
                 "classical beta attribution supports one to five instruments",

@@ -44,7 +44,10 @@ def context(monkeypatch):
     def persist(portfolio, proposal):
         proposals.append(copy.deepcopy(proposal))
         return {"decision": {"portfolio_id": portfolio, "decision_id": "pd_" + UID}}
-    platform = SimpleNamespace(get_plan=get_plan, get_portfolio_state=get_state, get_latest_snapshot=latest, create_portfolio_decision=persist)
+    def get_portfolio(portfolio):
+        calls.append(("portfolio",portfolio))
+        return {"portfolio_id":portfolio,"synthetic":True,"settings":{}}
+    platform = SimpleNamespace(get_portfolio=get_portfolio,get_plan=get_plan, get_portfolio_state=get_state, get_latest_snapshot=latest, create_portfolio_decision=persist)
     bundle = {"format": "finplan-strategy-bundle/1", "mode": "advisory_paper", "strategy_id": "ppo",
               "source_run_id": "run_" + UID, "configuration_id": "cfg_" + "a" * 64,
               "instruments": ["A", "B"], "available_after": "2026-01-01", "constraints": {},
@@ -71,7 +74,7 @@ def test_default_saved_book_is_marked_with_raw_closes_and_interim_peak(context):
     result = request(context, {})
     rec = result["recommendation"]
     state = rec["portfolio_state"]
-    assert context.calls == [("plan", PLAN), ("state", PID), ("latest", DATASET_ID)]
+    assert context.calls == [("plan", PLAN), ("state", PID), ("latest", DATASET_ID), ("portfolio", PID)]
     assert rec["as_of"] == "2026-10-09" and rec["input_snapshot_id"] == SID
     assert state["source"] == "saved_paper" and state["revision"] == 1
     assert state["portfolio_value"] == 2400 and state["high_watermark"] == 2800
@@ -123,7 +126,7 @@ def test_explicit_holdings_keep_experiment_mode(context):
 
 def test_explicit_saved_portfolio_skips_default_plan(context):
     request(context, {"portfolio_id": PID, "input_snapshot_id": SID, "as_of": "2026-10-09"})
-    assert context.calls == [("state", PID)]
+    assert context.calls == [("state", PID), ("portfolio", PID)]
 
 
 @pytest.mark.parametrize("body", [{"as_of": "2026-10-09"}, {"input_snapshot_id": SID},
@@ -171,3 +174,13 @@ def test_unapproved_latest_snapshot_is_rejected(context):
 def test_peak_does_not_collapse_when_terminal_value_recovers_only_partly(context):
     holdings, _ = value_holdings({}, context.book, raw_market(context.content, context.market), context.days[-1], ["A", "B"])
     assert 1 - holdings["portfolio_value"] / holdings["high_watermark"] == pytest.approx(1 - 2400 / 2800)
+
+
+def test_incompatible_frozen_policy_cannot_escape_small_profile_universe(context):
+    from finplan_model.paper_profile import identity
+    metadata={'portfolio_id':PID,'synthetic':True,'settings':{'paper_research_profile':{
+        'identity':identity('synthetic-caller','small'),'caller_id':'synthetic-caller','profile_id':'small','initial_cash':100.,'instruments':['VOO','GOOGL']}}}
+    context.service.d.platform.get_portfolio=lambda pid:metadata
+    with pytest.raises(FinplanError) as exc:request(context,{})
+    assert exc.value.details['reason'] in ('paper_profile_price_coverage','paper_profile_policy_incompatible')
+    assert not context.captured and not context.proposals

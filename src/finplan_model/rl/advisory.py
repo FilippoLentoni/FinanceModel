@@ -50,6 +50,12 @@ def recommendation(service, body):
     if bundle.get('format') != 'finplan-strategy-bundle/1' or bundle.get('mode') != 'advisory_paper':
         raise FinplanError.precondition('the selected strategy artifact format is unsupported',reason='policy_format_invalid')
     snapshot_id,saved=resolve_inputs(service,body)
+    if saved is not None:
+        from finplan_model.paper_profile import approved_profile_instruments
+        metadata=service.d.platform.get_portfolio(saved['portfolio_id'])
+        allowed=approved_profile_instruments(metadata,portfolio_id=saved['portfolio_id'],available_instruments=bundle['instruments'])
+        if set(allowed)!=set(bundle['instruments']):
+            raise FinplanError.precondition('selected frozen policy is incompatible with the isolated paper profile universe',reason='paper_profile_policy_incompatible')
     market,content=load_market(service.d.platform,snapshot_id)
     as_of=completed_date(service,body,market,bundle['instruments'])
     if as_of.isoformat()<=bundle['available_after']:
