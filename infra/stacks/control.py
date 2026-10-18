@@ -51,7 +51,7 @@ from finplan_model.control.wakeup import TICK
 from . import naming as n
 from .common import ModelStack, StageContext, research_boundary, stack_name, tag_role
 from .lambda_code import function_code
-from .policies import classical_role_policy, control_role_policy, inference_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy, strategy_selection_policy
+from .policies import classical_role_policy, control_role_policy, forward_runner_policy, inference_role_policy, job_api_invoker_patterns, job_execution_policy, registry_lookup_policy, schedule_role_policy, strategy_selection_policy
 
 __all__ = ["API_STAGE", "DISPATCH_SCHEDULE_DESCRIPTION", "LAMBDA_ARCHITECTURE", "LOG_RETENTION_DAYS", "OPENAPI_ROUTES", "ControlStack", "add_to_stage", "openapi_body"]
 
@@ -223,15 +223,43 @@ class ControlStack(ModelStack):
                     target=scheduler.CfnSchedule.TargetProperty(arn=controller.function_arn, role_arn=weekly_role.role_arn, input='{"trigger":"hourly_crypto_research","scheduled_at":"<aws.scheduler.scheduled-time>"}',
                            retry_policy=scheduler.CfnSchedule.RetryPolicyProperty(maximum_retry_attempts=1, maximum_event_age_in_seconds=1800)))
             _metadata_role(crypto, "job-dispatcher-schedule")
+            self._forward_runner(env, code)
 
+
+    # ------------------------------------------------------------------ forward runner (beta only)
+    def _forward_runner(self, env: str, code: lambda_.Code) -> lambda_.Function:
+        """``finplan-beta-financemodel-forward-runner``: scheduled competition slots (no FinanceModel schedule).
+
+        FinancialPlanning's Step Functions state machine invokes it synchronously
+        (:mod:`finplan_model.forward.runner`). Its ARN is published by the release publisher at
+        ``/finplan/beta/financemodel/api/forward-runner-function-arn``.
+        """
+        p, a = Aws.PARTITION, Aws.ACCOUNT_ID
+        import os
+
+        from .common import REPO_ROOT
+
+        platform_commit = json.loads((REPO_ROOT / "platform-pin.json").read_text(encoding="utf-8"))["source_commit"]
+        environment = {"FINPLAN_ENVIRONMENT": env, "FINPLAN_CONFIG_DIR": "/var/task/config", "FINPLAN_EXPERIMENT_TRIGGER": "financialplanning_step_functions",
+                       "FINPLAN_MODEL_SOURCE_COMMIT": os.environ.get("CODEBUILD_RESOLVED_SOURCE_VERSION", "not_supplied"),
+                       "FINPLAN_PLATFORM_SOURCE_COMMIT": platform_commit, "FINPLAN_AGENT_SOURCE_COMMIT": "remote_agent_runtime_not_bundled"}
+        fn = self._function("ForwardRunner", n.FORWARD_RUNNER, "job-api-handler", forward_runner_policy(env, partition=p, region=Aws.REGION, account=a), code,
+                            environment, timeout=900, memory=2048, role_logical=n.FORWARD_RUNNER_ROLE,
+                            description=f"FinanceModel {env} forward competition runner (scheduled paper slots; invoked by FinancialPlanning Step Functions; never trains)")
+        # Same-account callers: FinancialPlanning's state machine role (its identity policy grants
+        # lambda:InvokeFunction) and, explicitly, the pipeline stage role (deployed preflight test).
+        fn.add_permission("InvokeFromAccount", principal=iam.AccountPrincipal(a), action="lambda:InvokeFunction")
+        fn.add_permission("InvokeFromStageRole", principal=iam.ArnPrincipal(f"arn:{p}:iam::{a}:role/{n.stage_role_name(env)}"), action="lambda:InvokeFunction")
+        cdk.CfnOutput(self, "ForwardRunnerFunctionArn", value=fn.function_arn, description="Published at /finplan/<env>/financemodel/api/forward-runner-function-arn")
+        return fn
 
     # ------------------------------------------------------------------ helpers
-    def _function(self, cid: str, logical: str, logical_role: str, policy: dict[str, Any], code: lambda_.Code, environment: dict[str, str], *, timeout: int, memory: int) -> lambda_.Function:
+    def _function(self, cid: str, logical: str, logical_role: str, policy: dict[str, Any], code: lambda_.Code, environment: dict[str, str], *, timeout: int, memory: int, role_logical: str | None = None, description: str | None = None) -> lambda_.Function:
         env = self.env_name
         role = iam.Role(
             self,
             f"{cid}Role",
-            role_name=n.role_name(env, logical),
+            role_name=n.role_name(env, role_logical or logical),
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             description=f"FinanceModel {env} {logical} Lambda role",
             inline_policies={logical: iam.PolicyDocument.from_json(policy)},
@@ -249,7 +277,7 @@ class ControlStack(ModelStack):
             memory_size=memory,
             timeout=Duration.seconds(timeout),
             environment=environment,
-            description=(f"FinanceModel {env} frozen strategy inference (read only; never trains)" if logical == n.STRATEGY_INFERENCE else f"FinanceModel {env} {logical} (validates, records and starts jobs only; never runs strategy code)"),
+            description=description or (f"FinanceModel {env} frozen strategy inference (read only; never trains)" if logical == n.STRATEGY_INFERENCE else f"FinanceModel {env} {logical} (validates, records and starts jobs only; never runs strategy code)"),
         )
         tag_role(fn, logical_role)
         # Explicit log group named after the function (Ref): retention bounded, deleted with the stack,

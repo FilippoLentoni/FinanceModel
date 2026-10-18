@@ -27,7 +27,7 @@ BUNDLE_DIR_ENV = "FINPLAN_LAMBDA_BUNDLE_DIR"
 RELEASE_ENV = "FINPLAN_RELEASE_BUILD"
 BUNDLE_MANIFEST = "bundle-manifest.json"
 #: Entries a deployable bundle must contain.
-BUNDLE_REQUIRED = ("finplan_model", "finplan_contracts", "jsonschema", "rfc8785", "numpy", "boto3", "config", BUNDLE_MANIFEST)
+BUNDLE_REQUIRED = ("finplan_model", "finplan_contracts", "finplan_platform", "jsonschema", "rfc8785", "numpy", "boto3", "config", BUNDLE_MANIFEST)
 
 
 class SourceOnlyCodeError(RuntimeError):

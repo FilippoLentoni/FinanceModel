@@ -84,6 +84,19 @@ def _check_contracts_wheel(root: Path) -> None:
         raise BundleError(f"vendored contract wheel {wheel.name} digest {digest} != contracts-pin.json {pin['sha256']}")
 
 
+def _check_platform_wheel(root: Path) -> None:
+    pin = json.loads((root / "platform-pin.json").read_text(encoding="utf-8"))
+    wheel = root / pin["artifact"]
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    if digest != pin["sha256"]:
+        raise BundleError(f"vendored platform wheel {wheel.name} digest {digest} != platform-pin.json {pin['sha256']}")
+
+
+#: Parts of the vendored finplan-platform wheel the runtime never imports. ``providers`` holds the
+#: platform's market-data retrieval (DS-12: FinanceModel never ships or calls provider clients).
+PLATFORM_EXCLUDED = ("providers",)
+
+
 def bundle_size(path: Path) -> tuple[int, int]:
     total = files = 0
     for p in path.rglob("*"):
@@ -123,6 +136,7 @@ def build_bundle(
             raise BundleError(f"{dest} already exists")
         shutil.rmtree(dest)
     _check_contracts_wheel(root)
+    _check_platform_wheel(root)
     dest.mkdir(parents=True)
     with tempfile.TemporaryDirectory() as tmp:
         req = Path(tmp) / "requirements.txt"
@@ -135,6 +149,8 @@ def build_bundle(
     (dest / ".lock").unlink(missing_ok=True)
     for cache in list(dest.rglob("__pycache__")):
         shutil.rmtree(cache, ignore_errors=True)
+    for part in PLATFORM_EXCLUDED:
+        shutil.rmtree(dest / "finplan_platform" / part, ignore_errors=True)
     shutil.copytree(root / "src" / "finplan_model", dest / "finplan_model", ignore=_IGNORE)
     shutil.copytree(root / "config", dest / "config", ignore=_IGNORE)
     size, files = bundle_size(dest)
@@ -165,6 +181,9 @@ def verify_bundle(path: Path, *, limit: int = LAMBDA_UNZIPPED_LIMIT) -> list[str
         module = handler.rsplit(".", 1)[0]
         if not (path / (module.replace(".", "/") + ".py")).is_file():
             problems.append(f"handler module {module} missing")
+    for part in PLATFORM_EXCLUDED:
+        if (path / "finplan_platform" / part).exists():
+            problems.append(f"finplan_platform/{part} must not be shipped (market-data retrieval stays in FinancialPlanning)")
     if not (path / "config" / "shared.json").is_file():
         problems.append("config/shared.json missing")
     size, _ = bundle_size(path) if path.is_dir() else (0, 0)
@@ -204,6 +223,10 @@ def import_check(path: Path, *, python: str | None = None, env: Mapping[str, str
         f"    assert m.__file__.startswith({str(path)!r}), m.__file__\n"
         "import finplan_contracts, jsonschema, rfc8785\n"
         f"assert finplan_contracts.__file__.startswith({str(path)!r})\n"
+        "import finplan_platform.core.modeling_evidence as evidence\n"
+        f"assert evidence.__file__.startswith({str(path)!r})\n"
+        "import finplan_model.forward.runner as runner\n"
+        "assert all(__import__('importlib').import_module(m) for m in runner.MODULES)\n"
         "print('ok')\n"
     )
     run_env = {"PATH": os.environ.get("PATH", ""), "FINPLAN_CONFIG_DIR": str(path / "config"), **(env or {})}

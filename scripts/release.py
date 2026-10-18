@@ -173,6 +173,8 @@ def enforced_role_names(env: str, outputs: Mapping[str, str]) -> list[str]:
     names += [n.deploy_role_name(env), n.exec_role_name(env), n.stage_role_name(env)]
     if env == "beta" and outputs.get("ClassicalFunctionRef"):
         names += [n.role_name(env, n.CLASSICAL_INFERENCE), n.role_name(env, n.RESEARCH_CONTROLLER)]
+    if env == "beta" and outputs.get("ForwardRunnerFunctionArn"):
+        names.append(n.role_name(env, n.FORWARD_RUNNER_ROLE))
     # The account-level pipeline and build roles are published once, by the bootstrap, at
     # /finplan/shared/financemodel/config/budget-enforced-role-names (contracts 1.0.0, D16;
     # infra.stacks.naming.tooling_role_names); a pipeline (environment writer) never writes shared.
@@ -194,6 +196,7 @@ def planned_parameters(env: str, info: ReleaseInfo, outputs: Mapping[str, str], 
     add("job-endpoint", "api", "job-endpoint", outputs.get("JobEndpoint"))
     add("strategy-function-ref", "api", "strategy-function-ref", outputs.get("StrategyFunctionRef"))
     add("classical-function-ref", "api", "classical-function-ref", outputs.get("ClassicalFunctionRef"))
+    add("forward-runner-function-arn", "api", "forward-runner-function-arn", outputs.get("ForwardRunnerFunctionArn"))
     add("registry-ref", "model", "registry-ref", outputs.get("RegistryRef"))
     add("approver-role-ref", "config", "approver-role-ref", outputs.get("ApproverRoleRef"))
     if info.image_repository and info.image_digest:
@@ -320,6 +323,8 @@ def publish_release(
         required_outputs += ("StrategyFunctionRef",)
     if env == "beta" and tuple(int(p) for p in info.contract_version.split(".")[:2]) >= (1, 4):
         required_outputs += ("ClassicalFunctionRef",)
+    if env == "beta" and tuple(int(p) for p in info.contract_version.split(".")[:2]) >= (1, 13):
+        required_outputs += ("ForwardRunnerFunctionArn",)
     for required in required_outputs:
         if not outputs.get(required):
             raise ManifestError(f"the {env} deploy did not produce the output {required}")

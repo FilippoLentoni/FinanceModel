@@ -78,6 +78,13 @@ STRATEGY_INFERENCE = "job-api-handler-inference"
 CLASSICAL_INFERENCE = "job-api-handler-classical"
 RESEARCH_CONTROLLER = "job-api-handler-research"
 RESEARCH_SCHEDULE = "weekly-research"
+#: Beta forward competition runner (invoked by FinancialPlanning's Step Functions state machine).
+FORWARD_RUNNER = "forward-runner"
+#: Its role logical name: ``finplan-<env>-financemodel-job-api-handler-forward-runner-role``. The
+#: FinancialPlanning plan API admits FinanceModel principals only by the role-name patterns
+#: ``...-job-execution*`` and ``...-job-api-handler*`` (``consumer_principals``); the runner reads
+#: approved snapshots as the job-API consumer class, like the other beta inference Lambdas.
+FORWARD_RUNNER_ROLE = "job-api-handler-forward-runner"
 FUNCTIONS: dict[str, str] = {
     JOB_API_HANDLER: "finplan_model.control.handlers.api_handler",
     DISPATCHER: "finplan_model.control.handlers.dispatcher_handler",
@@ -87,6 +94,7 @@ FUNCTIONS: dict[str, str] = {
     STRATEGY_INFERENCE: "finplan_model.serving.handler",
     CLASSICAL_INFERENCE: "finplan_model.classical_api.handler",
     RESEARCH_CONTROLLER: "finplan_model.classical_api.weekly_handler",
+    FORWARD_RUNNER: "finplan_model.forward.runner.handler",
 }
 JOB_EXECUTION = "job-execution"
 #: ``logical-role`` tag of the job-execution role (matrix row ``sagemaker-job-definitions``, contracts 1.0.0 D16).

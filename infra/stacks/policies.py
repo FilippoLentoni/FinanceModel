@@ -51,6 +51,7 @@ __all__ = [
     "control_role_policy",
     "control_table_policy",
     "deploy_execution_statements",
+    "forward_runner_policy",
     "dispatcher_schedule_arn",
     "job_api_invoker_patterns",
     "job_execution_policy",
@@ -293,6 +294,45 @@ def classical_role_policy(env: str, logical: str = n.CLASSICAL_INFERENCE, *, par
     ]}
 
 
+#: FinancialPlanning metadata tables the experiment ledger (ModelingEvidence) reads and writes.
+FORWARD_LEDGER_TABLES = ("portfolio", "portfolio-decision", "portfolio-history", "audit-event", "research-input", "research-run", "portfolio-observation", "idempotency")
+
+
+def forward_runner_policy(env: str, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
+    """Beta forward competition runner: the platform experiment ledger, frozen policies, agent client.
+
+    * FinancialPlanning ledger (``finplan_platform.core.modeling_evidence``): item access to its
+      tables (+ indexes), the reports bucket's ``modeling-evidence/`` prefix (artifacts are
+      write-once canonical JSON, never deleted) and the platform KMS key through S3 only;
+    * approved snapshots (plan API GET routes of the job-API consumer class) and the frozen
+      PPO exports (``artifacts/policy_inference/*`` of research storage), read only;
+    * the FinanceAgent Cognito client secret ``modeling-runner-client`` and the agent's SSM
+      references (the agent itself is called over HTTPS with a bearer token, not IAM).
+    """
+    research = _bucket_arn(n.bucket_name(env, n.RESEARCH_BUCKET, account), partition)
+    reports, reports_objects = _platform_bucket(env, "reports", partition)
+    params = [f"/finplan/{env}/financemodel/config/research-storage-ref", f"/finplan/{env}/financemodel/config/advisory-policy",
+              f"/finplan/{env}/financialplanning/config/bucket-reports", f"/finplan/{env}/financialplanning/api/plan-endpoint",
+              f"/finplan/{env}/financeagent/agent/authorizer-metadata-ref", f"/finplan/{env}/financeagent/agent/runtime-ref",
+              f"/finplan/{env}/financeagent/secret-ref/modeling-runner-client"]
+    tables = [_arn("dynamodb", f"table/finplan-{env}-financialplanning-{t}", partition=partition, region=region, account=account) for t in FORWARD_LEDGER_TABLES]
+    return {"Version": "2012-10-17", "Statement": [
+        _log_statement(env, n.FORWARD_RUNNER, partition=partition, region=region, account=account),
+        {"Sid": "ReadRunnerReferences", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
+        {"Sid": "ReadAgentClientSecret", "Effect": "Allow", "Action": ["secretsmanager:GetSecretValue"], "Resource": [_arn("secretsmanager", f"secret:finplan/{env}/financeagent/modeling-runner-client-*", partition=partition, region=region, account=account)]},
+        {"Sid": "ExperimentLedgerTables", "Effect": "Allow", "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:ConditionCheckItem"],
+         "Resource": [*tables, *[t + "/index/*" for t in tables]]},
+        {"Sid": "ExperimentLedgerArtifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:GetObjectTagging", "s3:PutObjectTagging"], "Resource": [reports + "/modeling-evidence/*"]},
+        {"Sid": "ExperimentLedgerBucket", "Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetEncryptionConfiguration"], "Resource": [reports]},
+        {"Sid": "ExperimentLedgerKey", "Effect": "Allow", "Action": ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"], "Resource": [_arn("kms", "key/*", partition=partition, region=region, account=account)],
+         "Condition": {"StringEquals": {"kms:ViaService": f"s3.{region}.amazonaws.com"}, "ForAnyValue:StringLike": {"kms:ResourceAliases": f"alias/finplan-{env}-financialplanning-*"}}},
+        {"Sid": "ReadFrozenPolicies", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
+        {"Sid": "ListFrozenPolicies", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "artifacts/policy_inference/*"}}},
+        {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/research-news/latest", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
+        {"Sid": "DenyComputeConfigAndDeletes", "Effect": "Deny", "Action": ["sagemaker:*", "ssm:PutParameter", "ssm:DeleteParameter", "s3:DeleteObject*", "dynamodb:DeleteItem", "dynamodb:DeleteTable"], "Resource": "*"},
+    ]}
+
+
 def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, region: str = REGION, account: str = ACCOUNT) -> dict[str, Any]:
     """Identity policy of the control-plane Lambdas (``kind``: ``api``, ``dispatcher`` or ``state``).
 
@@ -524,6 +564,9 @@ def stage_role_statements(env: str, store_bucket_arn: str, *, partition: str = P
         {"Sid": "CallOwnJobApi", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": [_arn("execute-api", "*/*/*/v1/*", partition=partition, region=region, account=account)]},
         # deployed suite: one synchronous dispatcher tick proves the Lambda bundle imports (platform lesson L3/L5)
         {"Sid": "InvokeOwnDispatcher", "Effect": "Allow", "Action": ["lambda:InvokeFunction"], "Resource": [_arn("lambda", f"function:{n.function_name(env, n.DISPATCHER)}", partition=partition, region=region, account=account)]},
+        # deployed beta suite: one read-only forward-runner preflight (the runner's resource policy
+        # also names this role, so the test works before the bootstrap refreshes this statement)
+        {"Sid": "InvokeOwnForwardRunner", "Effect": "Allow", "Action": ["lambda:InvokeFunction"], "Resource": [_arn("lambda", f"function:{n.function_name(env, n.FORWARD_RUNNER)}", partition=partition, region=region, account=account)]},
         {"Sid": "DenyPlanPublicationExecutionWrites", "Effect": "Deny", "Action": ["execute-api:Invoke"], "Resource": _plan_api_write_arns(region, account, partition)},
         *_registry_write_once(registry),
     ]

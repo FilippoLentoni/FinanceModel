@@ -43,7 +43,7 @@ def test_bundle_commands_use_the_lock_hashes_and_lambda_platform(tmp_path):
         calls.append(cmd)
         if cmd[1] == "pip":  # emulate the install: the closure the gate requires
             target = Path(cmd[cmd.index("--target") + 1])
-            for name in ("finplan_contracts", "jsonschema", "rfc8785", "numpy", "boto3"):
+            for name in ("finplan_contracts", "finplan_platform", "jsonschema", "rfc8785", "numpy", "boto3"):
                 (target / name).mkdir(parents=True, exist_ok=True)
         return ""
 

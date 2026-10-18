@@ -114,7 +114,7 @@ def test_every_function_with_an_explicit_role_can_write_its_own_log_streams(asse
             assert f"log-group:/aws/lambda/{fn}:*" in text, f"{fn} may write only its own log group"
             groups = [r for r in tpl["Resources"].values() if r["Type"] == "AWS::Logs::LogGroup" and "/aws/lambda/" in json.dumps(r["Properties"]["LogGroupName"])]
             assert any(fn in json.dumps(g["Properties"]["LogGroupName"]) or "Ref" in json.dumps(g["Properties"]["LogGroupName"]) for g in groups), fn
-    assert seen == (len(n.FUNCTIONS) - 3) * len(ENVS) + 3  # frozen inference, classical and review are beta-only
+    assert seen == (len(n.FUNCTIONS) - 4) * len(ENVS) + 4  # frozen inference, classical, review and the forward runner are beta-only
 
 
 @pytest.mark.parametrize("env", ENVS)
@@ -236,7 +236,7 @@ def _asset(root, name, *, platform=None, complete=True):
     a = root / f"asset.{name}"
     (a / "finplan_model").mkdir(parents=True)
     if complete:
-        for entry in ("finplan_contracts", "jsonschema", "rfc8785", "numpy", "boto3", "config"):
+        for entry in ("finplan_contracts", "finplan_platform", "jsonschema", "rfc8785", "numpy", "boto3", "config"):
             (a / entry).mkdir()
         (a / "bundle-manifest.json").write_text(json.dumps({"python_platform": platform}))
     return a

@@ -81,6 +81,30 @@ def test_control_plane_lambdas_run_from_their_bundle():
     assert isinstance(payload, dict) and {"started", "reconciled", "schedule"} <= set(payload), payload
 
 
+def test_forward_runner_preflight_beta_only():
+    """Beta: the forward runner imports its whole closure from the bundle (vendored finplan-platform
+    included), resolves the experiment ledger and reads its SSM references. Read only, no writes.
+    Gamma/prod: the function must not exist."""
+    from infra.stacks import naming as n
+
+    d = deployed()
+    client = d.session.client("lambda")
+    name = n.function_name(d.env, n.FORWARD_RUNNER)
+    if d.env != "beta":
+        with pytest.raises(Exception) as exc:
+            client.get_function(FunctionName=name)
+        assert "ResourceNotFound" in type(exc.value).__name__ or "AccessDenied" in str(exc.value)
+        return
+    resp = client.invoke(FunctionName=name, InvocationType="RequestResponse", Payload=json.dumps({"action": "preflight"}).encode())
+    payload = json.loads(resp["Payload"].read() or b"null")
+    assert "FunctionError" not in resp, payload
+    assert payload["status"] == "ok", payload
+    assert "finplan_platform.core.modeling_evidence" in payload["modules"]
+    assert "beta-competition-v1" in payload["experiments"]
+    assert d.param(d.own("api", "forward-runner-function-arn")), "the runner reference is not published"
+    print("forward runner preflight:", json.dumps({k: payload[k] for k in ("agent_parameters_missing", "experiments")}))
+
+
 def test_job_api_contract_envelopes():
     from tests.integration.job_suite import run_contract_checks
 
