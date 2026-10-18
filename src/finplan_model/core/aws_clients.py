@@ -24,7 +24,7 @@ def s3_endpoint(region: str) -> str:
     return f"https://s3.{region}.amazonaws.com"
 
 
-def s3_client(region: str | None = None, *, session: Any = None) -> Any:
+def s3_client(region: str | None = None, *, session: Any = None, config: Any = None) -> Any:
     """An S3 client that signs (and presigns) SigV4 on the regional virtual-hosted endpoint.
 
     ``region`` defaults to the session's region, then ``AWS_REGION`` / ``AWS_DEFAULT_REGION``;
@@ -41,5 +41,5 @@ def s3_client(region: str | None = None, *, session: Any = None) -> Any:
         "s3",
         region_name=region,
         endpoint_url=s3_endpoint(region),
-        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+        config=(config or Config()).merge(Config(signature_version="s3v4", s3={"addressing_style": "virtual"})),
     )

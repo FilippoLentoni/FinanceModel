@@ -312,6 +312,13 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
     action_rows=unreconciled_actions(holdings,source,at,book_created_at=book_inception(backend,book,holdings))
     payload['corporate_action_status']='unreconciled_captured_event' if action_rows else 'no_captured_daily_event; current_quote_event_coverage_separate'
     payload['corporate_action_evidence']=action_rows
+    action_guard=next((row for row in (source.get('execution_reconciliation') or {}).get('approaches',[]) if row.get('approach_id')==approach_id and row.get('unresolved_action_ref')),None)
+    action_ref=book.get('unresolved_action_ref') or (action_guard or {}).get('unresolved_action_ref')
+    if action_ref:
+        original=backend.read_action_blocker(action_ref,experiment_id=experiment,approach_id=approach_id,portfolio_id=book['portfolio_id'],through=at)
+        action_rows=copy.deepcopy(original['payload']['corporate_action_evidence'])
+        payload.update(corporate_action_evidence=action_rows,unresolved_action_ref=original['ref'],
+            original_action_observed_at=original['metadata']['observed_at'],action_evidence_usage='execution_and_valuation_only; original captured evidence, not new model context',corporate_action_status='latched_unreconciled_captured_event')
     # Root current-price adapter returns real unadjusted quotes only for valuation. Never
     # copy these intraday values into frozen daily policy observations or solver history.
     quote_bundle=source.get('current_quotes') or {}

@@ -13,6 +13,7 @@ from botocore.config import Config
 from datetime import datetime
 from finplan_model.core.artifacts import canonical_json_bytes,sha256_checksum
 from finplan_model.core.config import load_config
+from finplan_model.core.aws_clients import s3_client
 from finplan_model.core.context import RunContext
 from finplan_model.core.errors import FinplanError,contract_version
 from finplan_model.datasets.outbound import check_outbound_payload
@@ -99,7 +100,7 @@ def dependency_metadata(kind):
         except Exception as exc:return {'managed_cost_estimate':estimate_metadata,'checked_at':checked,'secret_value_loaded':False,**error(exc)}
     try:
         bucket=session.client('ssm',config=config).get_parameter(Name='/finplan/beta/financemodel/config/research-storage-ref')['Parameter']['Value']
-        client=session.client('s3',config=config);raw={}
+        client=s3_client('us-east-2',session=session,config=config);raw={}
         for name in ('STAGED.json','MANIFEST.sha256'):
             body=client.get_object(Bucket=bucket,Key=PREFIX+name)['Body'].read(524289)
             if len(body)>524288:raise ValueError('staging metadata exceeds bound')

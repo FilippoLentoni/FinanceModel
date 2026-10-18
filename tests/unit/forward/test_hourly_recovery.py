@@ -36,7 +36,7 @@ class FakeEvidence:
     def finish_run(self,rid,outcome,at):self.records['research_run',rid].update(status=outcome['status'],outcome=copy.deepcopy(outcome),finished_at=at)
     def read_run(self,rid):return copy.deepcopy(self.records['research_run',rid])
     def record_observation(self,experiment,aid,slot,pid,payload,at,kind='valuation'):
-        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'kind':kind,'run_id':payload.get('run_id'),'input_id':payload.get('input_id'),'payload':copy.deepcopy(payload)}
+        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'kind':kind,'run_id':payload.get('run_id'),'input_id':payload.get('input_id'),'payload':copy.deepcopy(payload),'checksum':sha256_checksum(canonical_json_bytes(payload))}
         self.records.setdefault(('portfolio_observation',oid),doc);return doc
     def query_day(self,experiment,day,kind='runs',page_size=100,next_token=None):
         table={'runs':'research_run','observations':'portfolio_observation','inputs':'research_input'}[kind]
@@ -46,13 +46,30 @@ class FakeEvidence:
         rows=[self.read_run_header(rid) for (kind,rid),doc in self.records.items() if kind=='research_run' and doc['experiment_id']==experiment and doc['approach_id']==aid and doc['slot']<before_slot]
         rows.sort(key=lambda r:r['slot'],reverse=True);offset=int(next_token or 0)
         return rows[offset:offset+page_size],str(offset+page_size) if offset+page_size<len(rows) else None
-    def read_execution_frontier(self,rid):return copy.deepcopy(self.records['research_run',rid].get('_frontier'))
-    def record_execution_frontier(self,rid,pending_run_id,at,previous_frontier_run_id=None):
-        row=self.records['research_run',rid];proof={'pending_run_id':pending_run_id,'covered_through_slot':row['slot']}
-        row.update(execution_frontier_ref={'checksum':'controlled'},_frontier=proof);return proof
+    def read_execution_frontier(self,rid):
+        row=self.records['research_run',rid];proof=copy.deepcopy(row.get('_frontier'))
+        if proof is not None and self.books[row['portfolio_id']].get('unresolved_action_ref'):proof['unresolved_action_ref']=self.books[row['portfolio_id']]['unresolved_action_ref']
+        return proof
+    def record_execution_frontier(self,rid,pending_run_id,at,previous_frontier_run_id=None,unresolved_action_ref=None):
+        row=self.records['research_run',rid]
+        if unresolved_action_ref:self.latch_action_blocker(rid,unresolved_action_ref,at)
+        if row.get('_frontier'):return self.read_execution_frontier(rid)
+        prior=self.read_execution_frontier(previous_frontier_run_id) if previous_frontier_run_id else None
+        sticky=self.books[row['portfolio_id']].get('unresolved_action_ref') or (prior or {}).get('unresolved_action_ref')
+        proof={'pending_run_id':pending_run_id,'covered_through_slot':row['slot'],'unresolved_action_ref':sticky}
+        row.update(execution_frontier_ref={'checksum':'controlled'},_frontier=proof);return self.read_execution_frontier(rid)
     def mark_execution_superseded(self,rid,replacement,at):
         self.records['research_run',rid].update(status='superseded',execution_disposition_ref={'replacement_run_id':replacement})
         return {'status':'superseded','replacement_run_id':replacement}
+    def latch_action_blocker(self,rid,ref,at):
+        row=self.records['research_run',rid];book=self.books[row['portfolio_id']]
+        book.setdefault('unresolved_action_ref',ref)
+        return self.read_action_blocker(book['unresolved_action_ref'],experiment_id=row['experiment_id'],approach_id=row['approach_id'],portfolio_id=row['portfolio_id'],through=at)
+    def read_action_blocker(self,ref,*,experiment_id,approach_id,portfolio_id,through):
+        doc=copy.deepcopy(self.records['portfolio_observation',ref['observation_id']]);payload=doc['payload']
+        assert doc['checksum']==ref['checksum'] and doc['experiment_id']==experiment_id and doc['approach_id']==approach_id and doc['portfolio_id']==portfolio_id
+        assert payload['status']=='PENDING_ACTION_DATA' and payload['corporate_action_evidence']
+        return {'ref':ref,'metadata':doc,'payload':payload}
     def query_pending_forecasts(self,*args,**kwargs):return [],None
 
 

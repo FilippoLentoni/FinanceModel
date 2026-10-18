@@ -15,3 +15,4 @@
 - [ ] Exercise approved managed Jev/Qwen current-book inference and exact response bridge; historical pilot output cannot substitute
 - [x] Block execution and fresh valuation consistently on captured unresolved corporate actions, including older daily events hidden from the current quote window
 - [ ] Implement authoritative dividend/split entitlements, share/cash adjustments and immutable reconciliation receipts before claiming affected-event return coverage
+- [x] Preserve original unresolved-action evidence with a permanent book latch across source rollover, policy supersession, late frontier observations and cleanup failures; keep model-consumed context unchanged

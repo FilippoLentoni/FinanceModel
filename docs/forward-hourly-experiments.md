@@ -211,3 +211,12 @@ position acquisition metadata, when available, or immutable book creation bounds
 can exclude demonstrably older events; otherwise the guard is conservative.
 Actual dividend cash entitlements, split share adjustments and their immutable
 ledger receipts remain unimplemented coverage, rather than fabricated returns.
+
+An unresolved captured action is permanently latched on the isolated book using
+its original immutable execution-attempt observation and checksum. The latch is
+written before cleanup or execution and survives failed cleanup, source-window
+rollover, policy supersession and a late action after an existing frontier proof.
+New pending valuation evidence retains the original content and observation time;
+it is execution/valuation evidence, not additional model-consumed context. Only
+real future action accounting may justify resolving the entitlement; the current
+implementation cannot clear this safety latch or fabricate adjustments.

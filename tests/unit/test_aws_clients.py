@@ -61,3 +61,13 @@ def test_no_code_builds_a_default_s3_client() -> None:
             if _DEFAULT_S3.search(p.read_text(encoding="utf-8")):
                 offenders.append(str(p.relative_to(ROOT)))
     assert offenders == [], f"use finplan_model.core.aws_clients.s3_client(): {offenders}"
+
+
+def test_bounded_client_config_preserves_required_s3_signing_and_endpoint():
+    from botocore.config import Config
+    client=s3_client('us-east-2',config=Config(connect_timeout=5,read_timeout=10,retries={'max_attempts':1},signature_version='s3',s3={'addressing_style':'path'}))
+    assert client.meta.endpoint_url==s3_endpoint('us-east-2')
+    assert client.meta.config.signature_version=='s3v4'
+    assert client.meta.config.s3['addressing_style']=='virtual'
+    assert client.meta.config.connect_timeout==5 and client.meta.config.read_timeout==10
+    assert client.meta.config.retries['total_max_attempts']==2

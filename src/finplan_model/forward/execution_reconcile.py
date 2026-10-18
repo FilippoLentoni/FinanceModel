@@ -8,6 +8,7 @@ from __future__ import annotations
 import socket,os,json
 from datetime import UTC,datetime,timedelta
 from .research import stamp
+from .corporate_actions import book_inception
 
 POLICIES=frozenset(('succeeded','hold','reused','pending_execution'))
 
@@ -23,11 +24,24 @@ def _attempt(backend,experiment,aid,slot,run,at,reason,status='execution_pending
         # Preserve the original attempted quote/cutoff on same-slot retry.
         original=json.loads(backend.read_artifact_bytes(existing.doc)) if 'payload' not in existing.doc else existing.doc['payload']
         if original.get('run_id')!=run['run_id']:raise ValueError('existing execution attempt belongs to a different original policy')
-        return
-    backend.record_observation(experiment,aid,slot,run['portfolio_id'],{
+        return existing.doc
+    return backend.record_observation(experiment,aid,slot,run['portfolio_id'],{
         'run_id':run['run_id'],'status':status,'reason':reason,'actual_fills':[],
         'corporate_action_evidence':evidence or [],
         'observed_at':at,'value':None,'observation_kind':'pending','quote_status':'missing'},at,kind='execution_attempt')
+
+
+def _capture_action_guard(backend,experiment,aid,source,at,anchor):
+    """Latch known book evidence before unrelated recovery/artifact work can fail."""
+    book=backend.get_portfolio(anchor['portfolio_id'])
+    reference=book.get('unresolved_action_ref')
+    if reference:return backend.read_action_blocker(reference,experiment_id=experiment,approach_id=aid,portfolio_id=anchor['portfolio_id'],through=at)
+    from .corporate_actions import unreconciled_actions,book_inception
+    actions=unreconciled_actions(book['paper_state'],source,at,book_created_at=book_inception(backend,book,book['paper_state']))
+    if not actions:return None
+    receipt=_attempt(backend,experiment,aid,at,anchor,at,'pending_corporate_action_reconciliation','PENDING_ACTION_DATA',actions)
+    reference={'observation_id':receipt['observation_id'],'checksum':receipt['checksum']}
+    return backend.latch_action_blocker(anchor['run_id'],reference,stamp())
 
 
 def recover_expired_run(backend,header,at):
@@ -65,14 +79,18 @@ def reconcile_executions(backend,experiment,source,at,slot,comparison_policy,*,a
     summaries=[];failures=[];incomplete=[]
     for aid in approach_ids:
         try:
-            headers=[];cursor=None;prior_frontier=None;inherited_pending=None;complete=False
+            headers=[];cursor=None;prior_frontier=None;inherited_pending=None;inherited_action=None;complete=False;action_blocker=None;guard_initialized=False;anchor=None
             for _ in range(max_pages):
                 page,cursor=backend.query_run_headers(experiment,aid,slot,page_size=8 if not headers else 100,next_token=cursor)
+                if page and not guard_initialized:
+                    anchor=backend.read_run_header(page[0]['run_id'])
+                    action_blocker=_capture_action_guard(backend,experiment,aid,source,at,anchor)
+                    guard_initialized=True
                 for header in page:
                     headers.append(header)
                     if header.get('execution_frontier_ref'):
                         proof=backend.read_execution_frontier(header['run_id'])
-                        prior_frontier=header['run_id'];inherited_pending=proof.get('pending_run_id');complete=True;break
+                        prior_frontier=header['run_id'];inherited_pending=proof.get('pending_run_id');inherited_action=proof.get('unresolved_action_ref');complete=True;break
                 if complete or not cursor:
                     complete=True;break
             if not complete:
@@ -87,6 +105,12 @@ def reconcile_executions(backend,experiment,source,at,slot,comparison_policy,*,a
             if not headers:continue
             if inherited_pending and inherited_pending not in {h['run_id'] for h in headers}:
                 headers.append(backend.read_run_header(inherited_pending))
+            if not guard_initialized:
+                anchor=backend.read_run_header(headers[0]['run_id'])
+                action_blocker=_capture_action_guard(backend,experiment,aid,source,at,anchor)
+            if not action_blocker and inherited_action:
+                action_blocker=backend.read_action_blocker(inherited_action,experiment_id=experiment,approach_id=aid,portfolio_id=anchor['portfolio_id'],through=at)
+            inherited_action=action_blocker['ref'] if action_blocker else inherited_action
             # Strong leases can change independently of the GSI. Recover expired
             # attempts before a frontier can certify no orphaned running heads.
             active=[]
@@ -114,7 +138,8 @@ def reconcile_executions(backend,experiment,source,at,slot,comparison_policy,*,a
                 selected=candidate;break
             if active:
                 incomplete.extend({'approach_id':aid,**row} for row in active)
-                summaries.append({'approach_id':aid,'status':'incomplete_running_lease'});continue
+                guard_summary={'action_status':'PENDING_ACTION_DATA','unresolved_action_ref':action_blocker['ref'],'corporate_action_evidence':action_blocker['payload']['corporate_action_evidence'],'original_action_observed_at':action_blocker['metadata']['observed_at'],'action_evidence_usage':'execution_and_valuation_only; not model-consumed context'} if action_blocker else {}
+                summaries.append({'approach_id':aid,**guard_summary,'status':'incomplete_running_lease'});continue
             # Oldest-first is essential: after a crash, no newer disposition may
             # imply an older unresolved policy was already closed.
             if selected:
@@ -125,30 +150,31 @@ def reconcile_executions(backend,experiment,source,at,slot,comparison_policy,*,a
                         refreshed=backend.read_run_header(header['run_id'])
                         if refreshed['status'] not in ('applied','no_op','superseded','execution_excluded'):raise
                 book=backend.get_portfolio(selected['portfolio_id'])
-                if not allow_execution:
+                if action_blocker:
+                    pass  # Permanent action guard remains even when original policy is superseded.
+                elif not allow_execution:
                     pass  # Late retry repairs bookkeeping only, never fills after inputs froze.
                 elif book['revision']!=selected['portfolio_revision']:
                     _attempt(backend,experiment,aid,slot,selected,at,'captured_portfolio_revision_changed; no policy rebase or fill')
                 else:
-                    from .corporate_actions import unreconciled_actions,book_inception
-                    action_rows=unreconciled_actions(book['paper_state'],source,at,book_created_at=book_inception(backend,book,book['paper_state']))
-                    if action_rows:
-                        _attempt(backend,experiment,aid,slot,selected,at,'pending_corporate_action_reconciliation','PENDING_ACTION_DATA',action_rows)
-                    else:
-                        opportunity=(_parse(slot)+timedelta(minutes=5)).isoformat().replace('+00:00','Z')
-                        result=apply(selected['outcome'],book['paper_state'],source.get('current_quotes',{}),
-                            decision_at=selected.get('finished_at',selected['started_at']),opportunity_at=opportunity,recorded_at=at,
-                            config=config,universe=source['investable_universe'],execution_calendar=comparison_policy.get('market_calendar','XNYS'),
-                            quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
-                            max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120),book_created_at=book_inception(backend,book,book['paper_state']))
-                        if result['status'] in ('applied','no_op'):
-                            backend.commit_paper_step(selected['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
-                        else:_attempt(backend,experiment,aid,slot,selected,at,result.get('reason','eligible_execution_price_unavailable'))
+                    opportunity=(_parse(slot)+timedelta(minutes=5)).isoformat().replace('+00:00','Z')
+                    result=apply(selected['outcome'],book['paper_state'],source.get('current_quotes',{}),
+                        decision_at=selected.get('finished_at',selected['started_at']),opportunity_at=opportunity,recorded_at=at,
+                        config=config,universe=source['investable_universe'],execution_calendar=comparison_policy.get('market_calendar','XNYS'),
+                        quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
+                        max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120),book_created_at=book_inception(backend,book,book['paper_state']))
+                    if result['status'] in ('applied','no_op'):
+                        backend.commit_paper_step(selected['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
+                    else:_attempt(backend,experiment,aid,slot,selected,at,result.get('reason','eligible_execution_price_unavailable'))
                 latest=backend.read_run_header(selected['run_id'])
                 pending_id=selected['run_id'] if latest['status'] in POLICIES and not latest.get('execution_ref') and not latest.get('execution_disposition_ref') else None
             else:pending_id=None
-            frontier=backend.record_execution_frontier(headers[0]['run_id'],pending_id,stamp(),previous_frontier_run_id=prior_frontier)
-            summaries.append({'approach_id':aid,'status':'execution_frontier_verified','pending_run_id':frontier.get('pending_run_id'),
+            frontier=backend.record_execution_frontier(headers[0]['run_id'],pending_id,stamp(),previous_frontier_run_id=prior_frontier,unresolved_action_ref=inherited_action)
+            action_summary={}
+            if frontier.get('unresolved_action_ref'):
+                action_blocker=backend.read_action_blocker(frontier['unresolved_action_ref'],experiment_id=experiment,approach_id=aid,portfolio_id=anchor['portfolio_id'],through=at)
+                action_summary={'action_status':'PENDING_ACTION_DATA','unresolved_action_ref':action_blocker['ref'],'original_action_observed_at':action_blocker['metadata']['observed_at'],'corporate_action_evidence':action_blocker['payload']['corporate_action_evidence'],'action_evidence_usage':'execution_and_valuation_only; not model-consumed context'}
+            summaries.append({'approach_id':aid,**action_summary,'status':'execution_frontier_verified','pending_run_id':frontier.get('pending_run_id'),
                               'frontier_run_id':headers[0]['run_id'],'queried_headers':len(headers)})
         except Exception as exc:
             failures.append({'approach_id':aid,'error_type':type(exc).__name__,'reason':str(exc)})
