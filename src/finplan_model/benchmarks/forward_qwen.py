@@ -160,7 +160,6 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             raise FinplanError.precondition('Qwen forward runtime bound exceeded',reason='qwen_usage_cap')
     def capture(role,messages,index):
         nonlocal uncertain_existing
-        eligible()
         body={'protocol':PROTOCOL,'kind':'role_input','managed_run_id':inp.spec['run_id'],
             'binding_checksum':checksum(binding),'role':role,'call_index':index,'messages':copy.deepcopy(messages),
             'messages_checksum':checksum(messages),'model_id':MODEL_ID,'revision':REVISION,
@@ -181,6 +180,7 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             recovered.append(index)
         except FinplanError as exc:
             if exc.code!='NOT_FOUND':raise
+            eligible()
             import uuid
             body.update(captured_at=inp.ctx.now_ts(),attempt_token=uuid.uuid4().hex)
             if not store.create_once(canonical_json_bytes(body),kind='run_artifact',artifact_id=aid):
@@ -246,7 +246,7 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             if isinstance(exc,FinplanError):raise
             raise FinplanError.precondition('Qwen original role response could not be sealed',reason='qwen_role_response_unavailable') from exc
     try:
-        eligible();source=source_from_snapshot(inp.snapshot,inp.market,binding)
+        source=source_from_snapshot(inp.snapshot,inp.market,binding)
         view,holdings=prepare_native(binding,source)
         strategy=QwenSwarm(invoke,run_id=inp.spec['run_id'],max_decisions=1,max_calls=7,input_capture=capture_checked,response_capture=response_checked)
         result=strategy.decide(view,holdings)
@@ -256,7 +256,7 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             'forecast':{'available':False,'status':'not_available','reason':'native allocation is not a forecast'}},binding['source']['investable_universe'],binding['holdings'])
         output={'protocol':PROTOCOL,'kind':'forward_result','managed_run_id':inp.spec['run_id'],
             'binding_checksum':checksum(binding),'request_checksum':binding['request_checksum'],'policy':policy,
-            'role_receipts':roles,'backend_ready_ref':backend_ready_ref.to_dict() if backend_ready_ref else None,'issued_at':inp.ctx.now_ts(),'ledger_updated':False,'model_id':MODEL_ID,'revision':REVISION,
+            'role_receipts':roles,'backend_ready_ref':backend_ready_ref.to_dict() if backend_ready_ref else None,'issued_at':inp.ctx.now_ts(),'signal_formed_at':store.get_json(roles[-1]['response_ref'])['received_at'],'ledger_updated':False,'model_id':MODEL_ID,'revision':REVISION,
             'approval':approval,'worker_image_digest':inp.ctx.image_digest,'worker_source_commit':descriptor['worker_source_commit'],'worker_code_checksum':descriptor['worker_code_checksum'],
             'usage':{'calls':len(roles),'new_calls_this_attempt':calls,'recovered_role_indices':recovered,
                 'model_output_tokens':sum(store.get_json(r['response_ref'])['model_output_tokens'] for r in roles) if all(type(store.get_json(r['response_ref']).get('model_output_tokens')) is int for r in roles) else None,

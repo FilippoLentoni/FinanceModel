@@ -43,6 +43,13 @@ class ApprovedForwardReader:
         descriptor = run.get('forward_jev') or {}
         if descriptor.get('binding_ref') != index['binding_ref'] or descriptor.get('binding_checksum') != checksum(binding) or run['input_snapshot_id'] != binding['source']['input_snapshot_id']:
             raise ValueError('managed run binding mismatch')
+        if run['state'] in ('succeeded', 'failed', 'cancelled', 'timed_out'):
+            platform_available_at = run.get('completed_at')
+            if not platform_available_at:
+                return {'status': 'managed_terminal_availability_missing', 'managed_run_id': rid}
+            if instant(platform_available_at) > instant(cutoff):
+                return {'status': 'managed_result_not_yet_platform_available', 'managed_run_id': rid,
+                    'platform_available_at': platform_available_at}
         if run['state'] != 'succeeded':
             return {'status': 'managed_' + run['state'], 'managed_run_id': rid, 'approval_required': True}
         approval = run.get('approval') or {}
@@ -58,10 +65,9 @@ class ApprovedForwardReader:
         output = self.artifacts.get_json(ref)
         if output.get('protocol') != PROTOCOL or output.get('kind') != 'forward_result' or output.get('binding_checksum') != checksum(binding) or output.get('managed_run_id') != rid or output.get('request_checksum') != binding['request_checksum'] or output.get('ledger_updated') is not False:
             raise ValueError('managed forward output binding invalid')
+        if instant(output['issued_at']) > instant(platform_available_at):raise ValueError('managed terminal receipt predates original output')
         if instant(output['issued_at']) > instant(cutoff):
             raise ValueError('managed response unavailable at current decision cutoff')
-        if instant(cutoff) >= instant(output['issued_at']) + timedelta(days=1):
-            return {'status': 'native_daily_signal_expired', 'managed_run_id': rid}
         if output['response_journal_ref'].get('artifact_id') != journal_id(binding, 'response') or output['invocation_claim_ref'].get('artifact_id') != journal_id(binding, 'claim'):
             raise ValueError('managed output does not point to original permanent invocation journal')
         claim = self.artifacts.get_json(output['invocation_claim_ref'])
@@ -75,9 +81,16 @@ class ApprovedForwardReader:
             raise ValueError('managed invocation boundary receipt mismatch')
         if not (instant(approval['approved_at']) <= instant(input_receipt['captured_at']) <= instant(claim['claimed_at']) <= instant(response_journal['received_at']) <= instant(output['issued_at'])):
             raise ValueError('managed invocation timestamps invalid')
+        signal_formed_at = response_journal['received_at']
+        if output.get('signal_formed_at', signal_formed_at) != signal_formed_at:
+            raise ValueError('managed original signal formation timestamp differs')
+        if instant(cutoff) >= instant(signal_formed_at) + timedelta(days=1):
+            return {'status': 'native_daily_signal_expired', 'managed_run_id': rid,
+                'signal_formed_at': signal_formed_at, 'platform_available_at': platform_available_at}
         return {'status': 'approved_exact_result', 'managed_run_id': rid, 'binding': binding,
             'binding_ref': index['binding_ref'], 'result_ref': ref, 'output': output,
             'invocation_input': input_receipt, 'response_journal': response_journal,
+            'signal_formed_at': signal_formed_at, 'platform_available_at': platform_available_at,
             'approval': copy.deepcopy(approval),
             'managed_cost_event': copy.deepcopy(run['forward_cost_event'])}
 
@@ -126,7 +139,7 @@ def adapter(experiment, *, reader_factory=ApprovedForwardReader.from_ec2, depend
             'original_worker_run_id': lookup['managed_run_id'], 'original_worker_input_ref': output['invocation_input_ref'],
             'original_model_availability_cutoff': origin['availability_cutoff'],
             'managed_run_id': lookup['managed_run_id'], 'managed_binding_ref': lookup['binding_ref'],
-            'managed_result_ref': lookup['result_ref'], 'model_issued_at': output['issued_at'],
+            'managed_result_ref': lookup['result_ref'], 'model_issued_at': output['issued_at'], 'signal_formed_at':lookup['signal_formed_at'], 'platform_available_at':lookup['platform_available_at'],
             'actual_returned_model': output['public_response']['model'], 'approval': lookup['approval'],
             'reuse_policy': 'same exact approved snapshot/public request/private preprocessing/book revision; <=24h native signal age; no new provider call'})
         from finplan_model.benchmarks.forward_jev import prepare_native, _ReplayClient
@@ -139,7 +152,7 @@ def adapter(experiment, *, reader_factory=ApprovedForwardReader.from_ec2, depend
         if dict(replay.weights) != expected['weights'] or replay.cash != expected['cash'] or replay.solution_status != expected['solution_status']:
             raise ValueError('approved native response/policy sizing mismatch')
         return {**copy.deepcopy(expected), 'status': 'reused', 'managed_run_id': lookup['managed_run_id'],
-            'signal_origin_run_id': lookup['managed_run_id'], 'proposal_origin_run_id': origin['origin_run_id'], 'signal_issued_at': output['issued_at'],
+            'signal_origin_run_id': lookup['managed_run_id'], 'proposal_origin_run_id': origin['origin_run_id'], 'signal_issued_at': output['issued_at'], 'signal_formed_at':lookup['signal_formed_at'], 'platform_available_at':lookup['platform_available_at'],
             'returned_model': output['public_response']['model'], 'model_invocation_this_slot': False,
             'model_cost': 0., 'model_cost_basis': 'observed no new vendor/managed invocation; original managed event counted separately; local EC2 allocation unpriced',
             'managed_cost_event': copy.deepcopy(lookup['managed_cost_event']),

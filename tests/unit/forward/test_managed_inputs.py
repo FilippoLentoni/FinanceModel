@@ -30,11 +30,12 @@ def test_original_immutable_worker_bytes_independent_of_new_context_and_actual_d
         raw=base64.b64decode(artifact['raw_base64']);assert raw==inp.artifacts.get(artifact['ref'])
     assert payload['worker_code_checksum']==inp.offline_code_checksum
     tasks=[json.loads(p.read_bytes()) for p in tmp_path.glob('*.json')]
-    assert len(tasks)==2 and all(t['reporting_day']=='2026-07-11' for t in tasks)
-    assert {t['event_id'] for t in tasks}=={event['event_id'],'managed_inputs:'+event['managed_run_id']}
+    assert len(tasks)==(2 if failed else 3)
+    assert all(t['reporting_day']=='2026-07-11' for t in tasks if not t['event_id'].startswith('managed_inputs_issue:'))
+    assert {t['event_id'] for t in tasks}=={event['event_id'],'managed_inputs:'+event['managed_run_id']} | (set() if failed else {'managed_inputs_issue:'+event['managed_run_id']})
     assert reader.runs.acks and result['imported'][0]['inference_evidence_ref']['checksum']==receipt['checksum']
     original=copy.deepcopy(backend.writes);import_pending(backend,reader,event['experiment_id'],at='2026-07-14T01:00:00Z',refresh_dir=tmp_path)
-    assert backend.writes==original and len(tasks)==2
+    assert backend.writes==original and len(tasks)==(2 if failed else 3)
 
 
 def test_transient_original_read_failure_never_acknowledges_or_regenerates(tmp_path,monkeypatch):
@@ -102,3 +103,33 @@ def test_typed_qwen_role_reference_must_match_role_index_and_original_input():
     new=inp.artifacts.put_json(body,kind='run_artifact')
     event['source_evidence_refs']=[new.to_dict() if row==ref else row for row in event['source_evidence_refs']]
     with pytest.raises(ValueError,match='role content'):captured_event(event,reader)
+
+
+def test_ny_midnight_issue_link_preserves_original_bytes_cost_day_and_retries_before_ack(tmp_path):
+    f,inp,event,reader=setup(at='2026-07-11T04:01:00Z')
+    backend=Backend();reader.runs.fail_ack=True
+    with pytest.raises(RuntimeError):import_pending(backend,reader,event['experiment_id'],at='2026-07-12T00:00:00Z',refresh_dir=tmp_path)
+    assert not reader.runs.acks and len(backend.writes)==3
+    link=next(row for row in backend.writes if row['kind'].startswith('managed_inference_issue_link:'))
+    cost=next(row for row in backend.writes if row['kind'].startswith('managed_model_cost:'))
+    originals=next(row for row in backend.writes if row['kind'].startswith('managed_inference_evidence:'))
+    body=link['payload']
+    assert body['protocol']=='finplan-managed-inference-issue-link/1'
+    assert body['cost_receipt']=={'observation_id':cost['observation_id'],'checksum':cost['checksum']}
+    assert body['inference_receipt']=={'observation_id':originals['observation_id'],'checksum':originals['checksum']}
+    assert body['terminal_occurred_at']==event['occurred_at'] and body['issued_at']==link['slot']
+    assert 'artifacts' not in body and backend.read_artifact_bytes(cost)==canonical_json_bytes(event)
+    tasks=[json.loads(path.read_bytes()) for path in tmp_path.glob('*.json')]
+    assert {t['reporting_day'] for t in tasks}=={'2026-07-10','2026-07-11'}
+    assert next(t for t in tasks if t['event_id']==body['event_id'])['reporting_day']=='2026-07-10'
+    old=copy.deepcopy(backend.writes);reader.runs.fail_ack=False
+    result=import_pending(backend,reader,event['experiment_id'],at='2026-07-13T00:00:00Z',refresh_dir=tmp_path)
+    assert backend.writes==old and result['affected_reporting_days']==['2026-07-10','2026-07-11'] and reader.runs.acks
+
+
+def test_qwen_success_missing_backend_ready_is_never_complete():
+    f,inp,event,reader=setup();doc=reader.runs.get_run(event['managed_run_id'])['result']
+    ref=doc['payload']['forward_qwen']['result_ref'];body=inp.artifacts.get_json(ref);body.pop('backend_ready_ref')
+    new=inp.artifacts.put_json(body,kind='run_artifact')
+    event['source_evidence_refs']=[new.to_dict() if row==ref else row for row in event['source_evidence_refs']]
+    with pytest.raises(ValueError,match='backend readiness absent'):captured_event(event,reader)

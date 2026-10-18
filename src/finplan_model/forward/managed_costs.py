@@ -1,5 +1,6 @@
 """Ancillary cost outbox import. Model runs/artifacts remain authoritative; no ledger copy."""
 from __future__ import annotations
+import base64
 import json
 import os
 from datetime import UTC,datetime
@@ -75,6 +76,42 @@ def import_pending(backend,reader,experiment,*,at,max_events=100,refresh_dir=Non
             'reporting_day':day,'event_id':event['event_id'],'observation_id':ref['observation_id'],'checksum':ref['checksum']})
         enqueue(directory,{'protocol':'finplan-report-refresh/1','experiment_id':experiment,
             'reporting_day':day,'event_id':input_payload['event_id'],'observation_id':input_ref['observation_id'],'checksum':input_ref['checksum']})
+        # A genuine worker policy may be issued before NY midnight and become
+        # terminal later. Link the original two receipts into its issue-day query;
+        # do not copy bytes, retime costs or create another trading opportunity.
+        outputs=[]
+        for artifact in input_payload['artifacts']:
+            original=json.loads(base64.b64decode(artifact['raw_base64']))
+            if original.get('kind')=='forward_result':outputs.append(original)
+        if len(outputs)>1:raise ValueError('managed worker has ambiguous policy issue receipts')
+        if outputs:
+            issued=outputs[0]['issued_at']
+            issued_instant=datetime.fromisoformat(issued.replace('Z','+00:00'))
+            if issued_instant.tzinfo is None:raise ValueError('managed policy issue time lacks timezone')
+            if issued_instant>datetime.fromisoformat(slot.replace('Z','+00:00')):raise ValueError('managed terminal cost precedes actual policy issue time')
+            issue_day=issued_instant.astimezone(ZoneInfo('America/New_York')).date().isoformat()
+            if issue_day!=day:
+                issue_slot=issued_instant.astimezone(UTC).isoformat().replace('+00:00','Z')
+                issue_kind='managed_inference_issue_link:'+event['managed_run_id']
+                issue_payload={'protocol':'finplan-managed-inference-issue-link/1',
+                    'event_id':'managed_inputs_issue:'+event['managed_run_id'],
+                    'managed_run_id':event['managed_run_id'],'issued_at':issued,
+                    'terminal_occurred_at':event['occurred_at'],'experiment_id':experiment,
+                    'approach_id':event['approach_id'],'portfolio_id':event['portfolio_id'],
+                    'inference_receipt':input_ref,'cost_receipt':ref}
+                issue_id='mo_'+sha256_checksum(canonical_json_bytes([experiment,event['approach_id'],issue_slot,issue_kind])).split(':')[1]
+                old_issue=backend.repo.get('portfolio_observation',issue_id)
+                if old_issue:
+                    issue_receipt=old_issue.doc
+                    if any(issue_receipt.get(key)!=value for key,value in {'experiment_id':experiment,'approach_id':event['approach_id'],'portfolio_id':event['portfolio_id'],'kind':issue_kind,'slot':issue_slot}.items()) or backend.read_artifact_bytes(issue_receipt)!=canonical_json_bytes(issue_payload):
+                        raise ValueError('existing managed policy issue link conflicts')
+                else:
+                    issue_receipt=backend.record_observation(experiment,event['approach_id'],issue_slot,event['portfolio_id'],issue_payload,at,kind=issue_kind)
+                if issue_receipt['checksum']!=checksum(issue_payload) or backend.read_artifact_bytes(issue_receipt)!=canonical_json_bytes(issue_payload):raise ValueError('managed policy issue link readback mismatch')
+                enqueue(directory,{'protocol':'finplan-report-refresh/1','experiment_id':experiment,
+                    'reporting_day':issue_day,'event_id':issue_payload['event_id'],
+                    'observation_id':issue_receipt['observation_id'],'checksum':issue_receipt['checksum']})
+                days.append(issue_day)
         reader.runs.ack_forward_cost_event(experiment,event['event_id'],ref,at)
         imported.append({'event_id':event['event_id'],'observation_ref':ref,'inference_evidence_ref':input_ref})
         day=datetime.fromisoformat(slot.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat()

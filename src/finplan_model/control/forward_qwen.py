@@ -67,6 +67,11 @@ def predecessor(service,binding):
         section=(prior.get('result') or {}).get('payload',{}).get('forward_qwen',{})
         output=service.d.artifacts.get_json(section['result_ref'])
         if output.get('protocol')!=PROTOCOL or output.get('managed_run_id')!=prior['run_id'] or output.get('binding_checksum')!=checksum(old):raise ValueError('Qwen predecessor output mismatch')
-        if service.now()>=instant(output['issued_at'])+timedelta(days=1):return head['managed_run_id']
+        roles=output.get('role_receipts') or []
+        if not roles:raise ValueError('Qwen predecessor original response receipts absent')
+        responses=[service.d.artifacts.get_json(role['response_ref']) for role in roles]
+        if any(response.get('managed_run_id')!=prior['run_id'] or response.get('binding_checksum')!=checksum(old) for response in responses):raise ValueError('Qwen predecessor original response binding differs')
+        signal_formed_at=max(instant(response['received_at']) for response in responses)
+        if service.now()>=signal_formed_at+timedelta(days=1):return head['managed_run_id']
         raise FinplanError.precondition('approved Qwen native daily signal still available',reason='forward_native_signal_available')
     raise FinplanError.precondition('prior offline GPU outcome indeterminate; no automatic relaunch',reason='forward_context_indeterminate')

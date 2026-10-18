@@ -302,6 +302,7 @@ def run_forward(inp, *, client_factory=None, context_reader=None):
             'binding_ref': descriptor['binding_ref'], 'invocation_input_ref': before_ref.to_dict(),
             'request_checksum': binding['request_checksum'], 'public_response': response,
             'policy': output, 'usage': actual_usage(), 'issued_at': saved['received_at'] if recovered else inp.ctx.now_ts(),
+            'signal_formed_at': inp.artifacts.get_json(response_ref)['received_at'],
             'response_journal_ref': response_ref.to_dict(), 'invocation_claim_ref': claim_ref.to_dict(), 'recovered_without_provider_call': recovered,
             'ledger_updated': False, 'execution_policy': 'only later eligible hourly opportunity; no retrospective fill'},
             kind='run_artifact', domain='finance', synthetic=inp.ctx.synthetic)

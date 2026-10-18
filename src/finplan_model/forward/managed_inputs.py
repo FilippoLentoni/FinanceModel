@@ -50,6 +50,7 @@ def captured_event(event,reader):
                     if not isinstance(nested,dict):raise ValueError('managed typed journal reference invalid')
                     if not any(existing==nested for existing in refs):refs.append(nested)
             if payload.get('protocol')=='finplan-qwen-forward/1' and payload.get('kind')=='forward_result':
+                if not isinstance(payload.get('backend_ready_ref'),dict):raise ValueError('managed original Qwen backend readiness absent')
                 roles=payload.get('role_receipts')
                 if not isinstance(roles,list) or not 1<=len(roles)<=7:
                     raise ValueError('managed original Qwen role receipt bound invalid')
@@ -67,6 +68,9 @@ def captured_event(event,reader):
     decoded={artifact['ref']['artifact_id']:json.loads(base64.b64decode(artifact['raw_base64'])) for artifact in artifacts}
     for body in decoded.values():
         if body.get('protocol')=='finplan-qwen-forward/1' and body.get('kind')=='forward_result':
+            ready=decoded[body['backend_ready_ref']['artifact_id']]
+            if ready.get('kind')!='backend_ready' or ready.get('model_id')!=body.get('model_id') or ready.get('revision')!=body.get('revision'):
+                raise ValueError('managed original Qwen backend readiness association differs')
             for role in body['role_receipts']:
                 supplied=decoded[role['input_ref']['artifact_id']];response=decoded[role['response_ref']['artifact_id']]
                 if supplied.get('kind')!='role_input' or response.get('kind')!='role_response' or any(doc.get('role')!=role['role'] or doc.get('call_index')!=role['call_index'] for doc in (supplied,response)) or response.get('input_ref')!=role['input_ref']:

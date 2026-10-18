@@ -29,6 +29,13 @@ class ApprovedForwardReader(JevReader):
         descriptor=run.get('forward_qwen') or {}
         if descriptor.get('binding_ref')!=index['binding_ref'] or descriptor.get('binding_checksum')!=checksum(binding) or run.get('input_snapshot_id')!=binding['source']['input_snapshot_id']:
             raise ValueError('approved Qwen run binding mismatch')
+        if run['state'] in ('succeeded', 'failed', 'cancelled', 'timed_out'):
+            platform_available_at = run.get('completed_at')
+            if not platform_available_at:
+                return {'status': 'managed_terminal_availability_missing', 'managed_run_id': rid}
+            if instant(platform_available_at) > instant(cutoff):
+                return {'status': 'managed_result_not_yet_platform_available', 'managed_run_id': rid,
+                    'platform_available_at': platform_available_at}
         if run['state']!='succeeded':
             state={'status':'managed_'+run['state'],'managed_run_id':rid,'approval_required':True}
             if run['state'] in ('failed','cancelled','timed_out'):
@@ -62,8 +69,8 @@ class ApprovedForwardReader(JevReader):
             'worker_image_digest':descriptor['worker_image_digest'],'worker_source_commit':descriptor['worker_source_commit'],
             'worker_code_checksum':descriptor['worker_code_checksum'],'approval':{'approved_by':approval['approved_by'],'approved_at':approval['approved_at']}}
         if any(output.get(k)!=v for k,v in expected.items()):raise ValueError('Qwen output worker/model/approval mismatch')
+        if instant(output['issued_at']) > instant(platform_available_at):raise ValueError('managed terminal receipt predates original output')
         if instant(output['issued_at'])>instant(cutoff):raise ValueError('Qwen output was unavailable at cutoff')
-        if instant(cutoff)>=instant(output['issued_at'])+timedelta(days=1):return {'status':'native_daily_signal_expired','managed_run_id':rid}
         ready_ref=output.get('backend_ready_ref')
         if ready_ref not in result.get('artifacts',[]) or ready_ref.get('artifact_id')!=journal_id(binding,'backend_ready'):
             raise ValueError('original Qwen backend readiness receipt missing')
@@ -91,8 +98,13 @@ class ApprovedForwardReader(JevReader):
             captured=instant(supplied['captured_at']);received=instant(response['received_at'])
             if not(last<=captured<=received<=instant(output['issued_at'])):raise ValueError('Qwen role availability timestamps invalid')
             last=received;decoded.append({'role':receipt['role'],'call_index':index,'input':supplied,'response':response,'input_ref':receipt['input_ref'],'response_ref':receipt['response_ref']})
+        signal_formed_at=decoded[-1]['response']['received_at']
+        if output.get('signal_formed_at',signal_formed_at)!=signal_formed_at:raise ValueError('Qwen original signal formation timestamp differs')
+        if instant(cutoff)>=instant(signal_formed_at)+timedelta(days=1):
+            return {'status':'native_daily_signal_expired','managed_run_id':rid,'signal_formed_at':signal_formed_at,'platform_available_at':platform_available_at}
         return {'status':'approved_exact_result','binding':binding,'managed_run_id':rid,'binding_ref':descriptor['binding_ref'],
             'result_ref':section['result_ref'],'output':output,'role_evidence':decoded,'approval':copy.deepcopy(approval),
+            'signal_formed_at':signal_formed_at,'platform_available_at':platform_available_at,
             'managed_cost_event':copy.deepcopy(run['forward_cost_event'])}
 
 
@@ -124,10 +136,10 @@ def adapter(experiment,*,reader_factory=ApprovedForwardReader.from_ec2,dependenc
             'prepared_role_messages':[{'role':r['role'],'messages':copy.deepcopy(r['input']['messages']),'supplied_to_model':True,'input_ref':r['input_ref'],'response_ref':r['response_ref']} for r in roles],
             'original_preflight_input_id':origin['origin_input_id'],'original_preflight_run_id':origin['origin_run_id'],
             'original_worker_run_id':lookup['managed_run_id'],'original_model_availability_cutoff':origin['availability_cutoff'],
-            'managed_binding_ref':lookup['binding_ref'],'managed_result_ref':lookup['result_ref'],'model_issued_at':output['issued_at'],
+            'managed_binding_ref':lookup['binding_ref'],'managed_result_ref':lookup['result_ref'],'model_issued_at':output['issued_at'], 'signal_formed_at':lookup['signal_formed_at'], 'platform_available_at':lookup['platform_available_at'],
             'approval':lookup['approval'],'reuse_policy':'same exact approved snapshot/native first-role/private preprocessing/book revision; <=24h native signal; no new model invocation'})
         return {**copy.deepcopy(output['policy']),'status':'reused','managed_run_id':lookup['managed_run_id'],
-            'signal_origin_run_id':lookup['managed_run_id'],'signal_issued_at':output['issued_at'],'model_invocation_this_slot':False,
+            'signal_origin_run_id':lookup['managed_run_id'],'signal_issued_at':output['issued_at'], 'signal_formed_at':lookup['signal_formed_at'], 'platform_available_at':lookup['platform_available_at'],'model_invocation_this_slot':False,
             'model_cost':0.,'model_cost_basis':'observed no new GPU invocation; original managed cost event retained separately',
             'managed_cost_event':lookup['managed_cost_event'],'usage':{'calls':0,'vendor_cost_usd':0.,'original_usage':output['usage']}}
     return invoke

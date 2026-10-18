@@ -7,6 +7,7 @@
 - [x] Controlled injected-backend tests without weights, GPU, vendor or AWS.
 - [x] CAS-frozen precompute manifest/source proof and exact fsynced verified-backend readiness before any role call; stage drift rejected.
 - [x] Independent immutable original managed-input evidence and both durable report tasks before cost acknowledgment, including lost-context/partial-failure coverage.
+- [x] Strong terminal-availability cutoff, original-response signal age and zero-copy issue-day report linkage.
 - [ ] Final full unit/contract, release gates and strict OpenSpec validation.
 - [ ] Beta deployment and paired immutable EC2 activation.
 - [ ] Independently approved pinned weights staging/GPU invocation and real exact-role readback.

@@ -255,7 +255,7 @@ def test_hourly_rejects_unapproved_future_drift_and_malformed_outputs(change):
     else:
         ref=result['payload']['forward_jev']['result_ref'];stored=inp.artifacts.objects[ref['artifact_id']]
         inp.artifacts.objects[ref['artifact_id']]=(stored[0],stored[1].replace(b'"cash":0.88',b'"cash":0.99'))
-    if change in ('holdings','model','old'):
+    if change in ('holdings','model','old','future'):
         assert reader.lookup(context,cutoff)['status']!='approved_exact_result'
     else:
         with pytest.raises((ValueError,FinplanError)):reader.lookup(context,cutoff)
@@ -424,3 +424,17 @@ def test_owned_claim_transport_without_response_is_indeterminate_and_never_retri
     from finplan_model.forward.managed_costs import terminal_cost_event
     old['completed_at']=f.h.clock.now().isoformat()
     assert terminal_cost_event(old)['vendor_observed_usd'] is None
+
+
+def test_reader_rejects_terminal_after_cutoff_even_with_prior_response_and_preserves_original_signal_age():
+    f=fixture();inp,result=completed(f)
+    run=f.h.store.runs[inp.spec['run_id']];run['completed_at']='2026-07-11T00:30:00Z'
+    reader=ApprovedForwardReader(inp.artifacts,f.h.store)
+    context=current_context(f.base,f.source,f.base['holdings'],f.captured['numeric']['prepared'],EXPERIMENT)
+    assert reader.lookup(context,'2026-07-11T00:20:00Z')['status']=='managed_result_not_yet_platform_available'
+    found=reader.lookup(context,'2026-07-11T01:05:00Z')
+    assert found['status']=='approved_exact_result' and found['platform_available_at']==run['completed_at']
+    assert found['signal_formed_at']==found['response_journal']['received_at']
+    assert reader.lookup(context,'2026-07-12T01:05:00Z')['status']=='native_daily_signal_expired'
+    run.pop('completed_at')
+    assert reader.lookup(context,'2026-07-11T01:05:00Z')['status']=='managed_terminal_availability_missing'

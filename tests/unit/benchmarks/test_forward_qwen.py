@@ -73,7 +73,7 @@ class Backend:
 def finish(f,inp,doc):
     run=f.h.run(inp.spec['run_id'])
     f.h.store.update_run({**run,'state':'succeeded','revision':run['revision']+1,'result':doc,
-        'forward_cost_event':{'event_id':'controlled-cost'}},run['revision'],[])
+        'completed_at':f.h.clock.now().isoformat(),'forward_cost_event':{'event_id':'controlled-cost'}},run['revision'],[])
 
 
 def test_dryrun_no_records_or_compute_and_public_forward_rejected():
@@ -349,9 +349,9 @@ def test_dispatch_uses_existing_isolated_gpu_channels_and_changed_code_refuses_c
 
 def test_failed_original_role_input_and_public_outputs_remain_report_inspectable():
     f=fixture();inp=approved(f);doc=run_forward(inp,backend=Backend(f,inp,fail_at=2));run=f.h.run(inp.spec['run_id'])
-    f.h.store.update_run({**run,'state':'failed','revision':run['revision']+1,'result':doc},run['revision'],[])
+    f.h.store.update_run({**run,'state':'failed','completed_at':f.h.clock.now().isoformat(),'revision':run['revision']+1,'result':doc},run['revision'],[])
     reader=ApprovedForwardReader(inp.artifacts,f.h.store);captured=[]
-    outcome=adapter(EXPERIMENT,reader_factory=lambda:reader,dependency_reader=lambda _:{'status':'controlled'})(f.base,f.source,f.base['holdings'],captured.append)
+    outcome=adapter(EXPERIMENT,reader_factory=lambda:reader,dependency_reader=lambda _:{'status':'controlled'})({**f.base,'availability_cutoff':'2026-07-11T00:20:00Z'},f.source,f.base['holdings'],captured.append)
     assert outcome['status']=='unavailable' and captured[0]['model_consumed_inputs'] is False
     original=captured[0]['managed_forward_readback']['original_failed_invocation']
     assert original['status']=='original_partial_evidence' and original['current_slot_invoked'] is False
@@ -363,7 +363,7 @@ def test_failed_original_role_input_and_public_outputs_remain_report_inspectable
 
 def test_hard_loss_missing_offline_output_is_visible_unusable_not_reconstructed():
     f=fixture();inp=approved(f);run=f.h.run(inp.spec['run_id'])
-    f.h.store.update_run({**run,'state':'failed','revision':run['revision']+1,'result':{'artifacts':[]}},run['revision'],[])
+    f.h.store.update_run({**run,'state':'failed','completed_at':f.h.clock.now().isoformat(),'revision':run['revision']+1,'result':{'artifacts':[]}},run['revision'],[])
     reader=ApprovedForwardReader(inp.artifacts,f.h.store);context=current_context(f.base,f.source,f.base['holdings'],f.captured['numeric']['prepared'],EXPERIMENT)
     status=reader.lookup(context,'2026-07-11T00:20:00Z')
     assert status['status']=='managed_failed' and status['original_failed_invocation']['status']=='evidence_unavailable_or_indeterminate'
@@ -457,3 +457,43 @@ def test_resume_original_completed_roles_reuses_backend_ready_and_never_reinvoke
     output=inp.artifacts.get_json(doc['payload']['forward_qwen']['result_ref'])
     assert output['backend_ready_ref']==ready_ref.to_dict() and inp.artifacts.get(ready_ref)==ready_bytes
     assert output['usage']['calls']==5 and output['usage']['new_calls_this_attempt']==3 and output['usage']['recovered_role_indices']==[0,1]
+
+
+def test_reader_uses_strong_terminal_availability_and_original_signal_age():
+    f=fixture();inp=approved(f);doc=run_forward(inp,backend=Backend(f,inp));f.h.clock.advance(minutes=30);finish(f,inp,doc)
+    reader=ApprovedForwardReader(inp.artifacts,f.h.store)
+    context=current_context(f.base,f.source,f.base['holdings'],f.captured['numeric']['prepared'],EXPERIMENT)
+    assert reader.lookup(context,'2026-07-11T00:20:00Z')['status']=='managed_result_not_yet_platform_available'
+    found=reader.lookup(context,'2026-07-11T01:00:00Z')
+    assert found['status']=='approved_exact_result'
+    assert found['signal_formed_at']!=found['platform_available_at']
+    assert reader.lookup(context,'2026-07-12T00:20:00Z')['status']=='native_daily_signal_expired'
+
+
+@pytest.mark.parametrize('recovery_hours',[2,26])
+def test_recover_all_sealed_role_responses_after_expiry_without_loading_backend_or_refreshing_signal(monkeypatch,recovery_hours):
+    f=fixture();inp=approved(f);backend=Backend(f,inp)
+    import finplan_model.benchmarks.forward_qwen as module
+    put=module._put
+    class Crash(BaseException):pass
+    def stop(store,binding,kind,payload):
+        ref=put(store,binding,kind,payload)
+        if kind=='role_4_response':raise Crash()
+        return ref
+    monkeypatch.setattr(module,'_put',stop)
+    with pytest.raises(Crash):run_forward(inp,backend=backend)
+    assert len(backend.seen)==5
+    original=inp.artifacts.get_json(inp.artifacts.resolve(kind='run_artifact',artifact_id=journal_id(f.binding,'role_4_response')))['received_at']
+    f.h.clock.advance(hours=recovery_hours);monkeypatch.setattr(module,'_put',put)
+    monkeypatch.setattr(module,'VllmBackend',lambda *a,**k:pytest.fail('sealed response recovery must not load backend'))
+    doc=run_forward(inp)
+    assert doc['completion_status']=='succeeded'
+    output=inp.artifacts.get_json(doc['payload']['forward_qwen']['result_ref'])
+    assert output['signal_formed_at']==original and output['signal_formed_at']!=output['issued_at']
+    assert output['usage']['new_calls_this_attempt']==0 and output['usage']['calls']==5
+    finish(f,inp,doc)
+    reader=ApprovedForwardReader(inp.artifacts,f.h.store)
+    context=current_context(f.base,f.source,f.base['holdings'],f.captured['numeric']['prepared'],EXPERIMENT)
+    lookup=reader.lookup(context,f.h.clock.now().isoformat())
+    assert lookup['status']==('approved_exact_result' if recovery_hours<24 else 'native_daily_signal_expired')
+    assert lookup['signal_formed_at']==original
