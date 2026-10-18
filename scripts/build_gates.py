@@ -9,6 +9,9 @@ gate                   stage  what
 =====================  =====  ==============================================================
 contracts-pin          pre    ``scripts/check_contracts_pin.py`` (version + wheel SHA-256 + pyproject
                               + uv.lock); ``--env gamma|prod`` refuses the 0.x pin
+platform-pin           pre    ``scripts/check_platform_pin.py``: the vendored FinancialPlanning
+                              ``finplan-platform`` wheel (version + SHA-256 + source commit +
+                              pyproject + uv.lock), the forward runner's ledger package
 config                 pre    every ``config/<env>.json`` and ``config/shared.json`` validates
 leak-scan              pre    ``finplan_contracts.leak_scan`` over the repository: account IDs,
                               ARNs with accounts, bucket names, endpoints, secrets (OWN-03, ENV-08)
@@ -148,6 +151,12 @@ def gate_contracts_pin(ctx: GateContext) -> list[str]:
     from scripts.check_contracts_pin import check
 
     return [f"contracts pin: {p}" for p in check(ctx.root, env=ctx.env)]
+
+
+def gate_platform_pin(ctx: GateContext) -> list[str]:
+    from scripts.check_platform_pin import check
+
+    return [f"platform pin: {p}" for p in check(ctx.root)]
 
 
 def gate_config(ctx: GateContext) -> list[str]:
@@ -413,6 +422,7 @@ def gate_lambda_bundle(ctx: GateContext) -> list[str]:
 Gate = tuple[str, str, Callable[[GateContext], list[str]]]
 GATES: list[Gate] = [
     ("contracts-pin", "pre", gate_contracts_pin),
+    ("platform-pin", "pre", gate_platform_pin),
     ("config", "pre", gate_config),
     ("leak-scan", "pre", gate_leak_scan),
     ("copied-id", "pre", gate_copied_id),

@@ -50,7 +50,10 @@ def precheck_action(env: str, info: ReleaseInfo, *, root: Path = ROOT) -> list[s
     """Problems that stop promotion to ``env`` (empty: promote)."""
     from scripts.check_contracts_pin import check
 
+    from scripts.check_platform_pin import check as check_platform
+
     problems = [f"contracts pin: {p}" for p in check(root, env=env)]
+    problems += [f"platform pin: {p}" for p in check_platform(root)]
     if not (info.image_digest or "").startswith("sha256:"):
         problems.append("release-info.json carries no digest-pinned financemodel-cpu image")
     return problems

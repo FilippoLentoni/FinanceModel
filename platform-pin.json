@@ -1,0 +1,13 @@
+{
+  "$comment": "Exact pin of the FinancialPlanning finplan-platform package consumed by FinanceModel (forward runner: finplan_platform.core.modeling_evidence, the authoritative beta experiment ledger). Vendored byte for byte like finplan-contracts (contracts-pin.json): the wheel is the reproducible build (SOURCE_DATE_EPOCH=315532800, `uv build --wheel` of `git archive` of source_commit) of the FinancialPlanning repository; its SHA-256 is also recorded in uv.lock, which uv verifies on install. The package version is not bumped by FinancialPlanning, so source_commit identifies the content and sha256 identifies the bytes. It is not a contract package: the contracts 0.x beta-only rule does not apply, and the only consumer (the forward runner) is deployed in beta only.",
+  "package": "finplan-platform",
+  "version": "0.1.0",
+  "artifact": "vendor/finplan-platform/finplan_platform-0.1.0-py3-none-any.whl",
+  "sha256": "327aeb1cb584283986bb3efec95f0a1751903ed3b74c5089e697664baa3583a5",
+  "source": "FinancialPlanning repository (pyproject finplan-platform, packages platform/finplan_platform), built with: git archive <source_commit> | tar -x; SOURCE_DATE_EPOCH=315532800 uv build --wheel",
+  "source_commit": "60a11505fef499e54cc76b4c82fe8db3a8cfb551",
+  "source_date_epoch": 315532800,
+  "served_environments": [
+    "beta"
+  ]
+}
