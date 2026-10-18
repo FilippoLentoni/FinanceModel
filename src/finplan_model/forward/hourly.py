@@ -359,32 +359,49 @@ def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
     from .execution_reconcile import reconcile_executions
     execution=reconcile_executions(backend,experiment,source,at,slot,comparison_policy,
         apply=apply_forward_quotes,config=evaluator_config(comparison_policy))
-    # Pending forecasts have a sparse durable index and are not lost when older than
-    # a report window. Query actual observation time, not rounded scheduling slot.
-    token=None
+    execution['forecast_reconciliation']=_reconcile_forecasts(backend,experiment,at)
+    return execution
+
+
+def _reconcile_forecasts(backend,experiment,at):
+    """Match only after strong bounded chronological completeness proof.
+
+    The sparse GSI discovers due heads, never proves an earlier mark absent.
+    Missing/running slots and chunk continuation retain explicit pending outcomes.
+    """
+    token=None;entries=[]
     for _ in range(100):
         pending,token=backend.query_pending_forecasts(experiment,at,page_size=100,next_token=token)
         for run in pending:
             frozen=(run.get('outcome') or {}).get('forecast') or {}
+            proof_method=getattr(backend,'strong_forecast_observation',None)
+            proof=proof_method(run['run_id'],at,max_slots=168) if proof_method else {
+                'status':'pending_incomplete','reason':'strong_forecast_observation_backend_unavailable','observation':None}
+            entry={key:proof.get(key) for key in ('status','reason','next_slot','proof_ref','checked_slots')}
+            entry['run_id']=run['run_id'];entries.append(entry)
+            if proof['status']!='complete':continue
+            selected=proof.get('observation')
+            if selected and datetime.fromisoformat(selected['observed_at'].replace('Z','+00:00'))>datetime.fromisoformat(at.replace('Z','+00:00')):
+                raise ValueError('strong forecast completeness proof contains a future observation')
+            match=reconcile(frozen,[selected] if selected else [])
+            if match is None:raise ValueError('strong forecast completeness proof did not supply an eligible original observation')
             oid=identifier('mo',experiment,run['approach_id'],run['slot'],'forecast_match')
-            if backend.repo.get('portfolio_observation',oid):
-                backend.mark_forecast_realized(run['run_id'],oid,at);continue
-            values=[];cursor=None
-            for _ in range(100):
-                page,cursor=backend.query_observations_after(experiment,run['approach_id'],frozen['target_at'],at,page_size=100,next_token=cursor)
-                for row in page:
-                    if row.get('evidence_error'):continue
-                    payload=row.get('payload') or {}
-                    values.append({**payload,'observation_id':row['observation_id'],'portfolio_id':row['portfolio_id']})
-                match=reconcile(frozen,values)
-                if match:
-                    saved=backend.record_observation(experiment,run['approach_id'],run['slot'],run['portfolio_id'],match,at,kind='forecast_match')
-                    backend.mark_forecast_realized(run['run_id'],saved['observation_id'],at);break
-                if not cursor:break
-            if cursor and not match:raise ValueError('forecast observation query exceeded bounded10000 records; pending head retained for recovery')
+            existing=backend.repo.get('portfolio_observation',oid)
+            if existing:
+                old=existing.doc
+                original=old.get('payload')
+                if original is None:original=json.loads(backend.read_artifact_bytes(old))
+                if canonical_json_bytes(original)!=canonical_json_bytes(match):
+                    entry.update(status='pending_incomplete',reason='immutable_match_receipt_conflicts_with_first_valid_proof')
+                    continue
+                saved=old
+            else:
+                saved=backend.record_observation(experiment,run['approach_id'],run['slot'],run['portfolio_id'],match,at,kind='forecast_match')
+            backend.mark_forecast_realized(run['run_id'],saved['observation_id'],at)
+            entry.update(status='realized',observation_id=match['observation_id'],match_observation_id=saved['observation_id'])
         if not token:break
     if token:raise ValueError('pending forecast query exceeded bounded10000 records; heads retained for recovery')
-    return execution
+    return {'status':'pending' if any(row['status']!='realized' for row in entries) else 'complete','forecasts':entries}
 
 def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None):
     import_costs = backend is None or managed_cost_reader is not None
