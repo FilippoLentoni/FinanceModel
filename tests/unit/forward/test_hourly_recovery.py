@@ -35,8 +35,8 @@ class FakeEvidence:
     def claim_run(self,rid,owner,at,lease_seconds):self.calls.append(rid);return True
     def finish_run(self,rid,outcome,at):self.records['research_run',rid].update(status=outcome['status'],outcome=copy.deepcopy(outcome),finished_at=at)
     def read_run(self,rid):return copy.deepcopy(self.records['research_run',rid])
-    def record_observation(self,experiment,aid,slot,pid,payload,at,kind='valuation'):
-        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'kind':kind,'run_id':payload.get('run_id'),'input_id':payload.get('input_id'),'payload':copy.deepcopy(payload),'checksum':sha256_checksum(canonical_json_bytes(payload))}
+    def record_observation(self,experiment,aid,slot,pid,payload,at,kind='valuation',*,recorded_at=None):
+        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'recorded_at':recorded_at or at,'kind':kind,'run_id':payload.get('run_id'),'input_id':payload.get('input_id'),'payload':copy.deepcopy(payload),'checksum':sha256_checksum(canonical_json_bytes(payload))}
         self.records.setdefault(('portfolio_observation',oid),doc);return doc
     def query_day(self,experiment,day,kind='runs',page_size=100,next_token=None):
         table={'runs':'research_run','observations':'portfolio_observation','inputs':'research_input'}[kind]
@@ -181,3 +181,17 @@ def test_wrong_bound_valuation_fails_instead_of_skipping_original_evidence(tmp_p
     oid=identifier('mo','controlled-recovery','cash',result['slot'],'valuation')
     e.records['portfolio_observation',oid]['run_id']='controlled-wrong-run'
     with pytest.raises(ValueError,match='original run/input/portfolio'):run(e,tmp_path)
+
+
+def test_terminal_repair_preserves_mark_time_but_records_actual_later_availability(tmp_path,monkeypatch):
+    from finplan_model.forward import hourly
+    e=FakeEvidence();run(e,tmp_path)
+    original_slot='2026-07-11T00:00:00Z';original_at='2026-07-11T00:05:00Z'
+    oid=next(rid for (kind,rid),doc in e.records.items() if kind=='portfolio_observation')
+    old=copy.deepcopy(e.records.pop(('portfolio_observation',oid)))
+    monkeypatch.setattr(hourly,'stamp',lambda:'2026-07-11T00:20:00Z')
+    run_hourly(original_slot,'controlled-recovery',tmp_path,backend=e,source=source(),policies={},research={},external_adapters=adapters())
+    restored=e.records['portfolio_observation',oid]
+    assert restored['observed_at']==original_at and restored['payload']['observed_at']==original_at
+    assert restored['recorded_at']=='2026-07-11T00:20:00Z'
+    assert all(doc['recorded_at']==original_at for (kind,rid),doc in e.records.items() if kind=='portfolio_observation' and rid!=oid)

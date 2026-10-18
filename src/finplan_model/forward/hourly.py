@@ -296,7 +296,7 @@ def _existing_valuation(backend,experiment,approach_id,slot,run_id,input_id,port
     return True
 
 
-def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,book,holdings,source,at,outcome,comparison_policy=None):
+def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,book,holdings,source,at,outcome,comparison_policy=None,*,recorded_at=None):
     oid=identifier('mo',experiment,approach_id,slot,'valuation')
     if _existing_valuation(backend,experiment,approach_id,slot,run_id,input_id,book['portfolio_id']):return
     last_price=max((r['session_date'] for r in source.get('execution_observations',[])),default=None)
@@ -351,7 +351,7 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
         payload['market_session']={'status':'open','session_date':datetime.fromisoformat(at.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat(),
             'source':{'calendar':'CRYPTO_24X7','provider':'coinbase_exchange_public','dataset_checksum':source['native_crypto_dataset']['dataset_checksum'],
                       'as_of':source['native_crypto_dataset']['as_of'],'basis':'actual completed native candles in declared continuous venue calendar'}}
-    backend.record_observation(experiment,approach_id,slot,book['portfolio_id'],payload,at)
+    backend.record_observation(experiment,approach_id,slot,book['portfolio_id'],payload,at,recorded_at=recorded_at or stamp())
 
 def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
     comparison_policy=comparison_policy or POLICY
@@ -509,7 +509,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             if not _existing_valuation(backend,experiment,aid,slot,rid,iid,book['portfolio_id']):
                 original=backend.read_input(old.doc['input_id'])['payload'];completed=backend.read_run(rid)
                 original_holdings=original['holdings']
-                record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original_holdings,source,at,completed['outcome'],comparison_policy)
+                record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original_holdings,source,at,completed['outcome'],comparison_policy,recorded_at=now or stamp())
             summary.append({'approach_id':aid,'run_id':rid,'status':old.doc['status'],'retry':'existing_terminal'});continue
         holdings=copy.deepcopy(source.get('comparison_holdings',{}).get(aid))
         if holdings is None:
@@ -527,7 +527,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                 header=backend.read_run_header(rid)
                 summary.append({'approach_id':aid,'run_id':rid,'status':'running_other_owner','lease_until':header.get('lease_until')});continue
             outcome={'status':'failed','reason':'recovered_interrupted_invocation_original_input_preserved','forecast':{'available':False}}
-            backend.finish_run(rid,outcome,stamp());original=backend.read_input(iid)['payload'];record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original['holdings'],source,at,outcome,comparison_policy);summary.append({'approach_id':aid,'run_id':rid,**outcome});continue
+            backend.finish_run(rid,outcome,now or stamp());original=backend.read_input(iid)['payload'];record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original['holdings'],source,at,outcome,comparison_policy,recorded_at=now or stamp());summary.append({'approach_id':aid,'run_id':rid,**outcome});continue
         def capture(payload):
             payload={**payload,'slot':slot,'approach_id':aid,'run_id':rid,'input_id':iid,'processing_code_versions':copy.deepcopy(processing_versions)}
             boundary_at=now or stamp();payload['invocation_at']=boundary_at
@@ -568,10 +568,10 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                            'availability_cutoff':at,'captured_inputs':outcome['captured_inputs'],
                            'activity_receipts':outcome.get('capture_receipts',[])}
             outcome['graph_sub_boundary_ref']=backend.capture_input(experiment,aid,slot,extra_payload,shared,at,kind='graph_sub_boundary_inputs')
-        backend.finish_run(rid,outcome,stamp())
+        backend.finish_run(rid,outcome,now or stamp())
         state=backend.get_portfolio(book['portfolio_id'])
         current=_portfolio_holdings(state,source)
-        record_slot_observation(backend,experiment,aid,slot,rid,iid,state,current,source,at,outcome,comparison_policy)
+        record_slot_observation(backend,experiment,aid,slot,rid,iid,state,current,source,at,outcome,comparison_policy,recorded_at=now or stamp())
         summary.append({'approach_id':aid,'run_id':rid,'input_id':iid,'portfolio_id':book['portfolio_id'],'status':outcome['status']})
     active=[r for r in summary if r['status']=='running_other_owner']
     reconciliation=reconciliation_attempt if reconciliation_attempt is not None else source.get('execution_reconciliation') or {}

@@ -71,3 +71,17 @@ def test_crypto_uses_declared_hourly_age_and_explicit_continuous_session_evidenc
     assert row['market_session']['source']['dataset_checksum']==source['native_crypto_dataset']['dataset_checksum']
     stale=observed(q,at='2026-10-17T12:20:01Z',source_updates=source,comparison_policy=CRYPTO_POLICY)
     assert stale['observation_kind']!='valid' and stale['quote_status']!='fresh'
+
+
+def test_primary_valuation_records_actual_write_availability_separately_from_quote_mark(monkeypatch):
+    from finplan_model.forward import hourly
+    rows=[]
+    backend=SimpleNamespace(repo=SimpleNamespace(get=lambda *args:None),record_observation=lambda *args,**kw:rows.append((args,kw)))
+    monkeypatch.setattr(hourly,'stamp',lambda:'2026-10-19T14:07:00Z')
+    book={'portfolio_id':'controlled-book','revision':1}
+    holdings={'positions':[],'cash':1000.,'portfolio_value':1000.,'revision':1}
+    record_slot_observation(backend,'e','cash','2026-10-19T14:00:00Z','run','input',book,holdings,{'execution_observations':[]},AT,{'status':'succeeded'})
+    assert rows[0][0][4]['observed_at']==AT and rows[0][0][5]==AT
+    assert rows[0][1]['recorded_at']=='2026-10-19T14:07:00Z'
+    record_slot_observation(backend,'replay','cash','2026-10-19T14:00:00Z','run','input',book,holdings,{'execution_observations':[]},AT,{'status':'succeeded'},recorded_at='2026-10-19T14:06:00Z')
+    assert rows[1][1]['recorded_at']=='2026-10-19T14:06:00Z'
