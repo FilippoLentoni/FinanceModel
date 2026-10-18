@@ -916,6 +916,14 @@ class JobService:
                     if self.now() >= instant(binding['availability_cutoff']) + timedelta(hours=1):
                         raise FinplanError.precondition('forward request expired before compute', reason='forward_request_expired')
                     verify_current_book(self.d.platform, binding)
+                    if self.d.offline_batch is None:
+                        raise FinplanError.precondition('offline Qwen handoff missing',reason='qwen_offline_handoff_missing')
+                    weights=self.d.offline_batch.prepare_forward_weights(run,jd)
+                    try:
+                        run=self._update(run,forward_qwen={**run['forward_qwen'],**weights})
+                    except ConditionFailed:
+                        self._release(run)
+                        return 'conflict'
             image_uri = str(jd.get("image_uri") or "")
             digest = image_uri.rsplit("@", 1)[1] if "@" in image_uri else None
             spec = build_run_spec(run, simulation=run["simulation"], image_digest=digest)

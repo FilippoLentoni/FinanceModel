@@ -64,6 +64,18 @@ class ApprovedForwardReader(JevReader):
         if any(output.get(k)!=v for k,v in expected.items()):raise ValueError('Qwen output worker/model/approval mismatch')
         if instant(output['issued_at'])>instant(cutoff):raise ValueError('Qwen output was unavailable at cutoff')
         if instant(cutoff)>=instant(output['issued_at'])+timedelta(days=1):return {'status':'native_daily_signal_expired','managed_run_id':rid}
+        ready_ref=output.get('backend_ready_ref')
+        if ready_ref not in result.get('artifacts',[]) or ready_ref.get('artifact_id')!=journal_id(binding,'backend_ready'):
+            raise ValueError('original Qwen backend readiness receipt missing')
+        ready=self.artifacts.get_json(ready_ref)
+        if ready.get('kind')!='backend_ready' or any(ready.get(k)!=v for k,v in expected.items() if k in ('protocol','managed_run_id','binding_checksum','model_id','revision','worker_image_digest','worker_source_commit','worker_code_checksum')):
+            raise ValueError('original Qwen backend model/worker readiness differs')
+        if descriptor.get('weights_proof_ref'):
+            proof=self.artifacts.get_json(descriptor['weights_proof_ref'])
+            if ready.get('status')!='verified_pinned_checkpoint' or ready.get('weights_proof_ref')!=descriptor['weights_proof_ref'] or ready.get('manifest_checksum')!=descriptor.get('weights_manifest_checksum') or any(ready.get(k)!=proof.get(k) for k in ('model_id','revision','license','file_count','manifest_checksum','staged_raw_base64','manifest_raw_base64')):
+                raise ValueError('original Qwen loaded checkpoint differs from frozen proof')
+        elif ready.get('status')!='controlled_test_backend_no_checkpoint':
+            raise ValueError('original Qwen precompute weights proof is absent')
         receipts=output['role_receipts']
         if not 1<=len(receipts)<=7 or (len(receipts)<5 and output['policy'].get('solution_status')!='no_effect'):raise ValueError('complete native Qwen role evidence missing')
         decoded=[];last=instant(approval['approved_at'])

@@ -5,10 +5,12 @@ indeterminate and never authorizes another compute start for the same context.
 """
 from __future__ import annotations
 import copy
+import base64
+import json
 import os
 import time
 from datetime import timedelta
-from finplan_model.core.artifacts import canonical_json_bytes, LocalArtifactStore
+from finplan_model.core.artifacts import canonical_json_bytes, LocalArtifactStore, ArtifactRef
 from finplan_model.core.errors import FinplanError
 from .forward_jev import checksum, instant, managed_id, verify_current_book, source_from_snapshot, read_named
 from .qwen import MODEL_ID, REVISION, ROLES, QwenSwarm, VllmBackend
@@ -70,7 +72,7 @@ def validate_binding(binding):
 
 
 def prepare_native(binding, source):
-    from finplan_model.forward.public_preflight import _view
+    from finplan_model.benchmarks.forward_inputs import _view
     validate_binding(binding)
     _, view, holdings, private, _ = _view(source, binding['holdings'], binding['availability_cutoff'])
     if checksum(private) != checksum(binding['local_transformation']):
@@ -83,6 +85,22 @@ def prepare_native(binding, source):
     try: QwenSwarm(first, run_id=binding['origin_run_id'], max_decisions=1, max_calls=7).decide(view,holdings)
     except Prepared: return view,holdings
     raise ValueError('native Qwen did not prepare first-role messages')
+
+
+def validate_weights_proof(proof, descriptor, binding, run_id):
+    from finplan_model.core.artifacts import sha256_checksum
+    if proof.get('kind')!='weights_proof' or proof.get('managed_run_id')!=run_id or proof.get('binding_checksum')!=checksum(binding) or proof.get('model_id')!=MODEL_ID or proof.get('revision')!=REVISION or proof.get('license')!='Apache-2.0' or proof.get('manifest_checksum')!=descriptor.get('weights_manifest_checksum'):
+        raise ValueError('frozen weights proof identity differs')
+    for key in ('worker_image_digest','worker_source_commit','worker_code_checksum'):
+        if proof.get(key)!=descriptor[key]:raise ValueError('frozen weights proof worker differs')
+    staged_raw=base64.b64decode(proof['staged_raw_base64'],validate=True)
+    manifest=base64.b64decode(proof['manifest_raw_base64'],validate=True)
+    if len(staged_raw)>262144 or len(manifest)>262144 or sha256_checksum(staged_raw)!=proof['staged_checksum'] or sha256_checksum(manifest)!=proof['manifest_checksum']:
+        raise ValueError('frozen original weights metadata bytes differ')
+    staged=json.loads(staged_raw)
+    if any(staged.get(k)!=proof.get(k) for k in ('model_id','revision','license','file_count','manifest_checksum')):
+        raise ValueError('frozen original staged metadata differs')
+    return proof
 
 
 def _sync(store, ref):
@@ -127,8 +145,14 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
         return finished
     except FinplanError as exc:
         if exc.code!='NOT_FOUND':raise
-    refs=[];roles=[];attempted=[];calls=0;engine=backend;pending={};recovered=[];uncertain_existing=False
+    refs=[];roles=[];attempted=[];calls=0;engine=backend;backend_ready_ref=None;pending={};recovered=[];uncertain_existing=False;previous_engine_tokens=0
     approval={'approved_by':descriptor['approved_by'],'approved_at':descriptor['approved_at']}
+    try:
+        backend_ready_ref,saved_ready=read_named(store,journal_id(binding,'backend_ready'))
+        if saved_ready.get('managed_run_id')!=inp.spec['run_id'] or saved_ready.get('binding_checksum')!=checksum(binding):raise ValueError('saved backend ready association differs')
+        refs.append(backend_ready_ref)
+    except FinplanError as exc:
+        if exc.code!='NOT_FOUND':raise
     def eligible():
         if instant(inp.ctx.now_ts())>=instant(binding['availability_cutoff'])+timedelta(hours=1):
             raise FinplanError.precondition('Qwen current-book request expired before role invocation',reason='forward_request_expired')
@@ -168,16 +192,37 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             pending.clear();pending.update(input_ref=input_ref,index=index,role=role)
         refs.append(pending['input_ref']);attempted.append(index)
     def invoke(messages):
-        nonlocal engine,calls
+        nonlocal engine,calls,backend_ready_ref
         if pending.get('response') is not None:return pending['response']['response']
         eligible()
+        proof_ref=descriptor.get('weights_proof_ref');proof=None
+        if backend is None:
+            if not proof_ref:raise FinplanError.precondition('frozen precompute weights proof missing',reason='qwen_weights_not_verified')
+            proof=validate_weights_proof(store.get_json(proof_ref),descriptor,binding,inp.spec['run_id'])
         if engine is None:engine=VllmBackend(weights_root,max_tokens=256)
+        if backend is None:
+                manifest=getattr(engine,'manifest',{})
+                if proof.get('kind')!='weights_proof' or proof.get('managed_run_id')!=inp.spec['run_id'] or proof.get('binding_checksum')!=checksum(binding) or proof.get('manifest_checksum')!=descriptor.get('weights_manifest_checksum') or any(manifest.get(k)!=proof.get(k) for k in ('model_id','revision','license','file_count','manifest_checksum')):
+                    raise FinplanError.precondition('loaded Qwen checkpoint differs from frozen precompute manifest',reason='qwen_weights_changed')
+                if not any(ref.to_dict()==proof_ref for ref in refs):refs.append(ArtifactRef.from_dict(proof_ref))
+        if backend_ready_ref is None:
+            ready={'protocol':PROTOCOL,'kind':'backend_ready','managed_run_id':inp.spec['run_id'],
+                'binding_checksum':checksum(binding),'model_id':MODEL_ID,'revision':REVISION,
+                'status':'verified_pinned_checkpoint' if proof else 'controlled_test_backend_no_checkpoint',
+                'license':proof.get('license') if proof else None,'file_count':proof.get('file_count') if proof else None,
+                'manifest_checksum':proof.get('manifest_checksum') if proof else None,'weights_proof_ref':proof_ref if proof else None,
+                'staged_raw_base64':proof.get('staged_raw_base64') if proof else None,
+                'manifest_raw_base64':proof.get('manifest_raw_base64') if proof else None,
+                'ready_at':inp.ctx.now_ts(),'worker_image_digest':inp.ctx.image_digest,
+                'worker_source_commit':descriptor['worker_source_commit'],'worker_code_checksum':descriptor['worker_code_checksum']}
+            backend_ready_ref=_put(store,binding,'backend_ready',ready);refs.append(backend_ready_ref)
         eligible();calls+=1
         try:
             return engine(messages)
         except Exception as exc:
             raise FinplanError.dependency_unavailable('Qwen role backend failed after original input capture', retryable=False, reason='qwen_role_backend_failed') from exc
     def response(role,messages,text,index):
+        nonlocal previous_engine_tokens
         if not isinstance(text,str) or len(text)>16000:raise ValueError('Qwen public role response bound')
         if pending.get('response') is not None:
             ref=pending['response_ref'];body=pending['response']
@@ -185,6 +230,9 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             body={'protocol':PROTOCOL,'kind':'role_response','managed_run_id':inp.spec['run_id'],
                 'binding_checksum':checksum(binding),'role':role,'call_index':index,'input_ref':pending['input_ref'].to_dict(),
                 'messages_checksum':checksum(messages),'response':text,'received_at':inp.ctx.now_ts()}
+            observed=getattr(engine,'tokens',None)
+            body['model_output_tokens']=observed-previous_engine_tokens if type(observed) is int and observed>=previous_engine_tokens else None
+            if type(observed) is int:previous_engine_tokens=observed
             ref=_put(store,binding,'role_'+str(index)+'_response',body)
         refs.append(ref);roles.append({'role':role,'call_index':index,'input_ref':pending['input_ref'].to_dict(),'response_ref':ref.to_dict()})
     def capture_checked(*args):
@@ -208,9 +256,10 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
             'forecast':{'available':False,'status':'not_available','reason':'native allocation is not a forecast'}},binding['source']['investable_universe'],binding['holdings'])
         output={'protocol':PROTOCOL,'kind':'forward_result','managed_run_id':inp.spec['run_id'],
             'binding_checksum':checksum(binding),'request_checksum':binding['request_checksum'],'policy':policy,
-            'role_receipts':roles,'issued_at':inp.ctx.now_ts(),'ledger_updated':False,'model_id':MODEL_ID,'revision':REVISION,
+            'role_receipts':roles,'backend_ready_ref':backend_ready_ref.to_dict() if backend_ready_ref else None,'issued_at':inp.ctx.now_ts(),'ledger_updated':False,'model_id':MODEL_ID,'revision':REVISION,
             'approval':approval,'worker_image_digest':inp.ctx.image_digest,'worker_source_commit':descriptor['worker_source_commit'],'worker_code_checksum':descriptor['worker_code_checksum'],
-            'usage':{'calls':calls,'recovered_role_indices':recovered,'model_output_tokens':getattr(engine,'tokens',None),
+            'usage':{'calls':len(roles),'new_calls_this_attempt':calls,'recovered_role_indices':recovered,
+                'model_output_tokens':sum(store.get_json(r['response_ref'])['model_output_tokens'] for r in roles) if all(type(store.get_json(r['response_ref']).get('model_output_tokens')) is int for r in roles) else None,
                 'vendor_cost_usd':0.,'external_vendor_estimated_usd':0.,'vendor_price_basis':'offline local GPU model; no external paid vendor transport'},
             'evidence_transport':'fsynced offline originals; immutable controller import; hard-loss missing output is indeterminate/unusable'}
         ref=_put(store,binding,'result',output);refs.append(ref)
@@ -218,10 +267,10 @@ def run_forward(inp, *, backend=None, weights_root='/opt/ml/input/data/weights')
         doc['payload']['forward_qwen']={'binding_checksum':checksum(binding),'result_ref':ref.to_dict(),'invocation_state':'completed','usage':output['usage']}
     except Exception as exc:
         failure={'protocol':PROTOCOL,'kind':'failed_forward_result','managed_run_id':inp.spec['run_id'],
-            'binding_checksum':checksum(binding),'role_receipts':roles,'captured_input_refs':[r.to_dict() for r in refs],
+            'binding_checksum':checksum(binding),'backend_ready_ref':backend_ready_ref.to_dict() if backend_ready_ref else None,'role_receipts':roles,'captured_input_refs':[r.to_dict() for r in refs],
             'invocation_state':'indeterminate' if calls or pending or uncertain_existing else 'not_invoked',
             'reason':getattr(exc,'details',{}).get('reason',type(exc).__name__),
-            'usage':{'calls':calls,'vendor_cost_usd':0.,'external_vendor_estimated_usd':0.,'vendor_price_basis':'network-isolated local GPU; compute billing unavailable'},
+            'usage':{'calls':len(recovered)+calls,'new_calls_this_attempt':calls,'vendor_cost_usd':0.,'external_vendor_estimated_usd':0.,'vendor_price_basis':'network-isolated local GPU; compute billing unavailable'},
             'ledger_updated':False,'worker_image_digest':inp.ctx.image_digest,'worker_source_commit':descriptor['worker_source_commit'],'worker_code_checksum':descriptor['worker_code_checksum']}
         ref=_put(store,binding,'failure',failure);refs.append(ref)
         doc=failed_job_result(inp.ctx,FinplanError.precondition('Qwen forward failed; original partial evidence retained, no relaunch',reason=failure['reason']),run_id=inp.spec['run_id'])

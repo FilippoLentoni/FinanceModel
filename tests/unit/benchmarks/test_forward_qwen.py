@@ -302,13 +302,16 @@ def test_offline_input_channel_and_verified_partial_output_archive_roundtrip(par
     from finplan_model.core.artifacts import InMemoryArtifactStore
     from tests.unit.benchmarks.test_offline import archive
     f=fixture();inp=approved(f);run={**f.h.run(inp.spec['run_id']),'job_name':'controlled-offline-qwen'}
-    manifest=b'controlled-weights-metadata-not-real-weights\n'
-    storage={PREFIX+'STAGED.json':canonical_json_bytes({'model_id':MODEL_ID,'revision':REVISION,'manifest_checksum':checksum_bytes(manifest)}),PREFIX+'MANIFEST.sha256':manifest}
+    manifest=''.join('0'*64+'  '+name+'\n' for name in ('config.json','tokenizer_config.json','LICENSE','controlled.safetensors')).encode()
+    storage={PREFIX+'STAGED.json':canonical_json_bytes({'model_id':MODEL_ID,'revision':REVISION,'license':'Apache-2.0','file_count':4,'manifest_checksum':checksum_bytes(manifest)}),PREFIX+'MANIFEST.sha256':manifest}
     class S3:
         def get_object(self,**kw):return {'Body':io.BytesIO(storage[kw['Key']])}
         def put_object(self,**kw):storage[kw['Key']]=kw['Body']
     gateway=OfflineBatchIO(S3(),'example-research-bucket',f.platform,InMemoryRunIO(),inp.artifacts)
     definition={**f.h.settings.job_definitions['swarm_mode_a'],'code_prefix':'releases/qwen-code/controlled/'}
+    frozen=gateway.prepare_forward_weights(run,definition)
+    run['forward_qwen']={**run['forward_qwen'],**frozen}
+    inp.spec['forward_qwen']={**inp.spec['forward_qwen'],**frozen}
     handoff=gateway.prepare(run,inp.spec,definition)
     bundle=json.loads(storage['scratch/offline/'+run['run_id']+'/input.json'])
     assert bundle['forward_qwen_binding']==f.binding and bundle['spec']['forward_qwen']['binding_checksum']==checksum(f.binding)
@@ -331,7 +334,7 @@ def checksum_bytes(data):
 
 def test_dispatch_uses_existing_isolated_gpu_channels_and_changed_code_refuses_compute():
     f=fixture();inp=approved(f);f.h.settings.leases={'gpu':1}
-    f.h.deps.offline_batch=SimpleNamespace(prepare=lambda *args:{'channels':{'bundle':'s3://example-research-bucket/controlled-bundle/','weights':'s3://example-research-bucket/controlled-weights/','code':'s3://example-research-bucket/controlled-code/'},'bundle_checksum':'sha256:'+'e'*64,'code_checksum':inp.offline_code_checksum})
+    f.h.deps.offline_batch=SimpleNamespace(prepare_forward_weights=lambda run,definition:{'weights_proof_ref':f.h.deps.artifacts.put_json({'controlled_proof':True},kind='run_artifact').to_dict(),'weights_manifest_checksum':'sha256:'+'0'*64},prepare=lambda *args:{'channels':{'bundle':'s3://example-research-bucket/controlled-bundle/','weights':'s3://example-research-bucket/controlled-weights/','code':'s3://example-research-bucket/controlled-code/'},'bundle_checksum':'sha256:'+'e'*64,'code_checksum':inp.offline_code_checksum})
     f.h.service.dispatch()
     jobs=[req for op,req in f.h.sagemaker.calls if op=='CreateTrainingJob']
     assert len(jobs)==1 and jobs[0]['EnableNetworkIsolation'] is True
@@ -378,3 +381,79 @@ def test_lost_conditional_role_claim_never_invokes_even_with_identical_clock(mon
     doc=run_forward(inp,backend=lambda _:pytest.fail('losing claimant must not invoke'))
     assert lost and doc['completion_status']=='failed'
     assert doc['payload']['forward_qwen']['invocation_state']=='indeterminate'
+
+
+def test_offline_numerical_preparation_has_no_aws_sdk_dependency():
+    import os,subprocess,sys
+    f=fixture()
+    code='''import sys,importlib.abc,json
+class NoSdk(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  if fullname.split('.')[0] in ('boto3','botocore'):raise ImportError('offline worker has no AWS SDK')
+sys.meta_path.insert(0,NoSdk())
+from finplan_model.benchmarks.forward_qwen import prepare_native,context_identity
+body=json.load(sys.stdin)
+view,holdings=prepare_native(body['binding'],body['source'])
+assert holdings.cash_weight==1. and len(view.instruments)==2
+print('pure_offline_preparation_pass')
+'''
+    result=subprocess.run([sys.executable,'-c',code],input=json.dumps({'binding':f.binding,'source':f.source}),text=True,capture_output=True,env=os.environ,timeout=30)
+    assert result.returncode==0,result.stderr
+    assert result.stdout.strip()=='pure_offline_preparation_pass'
+
+
+def test_actual_backend_manifest_drift_rejects_before_model_call(monkeypatch):
+    f=fixture();inp=approved(f)
+    proof={'protocol':PROTOCOL,'kind':'weights_proof','managed_run_id':inp.spec['run_id'],'binding_checksum':checksum(f.binding),
+        'model_id':'Qwen/Qwen3.6-27B','revision':'6a9e13bd6fc8f0983b9b99948120bc37f49c13e9','license':'Apache-2.0','file_count':4,'manifest_checksum':'sha256:'+'0'*64,
+        'manifest_raw_base64':'Y29udHJvbGxlZA==','staged_raw_base64':'e30='}
+    import base64
+    metadata={k:proof[k] for k in ('model_id','revision','license','file_count','manifest_checksum')}
+    metadata_raw=canonical_json_bytes(metadata);proof.update(staged_raw_base64=base64.b64encode(metadata_raw).decode(),staged_checksum=checksum_bytes(metadata_raw),worker_image_digest=inp.ctx.image_digest,worker_source_commit=inp.spec['forward_qwen']['worker_source_commit'],worker_code_checksum=inp.offline_code_checksum)
+    # The proof's actual manifest hash is computed from its original bytes.
+    original_manifest=base64.b64decode(proof['manifest_raw_base64']);proof['manifest_checksum']=checksum_bytes(original_manifest);metadata['manifest_checksum']=proof['manifest_checksum'];metadata_raw=canonical_json_bytes(metadata);proof.update(staged_raw_base64=base64.b64encode(metadata_raw).decode(),staged_checksum=checksum_bytes(metadata_raw))
+    ref=inp.artifacts.put_json(proof,kind='run_artifact');inp.spec['forward_qwen'].update(weights_proof_ref=ref.to_dict(),weights_manifest_checksum=proof['manifest_checksum'])
+    class BadBackend:
+        manifest={**proof,'manifest_checksum':'sha256:'+'1'*64}
+        def __call__(self,_):pytest.fail('never call model with drifted checkpoint')
+    import finplan_model.benchmarks.forward_qwen as module
+    monkeypatch.setattr(module,'VllmBackend',lambda *a,**k:BadBackend())
+    doc=run_forward(inp)
+    assert doc['completion_status']=='failed' and doc['payload']['forward_qwen']['usage']['calls']==0
+    failure=inp.artifacts.get_json(doc['payload']['forward_qwen']['failure_ref']);assert failure['reason']=='qwen_weights_changed'
+
+
+def test_controlled_backend_readiness_is_explicit_without_fabricated_weights_hash():
+    f=fixture();inp=approved(f);doc=run_forward(inp,backend=Backend(f,inp))
+    output=inp.artifacts.get_json(doc['payload']['forward_qwen']['result_ref'])
+    ready=inp.artifacts.get_json(output['backend_ready_ref'])
+    assert ready['status']=='controlled_test_backend_no_checkpoint' and ready['manifest_checksum'] is None
+    assert ready['license'] is None and ready['file_count'] is None
+
+
+def test_resume_original_completed_roles_reuses_backend_ready_and_never_reinvokes_them(monkeypatch):
+    f=fixture();inp=approved(f);backend=Backend(f,inp)
+    import finplan_model.benchmarks.forward_qwen as module
+    put=module._put
+    class Crash(BaseException):pass
+    def stop_after_response(store,binding,kind,payload):
+        ref=put(store,binding,kind,payload)
+        if kind=='role_1_response':raise Crash()
+        return ref
+    monkeypatch.setattr(module,'_put',stop_after_response)
+    with pytest.raises(Crash):run_forward(inp,backend=backend)
+    assert len(backend.seen)==2
+    ready_ref=inp.artifacts.resolve(kind='run_artifact',artifact_id=journal_id(f.binding,'backend_ready'));ready_bytes=inp.artifacts.get(ready_ref)
+    monkeypatch.setattr(module,'_put',put);new=[]
+    def resume(messages):
+        new.append(messages)
+        role=messages[0]['content'].split('fixed ',1)[1].split(' ',1)[0]
+        if role=='allocator':return json.dumps({'weights':{i:.5/len(f.market.instruments) for i in f.market.instruments},'cash':.5})
+        if role=='critic':return '{"revise":false}'
+        if role=='arbiter':return '{"choice":"original"}'
+        pytest.fail('original completed market/risk role must not be invoked again')
+    doc=run_forward(inp,backend=resume)
+    assert doc['completion_status']=='succeeded' and len(new)==3
+    output=inp.artifacts.get_json(doc['payload']['forward_qwen']['result_ref'])
+    assert output['backend_ready_ref']==ready_ref.to_dict() and inp.artifacts.get(ready_ref)==ready_bytes
+    assert output['usage']['calls']==5 and output['usage']['new_calls_this_attempt']==3 and output['usage']['recovered_role_indices']==[0,1]

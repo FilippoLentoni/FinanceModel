@@ -44,15 +44,33 @@ def captured_event(event,reader):
                 raise ValueError('original managed boundary belongs to another invocation')
             kinds.append(payload.get('kind'))
             # Follow only typed top-level worker journal links, never arbitrary model text.
-            for field in ('invocation_input_ref','response_journal_ref','invocation_claim_ref','failure_ref'):
+            for field in ('invocation_input_ref','response_journal_ref','invocation_claim_ref','failure_ref','backend_ready_ref','weights_proof_ref'):
                 nested=payload.get(field)
                 if nested is not None:
                     if not isinstance(nested,dict):raise ValueError('managed typed journal reference invalid')
                     if not any(existing==nested for existing in refs):refs.append(nested)
+            if payload.get('protocol')=='finplan-qwen-forward/1' and payload.get('kind')=='forward_result':
+                roles=payload.get('role_receipts')
+                if not isinstance(roles,list) or not 1<=len(roles)<=7:
+                    raise ValueError('managed original Qwen role receipt bound invalid')
+                for call_index,role in enumerate(roles):
+                    if not isinstance(role,dict) or role.get('call_index')!=call_index or role.get('role') not in ('market_analyst','risk_analyst','allocator','critic','arbiter'):
+                        raise ValueError('managed original Qwen role identity/order invalid')
+                    for field in ('input_ref','response_ref'):
+                        nested=role.get(field)
+                        if not isinstance(nested,dict):raise ValueError('managed original Qwen role reference absent')
+                        if not any(existing==nested for existing in refs):refs.append(nested)
         unique[key]=True
         artifacts.append({'ref':ref,'checksum':ref['checksum'],'size_bytes':len(raw),'content_type':ref['content_type'],
             'raw_base64':base64.b64encode(raw).decode('ascii')})
     if refs and binding is None:raise ValueError('managed original binding is absent from declared source evidence')
+    decoded={artifact['ref']['artifact_id']:json.loads(base64.b64decode(artifact['raw_base64'])) for artifact in artifacts}
+    for body in decoded.values():
+        if body.get('protocol')=='finplan-qwen-forward/1' and body.get('kind')=='forward_result':
+            for role in body['role_receipts']:
+                supplied=decoded[role['input_ref']['artifact_id']];response=decoded[role['response_ref']['artifact_id']]
+                if supplied.get('kind')!='role_input' or response.get('kind')!='role_response' or any(doc.get('role')!=role['role'] or doc.get('call_index')!=role['call_index'] for doc in (supplied,response)) or response.get('input_ref')!=role['input_ref']:
+                    raise ValueError('managed original Qwen role content/association differs')
     has_input=any(k in ('role_input','invocation_input') for k in kinds)
     if event['job_state']=='succeeded' and has_input and 'forward_result' in kinds:
         status='complete_original_artifacts'

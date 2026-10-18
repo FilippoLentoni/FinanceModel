@@ -15,7 +15,7 @@ def terminal_cost_event(run):
     not_started=not run.get('job_started') and int(run.get('attempt',0))==0
     known_no_vendor=bool(run.get('forward_qwen')) or not_started or isinstance(usage,dict) and usage.get('transport_calls',usage.get('calls'))==0
     occurred=run.get('job_finished_at') or result.get('completed_at') or run['completed_at']
-    refs=[descriptor['binding_ref'],*result.get('artifacts',[])]
+    refs=[descriptor['binding_ref'],*([descriptor['weights_proof_ref']] if descriptor.get('weights_proof_ref') else []),*result.get('artifacts',[])]
     return {'protocol':'finplan-managed-model-cost/1','event_id':'managed:'+run['run_id'],
         'experiment_id':descriptor['experiment_id'],'approach_id':descriptor['approach_id'],
         'portfolio_id':descriptor['portfolio_id'],'managed_run_id':run['run_id'],

@@ -8,6 +8,7 @@ exists: the existing dispatcher handles Training Job readiness, cancellation, re
 from __future__ import annotations
 
 import io
+import base64
 import json
 import os
 import tarfile
@@ -29,6 +30,39 @@ from .qwen import MODEL_ID, REVISION
 class OfflineBatchIO:
     def __init__(self, s3, bucket, platform, run_io, artifacts):
         self.s3, self.bucket, self.platform, self.run_io, self.artifacts = s3, bucket, platform, run_io, artifacts
+
+    def prepare_forward_weights(self, run, definition):
+        """Freeze exact staged metadata before compute; never fetch large weights."""
+        try:
+            staged_raw=self.s3.get_object(Bucket=self.bucket,Key=PREFIX+'STAGED.json')['Body'].read(262145)
+            manifest=self.s3.get_object(Bucket=self.bucket,Key=PREFIX+'MANIFEST.sha256')['Body'].read(262145)
+            if len(staged_raw)>262144 or len(manifest)>262144:raise ValueError('bound')
+            staged=json.loads(staged_raw)
+            names=[]
+            for line in manifest.decode().splitlines():
+                digest,name=line.split('  ',1)
+                if len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest) or Path(name).name!=name:raise ValueError('unsafe manifest')
+                names.append(name)
+            if not {'config.json','tokenizer_config.json','LICENSE'}.issubset(names) or not any(n.endswith('.safetensors') for n in names):raise ValueError('incomplete manifest')
+            if staged.get('model_id')!=MODEL_ID or staged.get('revision')!=REVISION or staged.get('license')!='Apache-2.0' or staged.get('manifest_checksum')!=sha256_checksum(manifest) or isinstance(staged.get('file_count'),bool) or not isinstance(staged.get('file_count'),int) or not 0<staged['file_count']==len(manifest.decode().splitlines()):raise ValueError('identity')
+        except Exception as exc:
+            code=getattr(exc,'response',{}).get('Error',{}).get('Code')
+            if code in ('NoSuchKey','404','NotFound') or isinstance(exc,(ValueError,KeyError,TypeError,UnicodeDecodeError)):
+                raise FinplanError.precondition('exact staged Qwen manifest unavailable before compute',reason='qwen_weights_not_staged') from None
+            raise
+        descriptor=run['forward_qwen']
+        proof={'protocol':'finplan-qwen-forward/1','kind':'weights_proof','managed_run_id':run['run_id'],
+            'binding_checksum':descriptor['binding_checksum'],'model_id':MODEL_ID,'revision':REVISION,
+            'license':staged['license'],'file_count':staged['file_count'],'manifest_checksum':staged['manifest_checksum'],
+            'staged_checksum':sha256_checksum(staged_raw),'staged_raw_base64':base64.b64encode(staged_raw).decode(),
+            'manifest_raw_base64':base64.b64encode(manifest).decode(),
+            'worker_image_digest':descriptor['worker_image_digest'],'worker_source_commit':descriptor['worker_source_commit'],
+            'worker_code_checksum':descriptor['worker_code_checksum']}
+        ref=descriptor.get('weights_proof_ref')
+        if ref:
+            if self.artifacts.get_json(ref)!=proof:raise FinplanError.precondition('staged Qwen manifest changed after original precompute freeze',reason='qwen_weights_changed')
+        else:ref=self.artifacts.put_json(proof,kind='run_artifact',domain='finance',synthetic=run.get('synthetic')).to_dict()
+        return {'weights_proof_ref':ref,'weights_manifest_checksum':proof['manifest_checksum']}
 
     def prepare(self, run, spec, definition):
         if not definition.get("code_prefix") or not definition.get("code_checksum"):
@@ -54,6 +88,10 @@ class OfflineBatchIO:
             if checksum(binding) != run['forward_qwen']['binding_checksum']:
                 raise ValueError('offline forward binding checksum mismatch')
             bundle['forward_qwen_binding'] = binding
+            proof=self.artifacts.get_json(run['forward_qwen']['weights_proof_ref'])
+            if proof['manifest_checksum']!=sha256_checksum(manifest) or staged!=json.loads(base64.b64decode(proof['staged_raw_base64'])):
+                raise FinplanError.precondition('Qwen staged weights changed before handoff',reason='qwen_weights_changed')
+            bundle['forward_qwen_weights_proof']=proof
         data = canonical_json_bytes(bundle)
         key = "scratch/offline/" + run["run_id"] + "/input.json"
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType="application/json")
@@ -136,6 +174,10 @@ def main():
     try:
         inp = JobInputs(ctx=ctx, spec=spec, market=market_from_content(content), snapshot=content, artifacts=artifacts)
         if spec.get('forward_qwen'):
+            proof=bundle['forward_qwen_weights_proof']
+            proof_ref=spec['forward_qwen']['weights_proof_ref']
+            stored=artifacts.put_json(proof,kind='run_artifact',artifact_id=proof_ref['artifact_id'])
+            if stored.checksum!=proof_ref['checksum']:raise ValueError('offline original weights proof differs')
             inp.offline_code_checksum = os.environ['FINPLAN_OFFLINE_CODE_SHA256']
         result = swarm_mode_a(inp)
     except Exception as exc:

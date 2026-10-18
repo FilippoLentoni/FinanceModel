@@ -80,3 +80,25 @@ def test_jev_original_named_response_and_claim_links_are_captured_exactly():
     assert payload['evidence_status']=='complete_original_artifacts'
     assert len(payload['artifacts'])>len(event['source_evidence_refs'])
     assert any('response_' in a['ref']['artifact_id'] for a in payload['artifacts'])
+
+
+def test_omitted_qwen_role_ref_is_retrieved_from_typed_original_result_not_silently_complete():
+    f,inp,event,reader=setup()
+    doc=reader.runs.get_run(event['managed_run_id'])['result'];output=inp.artifacts.get_json(doc['payload']['forward_qwen']['result_ref'])
+    omitted=output['role_receipts'][2]['input_ref']
+    event['source_evidence_refs']=[ref for ref in event['source_evidence_refs'] if ref!=omitted]
+    payload=captured_event(event,reader)
+    assert payload['evidence_status']=='complete_original_artifacts'
+    actual=next(a for a in payload['artifacts'] if a['ref']==omitted)
+    assert base64.b64decode(actual['raw_base64'])==inp.artifacts.get(omitted)
+    inp.artifacts.objects.pop(omitted['artifact_id'])
+    with pytest.raises(Exception):captured_event(event,reader)
+
+
+def test_typed_qwen_role_reference_must_match_role_index_and_original_input():
+    f,inp,event,reader=setup();doc=reader.runs.get_run(event['managed_run_id'])['result']
+    ref=doc['payload']['forward_qwen']['result_ref'];body=inp.artifacts.get_json(ref)
+    body['role_receipts'][2]['input_ref']=body['role_receipts'][0]['input_ref']
+    new=inp.artifacts.put_json(body,kind='run_artifact')
+    event['source_evidence_refs']=[new.to_dict() if row==ref else row for row in event['source_evidence_refs']]
+    with pytest.raises(ValueError,match='role content'):captured_event(event,reader)
