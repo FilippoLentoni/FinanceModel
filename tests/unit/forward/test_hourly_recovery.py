@@ -195,3 +195,19 @@ def test_terminal_repair_preserves_mark_time_but_records_actual_later_availabili
     assert restored['observed_at']==original_at and restored['payload']['observed_at']==original_at
     assert restored['recorded_at']=='2026-07-11T00:20:00Z'
     assert all(doc['recorded_at']==original_at for (kind,rid),doc in e.records.items() if kind=='portfolio_observation' and rid!=oid)
+
+
+NINE=['cash','buy_and_hold','equal_weight','mean_variance','min_variance','classical_cvar','ppo','hosted_langgraph','direct_codex_news']
+
+
+def test_experiment_runs_and_registers_only_the_selected_approaches(tmp_path):
+    e=FakeEvidence();result=run(e,tmp_path,approach_ids=NINE)
+    assert [row['approach_id'] for row in result['approaches']]==NINE
+    assert [a['approach_id'] for a in e.registered['controlled-recovery']['approaches']]==NINE
+    books={r['portfolio_id'] for (k,_),r in e.records.items() if k=='portfolio_observation'}
+    assert len(books)==len(NINE)
+
+
+def test_unknown_selected_approach_is_rejected(tmp_path):
+    with pytest.raises(ValueError,match='unknown approach ids: not_a_model'):
+        run(FakeEvidence(),tmp_path,approach_ids=['cash','not_a_model'])

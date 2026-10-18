@@ -401,7 +401,16 @@ def _reconcile_forecasts(backend,experiment,at):
     if token:raise ValueError('pending forecast query exceeded bounded10000 records; heads retained for recovery')
     return {'status':'pending' if any(row['status']!='realized' for row in entries) else 'complete','forecasts':entries}
 
-def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None):
+def select_approaches(approaches,approach_ids=None):
+    """Restrict an experiment to an explicit, ordered set of approach IDs (all when None)."""
+    if not approach_ids:return approaches
+    by_id={a['approach_id']:a for a in approaches}
+    unknown=[aid for aid in approach_ids if aid not in by_id]
+    if unknown:raise ValueError('unknown approach ids: '+', '.join(unknown))
+    if len(set(approach_ids))!=len(approach_ids):raise ValueError('duplicate approach ids')
+    return [by_id[aid] for aid in approach_ids]
+
+def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None,approach_ids=None):
     import_costs = backend is None or managed_cost_reader is not None
     comparison_policy=comparison_policy or POLICY
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
@@ -450,6 +459,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         layer=next((f for f in features if 'news' in f or 'gdelt' in f),'not_consumed')
         extras.append(Approach(name,name.replace('_',' '),'reinforcement_learning','actor',news_layer=layer,requires='verified_frozen_policy_bundle',version=policy['configuration_id']).to_dict())
     approaches=source.get('registry_approaches') or registry(extras)
+    approaches=select_approaches(approaches,approach_ids)
     cohort_id='cohort_'+hashlib.sha256(canonical_json_bytes(sorted(source['investable_universe']))).hexdigest()[:16]
     comparison_policy_id=sha256_checksum(canonical_json_bytes({**comparison_policy,'investable_universe':source['investable_universe']}))
     from .model_freeze import freeze_experiment_models
@@ -682,9 +692,11 @@ def run_interim(slot,experiment,output,*,backend=None):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--slot',default=None);parser.add_argument('--experiment',default=DEFAULT_EXPERIMENT)
     parser.add_argument('--output',required=True);parser.add_argument('--research');parser.add_argument('--recover-before');parser.add_argument('--account-missed',action='store_true');parser.add_argument('--cohort',choices=['eight_assets'])
+    parser.add_argument('--approaches',help='Comma-separated approach IDs; the experiment runs only these books')
     args=parser.parse_args();slot=args.slot or slot_now()
     research=json.loads(Path(args.research).read_text()) if args.research else None
-    result=run_hourly(slot,args.experiment,args.output,research=research,account_missed=args.account_missed,cohort=args.cohort)
+    approach_ids=[a.strip() for a in args.approaches.split(',') if a.strip()] if args.approaches else None
+    result=run_hourly(slot,args.experiment,args.output,research=research,account_missed=args.account_missed,cohort=args.cohort,approach_ids=approach_ids)
     print(json.dumps(result))
     return 75 if result['status']=='incomplete' else 0
 
