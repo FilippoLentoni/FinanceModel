@@ -42,6 +42,9 @@ def _finish(inp, strategy, *, provider_evidence, started, scope):
 
 
 def jev_backtest(inp, *, client=None):
+    if inp.spec.get('forward_jev'):
+        from .forward_jev import run_forward
+        return run_forward(inp, client_factory=(lambda _: client) if client is not None else None)
     if inp.spec["purpose"] not in ("research", "tuning", "holdout_evaluation"):
         raise FinplanError.not_permitted("Jev benchmark accepts research purposes only", reason="outbound_purpose_not_permitted")
     started = time.monotonic()

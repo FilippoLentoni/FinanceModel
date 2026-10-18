@@ -116,6 +116,10 @@ class ArtifactStore(Protocol):
 
     def exists(self, ref: ArtifactRef | Mapping[str, Any]) -> bool: ...
 
+    def create_once(self, data: bytes, *, kind: str, artifact_id: str) -> bool: ...
+
+    def resolve(self, *, kind: str, artifact_id: str) -> ArtifactRef: ...
+
 
 class _BaseStore:
     def _ref(self, data: bytes, kind: str, content_type: str, artifact_id: str | None, synthetic: bool | None, domain: str | None) -> ArtifactRef:
@@ -162,6 +166,17 @@ class InMemoryArtifactStore(_BaseStore):
     def exists(self, ref: ArtifactRef | Mapping[str, Any]) -> bool:
         return self._as_ref(ref).artifact_id in self.objects
 
+    def create_once(self, data: bytes, *, kind: str, artifact_id: str) -> bool:
+        ref = self._ref(data, kind, 'application/json', artifact_id, None, 'finance')
+        candidate = (ref, bytes(data))
+        return self.objects.setdefault(ref.artifact_id, candidate) is candidate
+
+    def resolve(self, *, kind: str, artifact_id: str) -> ArtifactRef:
+        found = self.objects.get(artifact_id)
+        if found is None or found[0].kind != kind:
+            raise FinplanError(ErrorCode.NOT_FOUND, 'artifact not found', details={'artifact_id': artifact_id})
+        return found[0]
+
 
 class LocalArtifactStore(_BaseStore):
     """Artifacts as files ``<root>/<kind>/<artifact_id>`` (offline container runs)."""
@@ -195,6 +210,24 @@ class LocalArtifactStore(_BaseStore):
 
     def exists(self, ref: ArtifactRef | Mapping[str, Any]) -> bool:
         return self._path(self._as_ref(ref)).is_file()
+
+    def create_once(self, data: bytes, *, kind: str, artifact_id: str) -> bool:
+        ref = self._ref(data, kind, 'application/json', artifact_id, None, 'finance')
+        path = self._path(ref)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open('xb') as stream:
+                stream.write(data)
+            return True
+        except FileExistsError:
+            return False
+
+    def resolve(self, *, kind: str, artifact_id: str) -> ArtifactRef:
+        ref = self._ref(b'', kind, 'application/json', artifact_id, None, 'finance')
+        path = self._path(ref)
+        if not path.is_file():
+            raise FinplanError(ErrorCode.NOT_FOUND, 'artifact not found', details={'artifact_id': artifact_id})
+        return self._ref(path.read_bytes(), kind, 'application/json', artifact_id, None, 'finance')
 
 
 class S3ArtifactStore(_BaseStore):
@@ -244,6 +277,30 @@ class S3ArtifactStore(_BaseStore):
             if _status(exc) == 404:
                 return False
             raise
+
+    def create_once(self, data: bytes, *, kind: str, artifact_id: str) -> bool:
+        ref = self._ref(data, kind, 'application/json', artifact_id, None, 'finance')
+        try:
+            self._s3.put_object(Bucket=self._bucket, Key=self._key(ref), Body=data,
+                ContentType=ref.content_type, Metadata={'checksum': ref.checksum, 'kind': kind}, IfNoneMatch='*')
+            return True
+        except Exception as exc:
+            if _status(exc) == 412:
+                return False
+            raise
+
+    def resolve(self, *, kind: str, artifact_id: str) -> ArtifactRef:
+        template = self._ref(b'', kind, 'application/json', artifact_id, None, 'finance')
+        try:
+            head = self._s3.head_object(Bucket=self._bucket, Key=self._key(template))
+        except Exception as exc:
+            if _status(exc) == 404:
+                raise FinplanError(ErrorCode.NOT_FOUND, 'artifact not found', details={'artifact_id': artifact_id}) from None
+            raise
+        if head.get('Metadata', {}).get('kind') != kind:
+            raise FinplanError.precondition('artifact metadata kind mismatch', reason='artifact_kind_mismatch')
+        return ArtifactRef(artifact_id=artifact_id, kind=kind, checksum=head.get('Metadata', {}).get('checksum', ''),
+            content_type=head.get('ContentType', 'application/json'), size_bytes=head.get('ContentLength'), domain='finance')
 
 
 def _status(exc: BaseException) -> int | None:

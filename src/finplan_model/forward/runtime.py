@@ -198,7 +198,7 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
         if normalized.get('status')=='hold':
             normalized['solution_status']='no_effect'
             normalized['intents']=[{**intent,'proposed_delta_weight':intent['delta_weight'],'delta_weight':0.,'action':'hold','reason':'explicit_hold_no_rebalance'} for intent in normalized['intents']]
-        return {**normalized,'status':'hold' if normalized.get('solution_status') in ('no_effect','infeasible','unbounded','rejected_hold_current') or normalized.get('status')=='hold' else 'recommended',
+        return {**normalized,'status':'hold' if normalized.get('solution_status') in ('no_effect','infeasible','unbounded','rejected_hold_current') or normalized.get('status')=='hold' else ('reused' if normalized.get('status')=='reused' else 'recommended'),
                 'approach_id':approach_id,'run_id':run_id,'input_id':input_id,'latency_seconds':time.monotonic()-start,'compute_usage':compute_usage()}
     except Exception as exc:
         if capture_failed:

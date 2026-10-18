@@ -39,3 +39,11 @@ independent approver and rejects the submitting identity. Preflight never submit
 approves, changes roles or treats an old synthetic pilot as recurring approval.
 An approved current-book capture/result bridge remains required before these
 approaches can be included as evaluated portfolio performers.
+
+The separate approval-gated current-book Jev bridge is documented in
+[approved-forward-jev.md](approved-forward-jev.md). It preserves the original
+not-invoked preparation and never turns a historical managed pilot into the
+current book's policy. Until the compatible worker is published and an
+independently approved request actually succeeds, ordinary hourly preflight
+continues to report the precise managed-worker blocker. Qwen checkpoint and GPU
+requirements remain separate.

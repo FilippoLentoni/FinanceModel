@@ -197,6 +197,14 @@ def job_execution_policy(env: str, *, partition: str = PARTITION, region: str = 
                 },
             },
             {"Sid": "PlatformSnapshotReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
+            *([{'Sid': 'BetaIsolatedPaperBookEligibilityReads', 'Effect': 'Allow', 'Action': ['execute-api:Invoke'],
+                'Resource': _platform_reads(region, account, partition,
+                    'v1/portfolios/pf_' + '?' * 26, 'v1/portfolios/pf_' + '?' * 26 + '/state')}]
+              if env == 'beta' else []),
+            *([{'Sid': 'BetaForwardContextHeadRead', 'Effect': 'Allow', 'Action': ['dynamodb:GetItem'],
+                'Resource': [_arn('dynamodb', 'table/' + n.env_name(env, n.CONTROL_TABLE), partition=partition, region=region, account=account)],
+                'Condition': {'ForAllValues:StringLike': {'dynamodb:LeadingKeys': ['FORWARD_CONTEXT#*']}}}]
+              if env == 'beta' else []),
             {
                 "Sid": "ReadOwnReferences",
                 "Effect": "Allow",

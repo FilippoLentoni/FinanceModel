@@ -386,7 +386,8 @@ def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
     if token:raise ValueError('pending forecast query exceeded bounded10000 records; heads retained for recovery')
     return execution
 
-def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None):
+def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None):
+    import_costs = backend is None or managed_cost_reader is not None
     comparison_policy=comparison_policy or POLICY
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
     reconciliation_attempt=None;processing_versions=_processing_versions()
@@ -480,7 +481,8 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             apply=apply_forward_quotes,config=evaluator_config(comparison_policy),allow_execution=False)
     owner=socket.gethostname()+':'+str(os.getpid());summary=[]
     from .public_preflight import jev_adapter,qwen_adapter
-    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'jev':jev_adapter,'qwen':qwen_adapter,**(external_adapters or {})}
+    from .approved_jev import adapter as approved_jev_adapter
+    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'jev':approved_jev_adapter(experiment),'qwen':qwen_adapter,**(external_adapters or {})}
     for approach in approaches:
         aid=approach['approach_id'];rid=identifier('mr',experiment,aid,slot);iid=identifier('mi',experiment,aid,slot,'model_input')
         book=backend.ensure_portfolio(experiment,aid,comparison_policy['initial_capital'],source['investable_universe'],at)
@@ -538,7 +540,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             if outcome.get('forecast'):
                 issued_at=now or stamp();outcome['recommendation_issued_at']=issued_at
                 outcome=freeze_outcome(outcome,decision_at=issued_at,run_id=rid,portfolio_id=book['portfolio_id'],baseline_value=holdings.get('portfolio_value'))
-            outcome['execution_status']='pending_'+comparison_policy['execution_timing'] if outcome['status'] in ('succeeded','hold') else 'not_applicable'
+            outcome['execution_status']='pending_'+comparison_policy['execution_timing'] if outcome['status'] in ('succeeded','hold','reused') else 'not_applicable'
             outcome['market_input_status']='actual_native_completed_hourly_crypto_history' if source.get('native_crypto_dataset') else 'completed_daily_history_reused_until_next_valid_snapshot'
             outcome['price_as_of']=(source.get('native_crypto_dataset') or {}).get('as_of') or max((r['session_date'] for r in source.get('observations',[])),default=None)
             outcome['news_research_status']='available' if source.get('news') else 'missing_coverage'
@@ -555,8 +557,18 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         summary.append({'approach_id':aid,'run_id':rid,'input_id':iid,'portfolio_id':book['portfolio_id'],'status':outcome['status']})
     active=[r for r in summary if r['status']=='running_other_owner']
     reconciliation=reconciliation_attempt if reconciliation_attempt is not None else source.get('execution_reconciliation') or {}
+    cost_import = {'status': 'not_requested_for_injected_backend', 'affected_reporting_days': [], 'incomplete': False}
+    if import_costs:
+        from .approved_jev import ApprovedForwardReader
+        from .managed_costs import import_pending
+        try:
+            cost_import = import_pending(backend, managed_cost_reader or ApprovedForwardReader.from_ec2(), experiment, at=now or stamp())
+        except Exception as exc:
+            cost_import = {'status': 'failed', 'error_type': type(exc).__name__, 'affected_reporting_days': [], 'incomplete': True}
+        (output/'managed-cost-import.json').write_bytes(canonical_json_bytes(cost_import))
     result={'slot':slot,'experiment_id':experiment,'generated_at':stamp(),'approaches':summary,'shared_input_id':shared['input_id'],
-            'status':'incomplete' if active or reconciliation.get('incomplete') else 'complete',
+            'status':'incomplete' if active or reconciliation.get('incomplete') or cost_import.get('incomplete') else 'complete',
+            'managed_cost_import':cost_import,
             'incomplete_approaches':active+reconciliation.get('incomplete',[])}
     (output/'hourly-result.json').write_bytes(canonical_json_bytes(result));return result
 

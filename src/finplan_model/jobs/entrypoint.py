@@ -109,6 +109,10 @@ def run_job(
             spec = {**spec, "simulation": {**dict(spec["simulation"]), "cash_rate_annual": cash_assumption(content)["annual_rate"]}}
         ctx = replace(ctx, synthetic=bool(market.synthetic or spec.get("synthetic")))
         doc = handler(JobInputs(ctx=ctx, spec=spec, market=market, snapshot=content, artifacts=artifacts, platform=platform))
+        if doc.get('completion_status') != 'succeeded':
+            run_io.put_result(run_id, doc)
+            ctx.log('job_failed', reason='handler_failed_result', artifacts=len(doc.get('artifacts', [])))
+            return 1, doc
         if spec["purpose"] == "production_candidate":
             from finplan_model.staging import StagingTarget, stage_run_output
 

@@ -83,7 +83,7 @@ class Submission:
         return str(self.body["purpose"])
 
 
-def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: Any = None) -> Submission:
+def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: Any = None, forward_one_decision: bool = False) -> Submission:
     """Validate a ``submit_job`` body; ``job_definition_published(job_type) -> bool`` checks deployment."""
     if not isinstance(body, Mapping):
         raise FinplanError.validation("the request body must be a JSON object", pointer="")
@@ -103,6 +103,10 @@ def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: 
     if body.get("configuration_id") not in (None, computed):
         raise FinplanError.validation("configuration_id does not match the canonical configuration", pointer="/configuration_id")
     name = str(body["job_type"])
+    from finplan_model.benchmarks.forward_jev import OBJECTIVE
+    forward = body['configuration']['payload'].get('objective') == OBJECTIVE
+    if forward != forward_one_decision or (forward and (name != 'jev_backtest' or body['purpose'] != 'research' or body.get('evaluation_window'))):
+        raise FinplanError.validation('forward decisions require the typed trusted producer and no historical evaluation window')
     jt = cfg.job_type(name)
     if jt is None:
         if name in PLANNED_JOB_TYPES:
@@ -129,7 +133,7 @@ def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: 
         if name in ("swarm_mode_a", "jev_backtest"):
             if payload.get("rebalance_frequency") != "daily":
                 raise FinplanError.validation("all benchmark families must decide daily", pointer="/configuration/payload/rebalance_frequency")
-            if not body.get("evaluation_window"):
+            if not forward and not body.get("evaluation_window"):
                 raise FinplanError.validation("daily LLM benchmarks require an explicit bounded window", pointer="/evaluation_window")
     if body.get("compute_class") not in (None, jt.compute_class):
         raise FinplanError.validation("compute_class does not match the job type", pointer="/compute_class")

@@ -45,7 +45,7 @@ __all__ = ["api_handler", "build_service", "dispatcher_handler", "state_change_h
 _SERVICE: Any = None
 
 
-def build_service(env: str | None = None, *, session: Any = None) -> Any:
+def build_service(env: str | None = None, *, session: Any = None, runs_table: str | None = None) -> Any:
     """Build the deployed :class:`~finplan_model.control.service.JobService` (boto3 clients, SSM settings)."""
     import boto3
 
@@ -102,7 +102,7 @@ def build_service(env: str | None = None, *, session: Any = None) -> Any:
         artifacts=S3ArtifactStore(s3, bucket),
         advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
         cfg=cfg,
-        store=DynamoRunStore(session.client("dynamodb"), os.environ["FINPLAN_RUNS_TABLE"]),
+        store=DynamoRunStore(session.client("dynamodb"), runs_table or os.environ["FINPLAN_RUNS_TABLE"]),
         settings=settings,
         sagemaker=session.client("sagemaker"),
         run_io=S3RunIO(s3, bucket),
