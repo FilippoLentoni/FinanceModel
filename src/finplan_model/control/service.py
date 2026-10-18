@@ -192,7 +192,7 @@ class JobService:
             new["completion_status"] = new_state
             new["completed_at"] = now
         event = {"run_id": run["run_id"], "seq": len(new["transitions"]) - 1, "from_state": run["state"], "state": new_state, "at": now, **({"reason": reason} if reason else {})}
-        if is_terminal(new_state) and new.get('forward_jev'):
+        if is_terminal(new_state) and (new.get('forward_jev') or new.get('forward_qwen')):
             from finplan_model.forward.managed_costs import terminal_cost_event
             cost_event = terminal_cost_event(new)
             new['forward_cost_event'] = copy.deepcopy(cost_event)
@@ -252,7 +252,41 @@ class JobService:
         return self._submit_job(principal, submission(binding, dry_run=dry_run),
             correlation_id=correlation_id, forward_binding=binding, forward_previous_run_id=previous_context)
 
-    def _submit_job(self, principal: Principal, body: Any, *, correlation_id: str, forward_binding: Mapping[str, Any] | None = None, forward_previous_run_id: str | None = None) -> tuple[int, dict[str, Any]]:
+    def submit_forward_qwen(self, principal: Principal, binding: Mapping[str, Any], *, dry_run: bool = True, correlation_id: str, origin_evidence: Any = None) -> tuple[int, dict[str, Any]]:
+        from .forward_qwen import require_operator, submission, verified_binding, predecessor
+        from finplan_model.benchmarks.forward_qwen import validate_binding, checksum, managed_id, source_from_snapshot, prepare_native, instant, verify_current_book
+        from finplan_model.jobs.market_loader import load_market
+        from finplan_model.core.context import RunContext
+        require_operator(self.cfg, principal)
+        validate_binding(binding)
+        if origin_evidence is None:
+            raise FinplanError.validation('authoritative original evidence reader is required')
+        definition = self.d.settings.job_definition('swarm_mode_a') or {}
+        original = verified_binding(origin_evidence, binding['experiment_id'], binding['origin_run_id'])
+        if checksum(original) != checksum(binding):
+            raise FinplanError.precondition('forward binding differs from authoritative original captured input', reason='forward_original_input_mismatch')
+        # A permanent deterministic job head remains authoritative after idempotency TTL.
+        prior = self.store.get_run(managed_id(binding))
+        if prior is not None and not dry_run:
+            if (prior.get('forward_qwen') or {}).get('binding_checksum') != checksum(binding):
+                raise FinplanError.precondition('permanent forward binding conflict', reason='forward_binding_conflict')
+            return 200, {'run_id': prior['run_id'], 'configuration_id': prior['configuration_id'],
+                'state': prior['state'], 'dry_run': False, 'cost_estimate': prior['cost_estimate'],
+                'message': 'Permanent identical forward binding already recorded; no additional job created.'}
+        if not dry_run and definition.get('forward_protocol') != 'finplan-qwen-forward/1':
+            raise FinplanError.precondition('current managed worker does not publish forward capability', reason='forward_worker_not_published')
+        previous_context = predecessor(self, binding)
+        if self.d.platform is None or self.d.artifacts is None:
+            raise FinplanError.dependency_unavailable('approved snapshot and owned artifact backend required', retryable=False)
+        if self.now() >= instant(binding['availability_cutoff']) + timedelta(hours=1):
+            raise FinplanError.precondition('captured forward request expired before submission', reason='forward_request_expired')
+        verify_current_book(self.d.platform, binding)
+        market, content = load_market(self.d.platform, binding['source']['input_snapshot_id'])
+        prepare_native(binding, source_from_snapshot(content, market, binding))
+        return self._submit_job(principal, submission(binding, dry_run=dry_run),
+            correlation_id=correlation_id, forward_binding=binding, forward_previous_run_id=previous_context, forward_kind='qwen')
+
+    def _submit_job(self, principal: Principal, body: Any, *, correlation_id: str, forward_binding: Mapping[str, Any] | None = None, forward_previous_run_id: str | None = None, forward_kind: str = 'jev') -> tuple[int, dict[str, Any]]:
         if not isinstance(body, Mapping):
             raise FinplanError.validation("the request body must be a JSON object", pointer="")
         dry_run = body.get("dry_run") is True
@@ -395,6 +429,9 @@ class JobService:
         needs_approval = gpu or sub.job_type.name in ("jev_backtest", "rl_weight_staging") or est.estimated_usd_upper_bound > threshold + 1e-12
         state = "awaiting_approval" if needs_approval else "queued"
         now = self.ts()
+        if forward_kind not in ('jev', 'qwen'):
+            raise ValueError('unknown trusted forward kind')
+        forward_key = 'forward_' + forward_kind
         from finplan_model.benchmarks.forward_jev import managed_id, checksum
         run_id = managed_id(forward_binding) if forward_binding is not None else self.d.ids.run_id()
         model_version = None
@@ -461,18 +498,26 @@ class JobService:
         }
         if forward_binding is not None:
             ref = self.d.artifacts.put_json(forward_binding, kind='run_artifact', domain='finance', synthetic=synthetic)
-            definition = self.d.settings.job_definition('jev_backtest') or {}
+            definition = self.d.settings.job_definition(sub.job_type.name) or {}
             digest = str(definition.get('image_uri', '')).rsplit('@', 1)[-1]
             if not digest.startswith('sha256:'):
                 raise FinplanError.precondition('forward worker image must be immutable', reason='forward_worker_image_invalid')
             if not re.fullmatch(r'[0-9a-f]{40}', str(definition.get('forward_source_commit', ''))):
                 raise FinplanError.precondition('forward worker source identity is not published', reason='forward_worker_source_invalid')
-            run['forward_jev'] = {'binding_ref': ref.to_dict(), 'binding_checksum': checksum(forward_binding),
+            run[forward_key] = {'binding_ref': ref.to_dict(), 'binding_checksum': checksum(forward_binding),
                 'mode': 'forward_one_decision', 'worker_image_digest': digest, 'worker_source_commit': definition['forward_source_commit'], 'experiment_id': forward_binding['experiment_id'],
                 'approach_id': forward_binding['approach_id'], 'portfolio_id': forward_binding['holdings']['portfolio_id']}
-            from finplan_model.benchmarks.forward_jev import context_identity, instant
-            run['forward_jev']['context_id'] = context_identity(forward_binding)
-            run['forward_jev']['invocation_expires_at'] = utc_iso(instant(forward_binding['availability_cutoff']) + timedelta(hours=1))
+            from finplan_model.benchmarks.forward_jev import instant
+            if forward_kind == 'qwen':
+                from finplan_model.benchmarks.forward_qwen import context_identity
+            else:
+                from finplan_model.benchmarks.forward_jev import context_identity
+            if forward_kind == 'qwen':
+                if not re.fullmatch(r'sha256:[0-9a-f]{64}', str(definition.get('code_checksum',''))):
+                    raise FinplanError.precondition('Qwen immutable code capability missing', reason='qwen_code_not_released')
+                run[forward_key]['worker_code_checksum'] = definition['code_checksum']
+            run[forward_key]['context_id'] = context_identity(forward_binding)
+            run[forward_key]['invocation_expires_at'] = utc_iso(instant(forward_binding['availability_cutoff']) + timedelta(hours=1))
         message = "A human approver must approve this run before it starts." if needs_approval else "Queued; the run starts when a concurrency lease is free."
         resp = {"run_id": run_id, "configuration_id": sub.configuration_id, "state": state, "dry_run": False, "cost_estimate": block, "message": message}
         if synthetic:
@@ -483,15 +528,15 @@ class JobService:
         try:
             if forward_binding is not None:
                 self.store.create_run(run, [event], idem, forward_context={
-                    'context_id': run['forward_jev']['context_id'], 'managed_run_id': run_id,
-                    'binding_ref': run['forward_jev']['binding_ref'], 'binding_checksum': checksum(forward_binding),
+                    'context_id': run[forward_key]['context_id'], 'managed_run_id': run_id,
+                    'binding_ref': run[forward_key]['binding_ref'], 'binding_checksum': checksum(forward_binding),
                     'previous_managed_run_id': forward_previous_run_id})
             else:
                 self.store.create_run(run, [event], idem)
         except ConditionFailed:
             if forward_binding is not None:
                 prior = self.store.get_run(run_id)
-                if prior and (prior.get('forward_jev') or {}).get('binding_checksum') == checksum(forward_binding):
+                if prior and (prior.get(forward_key) or {}).get('binding_checksum') == checksum(forward_binding):
                     return 200, {**resp, 'state': prior['state'], 'message': 'Permanent identical forward binding already recorded; no additional job created.'}
             replay = self._replay(scope_key, body) if scope_key else None
             if replay is not None:
@@ -701,7 +746,7 @@ class JobService:
             return status_document(run, self.now())  # already approved (idempotent)
         if run["state"] != "awaiting_approval":
             raise FinplanError.precondition("the run is not awaiting approval", reason="not_awaiting_approval", state=run["state"])
-        if run.get('forward_jev') and self.now() >= parse_utc(run['forward_jev']['invocation_expires_at']):
+        if (run.get('forward_jev') or run.get('forward_qwen')) and self.now() >= parse_utc((run.get('forward_jev') or run['forward_qwen'])['invocation_expires_at']):
             self._transition(run, 'cancelled', reason='forward_request_expired', cancel_reason='forward_request_expired', wait_reason=None)
             raise FinplanError.precondition('forward request expired before human approval', reason='forward_request_expired')
         if self._approval_expired(run):
@@ -855,13 +900,22 @@ class JobService:
             jd = self.d.settings.job_definition(run["job_type"])
             if not jd:
                 raise FinplanError.dependency_unavailable("the job definition is not published", retryable=False, job_type=run["job_type"])
-            if run.get('forward_jev'):
-                head = self.store.get_forward_context(run['forward_jev']['context_id'])
-                if not head or head.get('managed_run_id') != run['run_id'] or head.get('binding_checksum') != run['forward_jev']['binding_checksum']:
+            forward = run.get('forward_jev') or run.get('forward_qwen')
+            if forward:
+                head = self.store.get_forward_context(forward['context_id'])
+                if not head or head.get('managed_run_id') != run['run_id'] or head.get('binding_checksum') != forward['binding_checksum']:
                     raise FinplanError.precondition('managed forward context superseded before compute', reason='forward_context_superseded')
-                expected = run['forward_jev']['worker_image_digest']
-                if jd.get('forward_protocol') != 'finplan-jev-forward/1' or str(jd.get('image_uri', '')).rsplit('@', 1)[-1] != expected or jd.get('forward_source_commit') != run['forward_jev']['worker_source_commit']:
+                protocol = 'finplan-qwen-forward/1' if run.get('forward_qwen') else 'finplan-jev-forward/1'
+                if jd.get('forward_protocol') != protocol or str(jd.get('image_uri', '')).rsplit('@', 1)[-1] != forward['worker_image_digest'] or jd.get('forward_source_commit') != forward['worker_source_commit']:
                     raise FinplanError.precondition('approved forward worker capability/image changed', reason='forward_worker_image_changed')
+                if run.get('forward_qwen'):
+                    if jd.get('code_checksum') != forward['worker_code_checksum']:
+                        raise FinplanError.precondition('approved Qwen code channel changed', reason='forward_worker_code_changed')
+                    from finplan_model.benchmarks.forward_qwen import verify_current_book, instant
+                    binding = self.d.artifacts.get_json(forward['binding_ref'])
+                    if self.now() >= instant(binding['availability_cutoff']) + timedelta(hours=1):
+                        raise FinplanError.precondition('forward request expired before compute', reason='forward_request_expired')
+                    verify_current_book(self.d.platform, binding)
             image_uri = str(jd.get("image_uri") or "")
             digest = image_uri.rsplit("@", 1)[1] if "@" in image_uri else None
             spec = build_run_spec(run, simulation=run["simulation"], image_digest=digest)
@@ -1013,7 +1067,7 @@ class JobService:
             job_doc = None
         outcome, result, error = self._final_result(run, outcome, job_doc)
         changes: dict[str, Any] = {"result": result, "error": error, "wait_reason": None}
-        if run.get('forward_jev'):
+        if run.get('forward_jev') or run.get('forward_qwen'):
             ended = desc.get(JOB_KINDS[job_kind(run)]['end'])
             if isinstance(ended, datetime):
                 changes['job_finished_at'] = utc_iso(ended)
@@ -1050,6 +1104,9 @@ class JobService:
                 status = str(job_status(desc, job_kind(run)) or "Failed")
                 self._apply_status(run, status, desc or {"FailureReason": "job not found"}, source="lease_reclaim")
             elif run["state"] == "starting":
+                if run.get('forward_qwen') and int(run.get('attempt', 0)) > 0:
+                    self._fail(run, FinplanError.precondition('offline forward start outcome indeterminate; no automatic relaunch', reason='qwen_forward_start_indeterminate'), reason='qwen_forward_start_indeterminate')
+                    return True
                 try:
                     self._transition(run, "queued", reason="start_incomplete", wait_reason="start_incomplete")
                 except ConditionFailed:

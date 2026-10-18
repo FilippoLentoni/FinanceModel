@@ -73,11 +73,12 @@ def build_run_spec(run: Mapping[str, Any], *, simulation: Mapping[str, Any], ima
         "cost_estimate": run.get("cost_estimate"),
         "synthetic": bool(run.get("synthetic")),
     }
-    if run.get('forward_jev'):
+    if run.get('forward_jev') or run.get('forward_qwen'):
+        forward_key = 'forward_qwen' if run.get('forward_qwen') else 'forward_jev'
         approval = run.get('approval') or {}
         if not run.get('approval_required') or not approval.get('approved_by') or approval['approved_by'] == run.get('principal_name'):
             raise FinplanError.precondition('forward Jev requires independent human approval', reason='forward_approval_missing')
-        spec['forward_jev'] = {**dict(run['forward_jev']), 'approval_verified': True,
+        spec[forward_key] = {**dict(run[forward_key]), 'approval_verified': True,
             'approved_by': approval['approved_by'], 'approved_at': approval['approved_at']}
     if run.get("evaluation_window"):
         spec["evaluation_window"] = dict(run["evaluation_window"])
@@ -124,9 +125,13 @@ def validate_run_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     if spec["spec_version"] != SPEC_VERSION:
         raise FinplanError.validation("unsupported run spec version", pointer="/spec_version")
     _no_storage(spec)
-    if spec.get('forward_jev'):
-        descriptor = spec['forward_jev']
-        if spec['job_type'] != 'jev_backtest' or spec['purpose'] != 'research' or spec.get('evaluation_window') or descriptor.get('mode') != 'forward_one_decision' or descriptor.get('approval_verified') is not True:
+    if spec.get('forward_jev') or spec.get('forward_qwen'):
+        if spec.get('forward_jev') and spec.get('forward_qwen'):
+            raise FinplanError.validation('forward descriptors are mutually exclusive')
+        key = 'forward_qwen' if spec.get('forward_qwen') else 'forward_jev'
+        descriptor = spec[key]
+        expected = 'swarm_mode_a' if key == 'forward_qwen' else 'jev_backtest'
+        if spec['job_type'] != expected or spec['purpose'] != 'research' or spec.get('evaluation_window') or descriptor.get('mode') != 'forward_one_decision' or descriptor.get('approval_verified') is not True:
             raise FinplanError.validation('invalid managed forward decision spec')
     SimulationConfig.from_dict(spec["simulation"])
     return dict(spec)

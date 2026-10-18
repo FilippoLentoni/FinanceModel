@@ -9,11 +9,11 @@ from finplan_model.core.artifacts import canonical_json_bytes,sha256_checksum
 
 
 def terminal_cost_event(run):
-    descriptor=run['forward_jev'];result=run.get('result') or {}
-    section=(result.get('payload') or {}).get('forward_jev') or {}
+    descriptor=run.get('forward_jev') or run['forward_qwen'];result=run.get('result') or {}
+    section=(result.get('payload') or {}).get('forward_jev') or (result.get('payload') or {}).get('forward_qwen') or {}
     usage=section.get('usage')
     not_started=not run.get('job_started') and int(run.get('attempt',0))==0
-    known_no_vendor=not_started or isinstance(usage,dict) and usage.get('transport_calls',usage.get('calls'))==0
+    known_no_vendor=bool(run.get('forward_qwen')) or not_started or isinstance(usage,dict) and usage.get('transport_calls',usage.get('calls'))==0
     occurred=run.get('job_finished_at') or result.get('completed_at') or run['completed_at']
     refs=[descriptor['binding_ref'],*result.get('artifacts',[])]
     return {'protocol':'finplan-managed-model-cost/1','event_id':'managed:'+run['run_id'],
@@ -37,7 +37,7 @@ def import_pending(backend,reader,experiment,*,at,max_events=100,refresh_dir=Non
     rows,token=reader.runs.query_forward_cost_events(experiment,limit=max_events)
     imported=[];days=[]
     for event in rows:
-        if event.get('protocol')!='finplan-managed-model-cost/1' or event.get('experiment_id')!=experiment or event.get('event_id')!='managed:'+event.get('managed_run_id','') or event.get('approach_id')!='jev_systemone':
+        if event.get('protocol')!='finplan-managed-model-cost/1' or event.get('experiment_id')!=experiment or event.get('event_id')!='managed:'+event.get('managed_run_id','') or event.get('approach_id') not in ('jev_systemone','qwen_swarm_mode_a'):
             raise ValueError('managed cost outbox event scope invalid')
         kind='managed_model_cost:'+event['managed_run_id'];slot=datetime.fromisoformat(event['occurred_at'].replace('Z','+00:00')).astimezone(UTC).isoformat().replace('+00:00','Z')
         oid='mo_'+sha256_checksum(canonical_json_bytes([experiment,event['approach_id'],slot,kind])).split(':')[1]
@@ -51,14 +51,32 @@ def import_pending(backend,reader,experiment,*,at,max_events=100,refresh_dir=Non
             if receipt['checksum']!=checksum(event) or backend.read_artifact_bytes(receipt)!=canonical_json_bytes(event):
                 raise ValueError('managed cost receipt readback mismatch')
         ref={'observation_id':receipt['observation_id'],'checksum':receipt['checksum']}
+        from .managed_inputs import captured_event
+        input_kind='managed_inference_evidence:'+event['managed_run_id']
+        input_id='mo_'+sha256_checksum(canonical_json_bytes([experiment,event['approach_id'],slot,input_kind])).split(':')[1]
+        old_inputs=backend.repo.get('portfolio_observation',input_id)
+        if old_inputs:
+            input_receipt=old_inputs.doc
+            input_bytes=backend.read_artifact_bytes(input_receipt)
+            input_payload=json.loads(input_bytes)
+            if input_receipt.get('experiment_id')!=experiment or input_receipt.get('approach_id')!=event['approach_id'] or input_receipt.get('portfolio_id')!=event['portfolio_id'] or input_receipt.get('kind')!=input_kind or input_receipt.get('slot')!=slot or input_receipt.get('checksum')!=sha256_checksum(input_bytes) or input_payload.get('protocol')!='finplan-managed-inference-evidence/1' or input_payload.get('cost_event_checksum')!=checksum(event) or input_payload.get('managed_run_id')!=event['managed_run_id']:
+                raise ValueError('existing managed original input receipt conflicts')
+        else:
+            input_payload=captured_event(event,reader)
+            input_receipt=backend.record_observation(experiment,event['approach_id'],slot,event['portfolio_id'],input_payload,at,kind=input_kind)
+            if input_receipt['checksum']!=checksum(input_payload) or backend.read_artifact_bytes(input_receipt)!=canonical_json_bytes(input_payload):
+                raise ValueError('managed original input receipt readback mismatch')
+        input_ref={'observation_id':input_receipt['observation_id'],'checksum':input_receipt['checksum']}
         day=datetime.fromisoformat(slot.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat()
         directory=refresh_dir or os.environ.get('FINPLAN_REPORT_REFRESH_DIR')
         if not directory:raise ValueError('durable FINPLAN_REPORT_REFRESH_DIR required before managed cost acknowledgement')
         from .report_refresh import enqueue
         enqueue(directory,{'protocol':'finplan-report-refresh/1','experiment_id':experiment,
             'reporting_day':day,'event_id':event['event_id'],'observation_id':ref['observation_id'],'checksum':ref['checksum']})
+        enqueue(directory,{'protocol':'finplan-report-refresh/1','experiment_id':experiment,
+            'reporting_day':day,'event_id':input_payload['event_id'],'observation_id':input_ref['observation_id'],'checksum':input_ref['checksum']})
         reader.runs.ack_forward_cost_event(experiment,event['event_id'],ref,at)
-        imported.append({'event_id':event['event_id'],'observation_ref':ref})
+        imported.append({'event_id':event['event_id'],'observation_ref':ref,'inference_evidence_ref':input_ref})
         day=datetime.fromisoformat(slot.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat()
         days.append(day)
     return {'status':'pending_more' if token else 'complete','imported':imported,

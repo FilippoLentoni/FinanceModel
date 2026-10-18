@@ -203,6 +203,9 @@ def planned_parameters(env: str, info: ReleaseInfo, outputs: Mapping[str, str], 
             if env == 'beta' and jt == 'jev_backtest':
                 doc['forward_protocol'] = 'finplan-jev-forward/1'
                 doc['forward_source_commit'] = info.source_commit
+            if env == "beta" and jt == "swarm_mode_a":
+                doc["forward_protocol"] = "finplan-qwen-forward/1"
+                doc["forward_source_commit"] = info.source_commit
             if jt == "swarm_mode_a":
                 doc.update({"offline_code_release": info.release_id, "serving_mode": "offline_vllm_training", "external_image_parameter": _name(env, "config", "vllm-image")})
             add(f"job-{jt.replace('_', '-')}", "job", jt.replace("_", "-"), json.dumps(doc, sort_keys=True, separators=(",", ":")))

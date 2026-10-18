@@ -69,6 +69,9 @@ def jev_backtest(inp, *, client=None):
 
 
 def swarm_mode_a(inp, *, backend=None, weights_root="/opt/ml/input/data/weights"):
+    if getattr(inp,"spec",{}).get("forward_qwen"):
+        from .forward_qwen import run_forward
+        return run_forward(inp, backend=backend, weights_root=weights_root)
     started = time.monotonic()
     scope = _scope(inp)
     engine = backend or VllmBackend(weights_root)

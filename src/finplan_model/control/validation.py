@@ -105,7 +105,7 @@ def validate_submission(body: Any, cfg: EnvConfig, *, job_definition_published: 
     name = str(body["job_type"])
     from finplan_model.benchmarks.forward_jev import OBJECTIVE
     forward = body['configuration']['payload'].get('objective') == OBJECTIVE
-    if forward != forward_one_decision or (forward and (name != 'jev_backtest' or body['purpose'] != 'research' or body.get('evaluation_window'))):
+    if forward != forward_one_decision or (forward and (name not in ('jev_backtest', 'swarm_mode_a') or body['purpose'] != 'research' or body.get('evaluation_window'))):
         raise FinplanError.validation('forward decisions require the typed trusted producer and no historical evaluation window')
     jt = cfg.job_type(name)
     if jt is None:

@@ -101,7 +101,7 @@ def _cost_event(run: Mapping[str, Any], event: Mapping[str, Any]) -> tuple[dict[
     """Validate private outbox identity before the terminal run transaction."""
     from .states import is_terminal
     from finplan_model.core.artifacts import canonical_json_bytes, sha256_checksum
-    descriptor = run.get("forward_jev") or {}
+    descriptor = run.get("forward_jev") or run.get("forward_qwen") or {}
     if (not is_terminal(run["state"]) or event.get("protocol") != "finplan-managed-model-cost/1"
             or event.get("event_id") != "managed:" + run["run_id"]
             or event.get("managed_run_id") != run["run_id"] or event.get("job_state") != run["state"]):
@@ -162,7 +162,7 @@ def _cost_ack(event: Mapping[str, Any], observation_ref: Mapping[str, Any], reco
 
 
 def _forward_context_doc(run: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
-    descriptor = run.get("forward_jev") or {}
+    descriptor = run.get("forward_jev") or run.get("forward_qwen") or {}
     if (context.get("managed_run_id") != run["run_id"] or not context.get("context_id")
             or not isinstance(context["context_id"], str) or len(context["context_id"]) > 256):
         raise ValueError("invalid forward managed context identity")

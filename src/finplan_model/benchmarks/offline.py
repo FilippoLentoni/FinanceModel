@@ -45,6 +45,15 @@ class OfflineBatchIO:
             raise
         content = SnapshotReader(self.platform).load(run["input_snapshot_id"])
         bundle = {"spec": spec, "record": content.snapshot.record, "manifest": content.manifest, "payload": content.payload, "verified": content.verified}
+        if run.get('forward_qwen'):
+            if definition.get('code_checksum') != run['forward_qwen']['worker_code_checksum']:
+                raise ValueError('offline approved code channel changed')
+            binding = self.artifacts.get_json(run['forward_qwen']['binding_ref'])
+            from .forward_qwen import validate_binding, checksum
+            validate_binding(binding)
+            if checksum(binding) != run['forward_qwen']['binding_checksum']:
+                raise ValueError('offline forward binding checksum mismatch')
+            bundle['forward_qwen_binding'] = binding
         data = canonical_json_bytes(bundle)
         key = "scratch/offline/" + run["run_id"] + "/input.json"
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType="application/json")
@@ -115,8 +124,19 @@ def main():
     content = SnapshotContent(ResolvedSnapshot(spec["input_snapshot_id"], bundle["record"]), bundle["manifest"], bundle["payload"], bundle["verified"])
     root = Path("/opt/ml/model")
     artifacts = LocalArtifactStore(root / "artifacts")
+    if spec.get('forward_qwen'):
+        from .forward_qwen import validate_binding, checksum
+        binding = validate_binding(bundle['forward_qwen_binding'])
+        if checksum(binding) != spec['forward_qwen']['binding_checksum']:
+            raise ValueError('offline original binding checksum mismatch')
+        ref = spec['forward_qwen']['binding_ref']
+        stored = artifacts.put_json(binding, kind='run_artifact', artifact_id=ref['artifact_id'])
+        if stored.checksum != ref['checksum']:
+            raise ValueError('offline original binding reference mismatch')
     try:
         inp = JobInputs(ctx=ctx, spec=spec, market=market_from_content(content), snapshot=content, artifacts=artifacts)
+        if spec.get('forward_qwen'):
+            inp.offline_code_checksum = os.environ['FINPLAN_OFFLINE_CODE_SHA256']
         result = swarm_mode_a(inp)
     except Exception as exc:
         result = failed_job_result(ctx, exc, run_id=spec["run_id"])

@@ -42,7 +42,7 @@ def test_import_original_cost_bytes_actual_day_actual_available_time_and_queue_b
     doc=backend.writes[0]
     assert doc['slot']==event['occurred_at'] and doc['observed_at']=='2026-07-13T01:00:00Z'
     assert backend.read_artifact_bytes(doc)==canonical_json_bytes(event)
-    task=json.loads(next(tmp_path.glob('*.json')).read_text())
+    task=next(json.loads(p.read_text()) for p in tmp_path.glob('*.json') if json.loads(p.read_text())['event_id']==event['event_id'])
     assert task['reporting_day']=='2026-07-11' and task['checksum']==doc['checksum']
     assert result['affected_reporting_days']==['2026-07-11'] and outbox.acks
     assert next(tmp_path.glob('*.json')).stat().st_mode&0o777==0o600
@@ -53,20 +53,20 @@ def test_crash_after_receipt_queue_before_ack_reuses_original_bytes_without_new_
     with pytest.raises(RuntimeError):import_pending(backend,SimpleNamespace(runs=outbox),'controlled',at='2026-07-13T01:00:00Z',refresh_dir=tmp_path)
     original=copy.deepcopy(backend.writes[0]);outbox.fail_ack=False
     result=import_pending(backend,SimpleNamespace(runs=outbox),'controlled',at='2026-07-14T01:00:00Z',refresh_dir=tmp_path)
-    assert backend.writes==[original] and len(list(tmp_path.glob('*.json')))==1 and result['status']=='complete'
+    assert backend.writes[0]==original and len(backend.writes)==2 and len(list(tmp_path.glob('*.json')))==2 and result['status']=='complete'
 
 
 def test_same_timestamp_different_jobs_have_isolated_permanent_cost_receipts(tmp_path):
     backend=Backend();a=cost_event();b={**a,'event_id':'managed:second-job','managed_run_id':'second-job'}
     for event in (a,b):import_pending(backend,SimpleNamespace(runs=Outbox(event)),'controlled',at='2026-07-13T01:00:00Z',refresh_dir=tmp_path)
-    assert len(backend.docs)==2 and len(list(tmp_path.glob('*.json')))==2
+    assert len(backend.docs)==4 and len(list(tmp_path.glob('*.json')))==4
 
 
 def test_missing_or_full_durable_queue_never_acknowledges_cost(tmp_path,monkeypatch):
     monkeypatch.delenv('FINPLAN_REPORT_REFRESH_DIR',raising=False)
     box=Outbox(cost_event());backend=Backend()
     with pytest.raises(ValueError):import_pending(backend,SimpleNamespace(runs=box),'controlled',at='2026-07-13T01:00:00Z')
-    assert not box.acks and len(backend.docs)==1
+    assert not box.acks and len(backend.docs)==2
     task={'experiment_id':'controlled','event_id':'managed:one','reporting_day':'2026-07-11'}
     enqueue(tmp_path,task,max_pending=1)
     with pytest.raises(ValueError):enqueue(tmp_path,{**task,'event_id':'managed:two'},max_pending=1)
@@ -91,7 +91,7 @@ def test_equivalent_offset_event_retry_normalizes_only_metadata_slot_not_origina
     with pytest.raises(RuntimeError):import_pending(backend,SimpleNamespace(runs=outbox),'controlled',at='2026-07-13T01:00:00Z',refresh_dir=tmp_path)
     outbox.fail_ack=False
     import_pending(backend,SimpleNamespace(runs=outbox),'controlled',at='2026-07-14T01:00:00Z',refresh_dir=tmp_path)
-    assert len(backend.writes)==1 and backend.writes[0]['slot']=='2026-07-11T23:59:00Z'
+    assert len(backend.writes)==2 and backend.writes[0]['slot']=='2026-07-11T23:59:00Z'
     assert backend.read_artifact_bytes(backend.writes[0])==canonical_json_bytes(event)
 
 

@@ -330,6 +330,9 @@ def control_role_policy(env: str, kind: str, *, partition: str = PARTITION, regi
         {"Sid": "PlatformReads", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/staged-outputs/*", "v1/publications/*", "v1/plan-versions/*", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
         _log_statement(env, logical, partition=partition, region=region, account=account),
     ]
+    if env == 'beta' and kind == 'dispatcher':
+        st.append({'Sid':'BetaIsolatedPaperBookEligibilityReads','Effect':'Allow','Action':['execute-api:Invoke'],
+            'Resource':_platform_reads(region,account,partition,'v1/portfolios/pf_'+'?'*26,'v1/portfolios/pf_'+'?'*26+'/state')})
     if kind == "api":
         st.extend([
             {"Sid":"ReadPolicyArtifacts", "Effect":"Allow", "Action":["s3:GetObject"], "Resource":[f"{research}/artifacts/policy_inference/*"]},

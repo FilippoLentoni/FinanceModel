@@ -482,7 +482,8 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     owner=socket.gethostname()+':'+str(os.getpid());summary=[]
     from .public_preflight import jev_adapter,qwen_adapter
     from .approved_jev import adapter as approved_jev_adapter
-    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'jev':approved_jev_adapter(experiment),'qwen':qwen_adapter,**(external_adapters or {})}
+    from .approved_qwen import adapter as approved_qwen_adapter
+    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'jev':approved_jev_adapter(experiment),'qwen':approved_qwen_adapter(experiment),**(external_adapters or {})}
     for approach in approaches:
         aid=approach['approach_id'];rid=identifier('mr',experiment,aid,slot);iid=identifier('mi',experiment,aid,slot,'model_input')
         book=backend.ensure_portfolio(experiment,aid,comparison_policy['initial_capital'],source['investable_universe'],at)
