@@ -182,17 +182,15 @@ def load_current_inputs(session=None,cohort=None):
     source['native_policy_inputs']={}
     for aid,bundle in policies.items():
         if 'gdelt_intraday_organization_tone_v1' not in bundle.get('environment',{}).get('features',[]) or bundle['instruments']!=universe:continue
+        native=None;native_request_at=stamp()
         try:
-            from finplan_model.rl.gdelt_intraday import formation_cutoff,read_live
-            native=formation_cutoff(stamp())
-            dataset,features,provenance=read_live(client,universe,native)
-            source['native_policy_inputs'][aid]={'status':'available','decision_time':native,'dataset':dataset,'features':features,'provenance':provenance,
-              'cadence_status':'hourly_actor_reevaluation_with_reused_09:00_source_features_and_current_holdings',
-              'native_source_formation_at':native,'adapter_version':'hourly_native_feature_reuse/1',
-              'source_checksum':sha256_checksum(canonical_json_bytes(dataset)),'acquired_at':stamp()}
+            from .native_gdelt import latest_completed_formation,load_native_inputs
+            native=latest_completed_formation(native_request_at)
+            source['native_policy_inputs'][aid]={**load_native_inputs(client,universe,native_request_at),'acquired_at':stamp()}
         except Exception as exc:
             source['native_policy_inputs'][aid]={'status':'unavailable','reason':type(exc).__name__+': '+str(exc),
-               'query':{'symbols':universe,'availability_mode':'platform','native_formation':'09:00 America/New_York'},'acquired_at':stamp()}
+               'decision_time':native,'reuse_as_of':native_request_at,
+               'query':{'symbols':universe,'availability_mode':'platform','native_formation':'latest completed09:00 America/New_York','formation_cutoff':native},'acquired_at':stamp()}
     source['frozen_policy_refs']=freeze_policy_references(policies,policy_refs)
     return source,policies
 
@@ -548,9 +546,12 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             outcome={'status':'skipped' if missed else 'unavailable','reason':'skipped_missing_point_in_time' if missed else holdings.get('capture_blocker') or (model_blocker or {}).get('reason') or source.get('acquisition_failure'),
                      'model_identity_precondition':model_blocker,'forecast':{'available':False}}
         else:
+            invocation_metadata=copy.deepcopy(approach)
+            if aid in source.get('native_policy_inputs',{}):
+                invocation_metadata['native_input_provenance']={k:v for k,v in source['native_policy_inputs'][aid].items() if k not in ('dataset','features','provenance')}
             try:
                 outcome=evaluate_approach(aid,source,holdings,cutoff=at,run_id=rid,input_id=iid,capture=capture,config=evaluator_config(comparison_policy),
-                    policy=policies.get(aid),news_dataset=source.get('native_policy_inputs',{}).get(aid,{}).get('dataset'),external_adapters=adapters,approach_metadata=approach,native_decision_time=source.get('native_policy_inputs',{}).get(aid,{}).get('decision_time'),shared_source_checksum=shared['checksum'])
+                    policy=policies.get(aid),news_dataset=source.get('native_policy_inputs',{}).get(aid,{}).get('dataset'),external_adapters=adapters,approach_metadata=invocation_metadata,native_decision_time=source.get('native_policy_inputs',{}).get(aid,{}).get('decision_time'),shared_source_checksum=shared['checksum'])
             except NotClaimed:
                 header=backend.read_run_header(rid)
                 summary.append({'approach_id':aid,'run_id':rid,'status':'running_other_owner','lease_until':header.get('lease_until')});continue
@@ -562,7 +563,9 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             outcome['market_input_status']='actual_native_completed_hourly_crypto_history' if source.get('native_crypto_dataset') else 'completed_daily_history_reused_until_next_valid_snapshot'
             outcome['price_as_of']=(source.get('native_crypto_dataset') or {}).get('as_of') or max((r['session_date'] for r in source.get('observations',[])),default=None)
             outcome['news_research_status']='available' if source.get('news') else 'missing_coverage'
-            if aid in source.get('native_policy_inputs',{}):outcome['native_input_status']=source['native_policy_inputs'][aid]['status'];outcome['native_input_detail']={k:v for k,v in source['native_policy_inputs'][aid].items() if k!='dataset'}
+            if aid in source.get('native_policy_inputs',{}):
+                from .native_gdelt import annotate_outcome
+                annotate_outcome(outcome,source['native_policy_inputs'][aid])
         if outcome.get('captured_inputs'):
             extra_payload={'schema_version':'graph-model-sub-boundaries/1','run_id':rid,'approach_id':aid,'input_id':iid,
                            'availability_cutoff':at,'captured_inputs':outcome['captured_inputs'],

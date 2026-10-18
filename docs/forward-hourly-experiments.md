@@ -53,6 +53,21 @@ availability before that time; no raw article text is manufactured from tone and
 count metadata. Its hourly records disclose reused native formation inputs or
 explicit source unavailability. The standalone price policy consumes no news.
 
+The hourly adapter selects the latest completed **calendar-day** 09:00 formation:
+before 09:00 it reads the prior day's already captured immutable metadata; from
+09:00 onward it requires the current day's eligible capture. Missing or late
+current-day data remains unavailable and does not silently fall back. This fixes
+the New York midnight rollover gap without changing native formation validation,
+policy shape, or the native 1.5-hour window-age rule evaluated at formation.
+The existing eight-instrument observation remains 98 values. Actual source age
+at hourly reuse, source/central availability, native cutoff and adapter version
+are captured separately as selection/acquisition provenance, not added policy
+features or fresh intraday news. Current synthetic holdings remain current.
+Successful hourly inference is labeled `inferred_from_reused_native_inputs`;
+a failed/noninvoked actor never receives that success label. Earlier unavailable
+hourly records stay immutable. The scheduled morning collector's existence does
+not prove a future successful capture; strict availability checks still apply.
+
 Constituent research uses a newly fetched, dated published S&P 500 constituent
 table, retaining original HTML, per-row supplied date-added and unknown effective
 dates. Official SPDR holdings are preserved as a separately labeled fund proxy

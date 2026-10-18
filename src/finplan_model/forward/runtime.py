@@ -82,6 +82,13 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
           'numeric':{'frequency':'completed_daily','price_history_consumed':False,
               'source_history_reference':{'shared_source_checksum':shared_checksum,
                    'layer':'shared_source_only; exact consumed solver arrays or actor price window are in prepared'}}}
+    if approach_metadata and approach_metadata.get('native_input_provenance') is not None:
+        # Selection/acquisition may follow the rounded scheduled slot. This is
+        # audit context, not an extra actor feature or model availability time;
+        # the original news lineage and frozen vector remain in prepared inputs.
+        base['model']['adapter_provenance']={'consumed':False,
+            'role':'Source selection and artifact acquisition metadata; not policy observation values',
+            'native_input':copy.deepcopy(approach_metadata['native_input_provenance'])}
     if approach.adapter in ('codex','langgraph','crypto_native') or approach_id=='cash':
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False
