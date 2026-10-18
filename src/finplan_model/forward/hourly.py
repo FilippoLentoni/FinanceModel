@@ -479,7 +479,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         source['model_identity_blockers']={**source.get('model_identity_blockers',{}),**restore_errors}
     else:
         if not missed:
-            research=research or _current_news(backend,experiment.removesuffix('-cohort8'),at)
+            research=research or _current_news(backend,experiment.removesuffix('-cohort8').removesuffix('-nine'),at)
         source={**copy.deepcopy(source),'news':copy.deepcopy([n for n in (research or {}).get('news',[]) if n.get('quality')!='quarantined_missing_publication_time' and n.get('published_at') and n['published_at']<=at and n.get('available_at','9999')<=at]),'raw_news':copy.deepcopy((research or {}).get('news',[])),
                 'research_universe':copy.deepcopy((research or {}).get('universe')),'research_coverage':copy.deepcopy((research or {}).get('coverage',[])),
                 'research_workers':copy.deepcopy((research or {}).get('workers',[])),
