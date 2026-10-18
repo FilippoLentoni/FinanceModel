@@ -65,7 +65,10 @@ def adapters():
     def controlled(base,source,holdings,before):
         before({'boundary':'controlled_replay_stub','actual_source':{'news':[],'market_descriptors':{'trend':'flat'}},'messages':[]})
         return {'weights':{'A':.5,'B':.5},'cash':0,'forecast':{'available':False}}
-    return {'codex':controlled,'langgraph':controlled}
+    from finplan_model.forward.public_preflight import preflight
+    def local_preflight(kind):
+        return lambda base,source,holdings,before:preflight(kind,base,source,holdings,before,dependency_reader=lambda k:{'status':'controlled_metadata_fixture'})
+    return {'codex':controlled,'langgraph':controlled,'jev':local_preflight('jev'),'qwen':local_preflight('qwen')}
 
 
 def run(e,path,slot='2026-07-11T00:00:00Z',**kwargs):

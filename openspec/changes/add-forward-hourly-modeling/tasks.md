@@ -11,3 +11,5 @@
 - [ ] Observe required actual recurring EC2 cycles and verify complete HTML/export reconciliation
 - [x] Prove metadata-first execution frontiers, original600-second lease recovery, strict valuation binding and bounded interim retry with controlled restart clocks and real offline Dynamo/S3 semantics
 - [x] Verify all three processing release identities on new missing-hour/source-failure/interim records and immutable earlier-version retries
+- [x] Capture native Jev/Qwen preparation with explicit not-invoked status, bounded dependency metadata and unchanged approval controls; do not count preflight as model evaluation
+- [ ] Exercise approved managed Jev/Qwen current-book inference and exact response bridge; historical pilot output cannot substitute
