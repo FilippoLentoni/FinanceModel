@@ -10,3 +10,4 @@
 - [ ] Deploy beta and verify real immutable input/output/portfolio/observation round trips
 - [ ] Observe required actual recurring EC2 cycles and verify complete HTML/export reconciliation
 - [x] Prove metadata-first execution frontiers, original600-second lease recovery, strict valuation binding and bounded interim retry with controlled restart clocks and real offline Dynamo/S3 semantics
+- [x] Verify all three processing release identities on new missing-hour/source-failure/interim records and immutable earlier-version retries

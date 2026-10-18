@@ -194,3 +194,11 @@ lease for up to900 seconds, retaining the same slot. After expiry it records an
 explicit interrupted-cycle failure from the existing input and emits the durable
 receipt without calling the reviewer or retrieving sources again. An unresolved
 lease at the deadline returns exit75 and no successful receipt.
+
+New missed-hour and source-failure evidence retains the actual model/platform/
+agent release SHAs from the EC2 process environment. `processing_code_versions`
+identifies the workflow that recorded the failure, while `not_invoked` and
+`code_version_scope` explicitly prevent interpreting it as historical model
+execution. New interim failure records retain all three identities as well.
+Same-slot retries preserve the original input/source bytes and earlier recorded
+versions; the current process never backfills provenance into archived evidence.

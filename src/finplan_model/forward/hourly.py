@@ -40,6 +40,13 @@ POLICY={'version':'beta-forward-hourly/2','initial_capital':100000.0,'base_curre
 class NotClaimed(RuntimeError):pass
 
 
+def _processing_versions():
+    """Public immutable release identities of this process, never historical data."""
+    return {'financemodel':os.environ.get('FINPLAN_MODEL_SOURCE_COMMIT','not_supplied'),
+            'financialplanning':os.environ.get('FINPLAN_PLATFORM_SOURCE_COMMIT','not_supplied'),
+            'financeagent':os.environ.get('FINPLAN_AGENT_SOURCE_COMMIT','not_supplied')}
+
+
 def evidence_backend():
     from finplan_platform.core.modeling_evidence import ModelingEvidence
     return ModelingEvidence.from_ec2(region=REGION)
@@ -376,7 +383,7 @@ def reconcile_durable(backend,experiment,source,at,slot,comparison_policy=None):
 def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None):
     comparison_policy=comparison_policy or POLICY
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
-    reconciliation_attempt=None
+    reconciliation_attempt=None;processing_versions=_processing_versions()
     deadline=datetime.fromisoformat(at.replace('Z','+00:00'));slot_dt=datetime.fromisoformat(slot.replace('Z','+00:00'))
     if slot_dt.tzinfo is None or deadline.tzinfo is None:raise ValueError('aware hourly timestamps required')
     slot_dt=slot_dt.astimezone(UTC);slot=slot_dt.isoformat().replace('+00:00','Z')
@@ -400,6 +407,11 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                 source={'investable_universe':persisted_registry['comparison_policy']['investable_universe'],'observations':[],'execution_observations':[],
                         'acquisition_failure':type(exc).__name__+': '+str(exc),'registry_approaches':persisted_registry['approaches']}
         if now is None:at=stamp();deadline=datetime.fromisoformat(at.replace('Z','+00:00'))
+    if not prior_shared:
+        # A new failed/missed slot records the code processing it today without
+        # inventing historical model inputs. Existing shared bytes are immutable.
+        source={**source,'processing_code_versions':copy.deepcopy(processing_versions)}
+        source['code_versions']=copy.deepcopy(processing_versions) if missed or source.get('acquisition_failure') else {**processing_versions,**source.get('code_versions',{})}
     if not prior_shared and not missed and 'current_quotes' not in source:
         quote_id=identifier('mi',experiment,'__valuation_quotes__',slot,'valuation_quotes')
         stored_quotes=backend.repo.get('research_input',quote_id)
@@ -424,7 +436,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     source['model_identity_blockers']=frozen['blockers'];source['model_inventory_changes']=frozen['inventory_changes']
     for approach in approaches:
         book=backend.ensure_portfolio(experiment,approach['approach_id'],comparison_policy['initial_capital'],source['investable_universe'],at)
-        approach.update(trigger=os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),code_versions=source.get('code_versions',{}),portfolio_id=book['portfolio_id'],cohort_id=cohort_id,comparison_policy_id=comparison_policy_id,
+        approach.update(trigger=os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),code_versions=source.get('code_versions',{}),processing_code_versions=processing_versions,portfolio_id=book['portfolio_id'],cohort_id=cohort_id,comparison_policy_id=comparison_policy_id,
                         initial_capital=comparison_policy['initial_capital'],universe=source['investable_universe'])
     _register(backend,experiment,approaches,source,at,slot,comparison_policy)
     # Recover original shared input after crash/retry; never replace it with newly fetched data.
@@ -444,7 +456,9 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         if missed:
             source={'investable_universe':source['investable_universe'],'observations':[],'execution_observations':[],
                     'news':[],'availability_cutoff':at,'decision_time':at,'scheduled_slot':slot,'historical_slot_missing':True,
-                    'reason':'skipped_missing_point_in_time; no historical input fabricated'}
+                    'reason':'skipped_missing_point_in_time; no historical input fabricated',
+                    'code_versions':copy.deepcopy(source['code_versions']),'processing_code_versions':copy.deepcopy(processing_versions),
+                    'code_version_scope':'workflow_processing_only; model_not_invoked','trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation')}
         if not missed:
             source['execution_reconciliation']=reconcile_durable(backend,experiment,source,at,slot,comparison_policy)
         frozen_holdings={}
@@ -488,7 +502,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             outcome={'status':'failed','reason':'recovered_interrupted_invocation_original_input_preserved','forecast':{'available':False}}
             backend.finish_run(rid,outcome,stamp());original=backend.read_input(iid)['payload'];record_slot_observation(backend,experiment,aid,slot,rid,iid,book,original['holdings'],source,at,outcome,comparison_policy);summary.append({'approach_id':aid,'run_id':rid,**outcome});continue
         def capture(payload):
-            payload={**payload,'slot':slot,'approach_id':aid,'run_id':rid,'input_id':iid}
+            payload={**payload,'slot':slot,'approach_id':aid,'run_id':rid,'input_id':iid,'processing_code_versions':copy.deepcopy(processing_versions)}
             boundary_at=now or stamp();payload['invocation_at']=boundary_at
             item=backend.capture_input(experiment,aid,slot,payload,shared,boundary_at)
             backend.start_run(experiment,aid,slot,item['input_id'],book['portfolio_id'],boundary_at,metadata=approach)
@@ -498,7 +512,9 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
             try:
                 capture({'schema_version':'finplan-model-input/1','approach_id':aid,'run_id':rid,'input_id':iid,'decision_time':at,'availability_cutoff':at,
                          'invocation_state':'not_invoked','news':{'consumed':False,'reason':'Inference precondition failed; no news consumed'},'numeric':{},'holdings':holdings,
-                         'model_identity_precondition':model_blocker})
+                         'model_identity_precondition':model_blocker,'code_versions':copy.deepcopy(source.get('code_versions',{})),
+                         'processing_code_versions':copy.deepcopy(processing_versions),'code_version_scope':'workflow_processing_only; model_not_invoked',
+                         'trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation')})
             except NotClaimed:
                 header=backend.read_run_header(rid)
                 summary.append({'approach_id':aid,'run_id':rid,'status':'running_other_owner','lease_until':header.get('lease_until')});continue
@@ -580,7 +596,7 @@ def run_interim(slot,experiment,output,*,backend=None):
             registered=backend.read_registry(experiment)
             if not registered:raise
             source={'investable_universe':registered['comparison_policy']['investable_universe'],'observations':[],'execution_observations':[],
-                    'acquisition_failure':failure,'code_versions':{'financemodel':os.environ.get('FINPLAN_MODEL_SOURCE_COMMIT','not_supplied')},
+                    'acquisition_failure':failure,'code_versions':_processing_versions(),'processing_code_versions':_processing_versions(),
                     'trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation')}
             if data is None:data={'news':[],'universe':None,'coverage':[],'workers':[{'worker_id':'source_acquisition','status':'failed','error':failure}],
                                   'available_at':stamp(),'acquisition_failure':failure}
@@ -599,9 +615,9 @@ def run_interim(slot,experiment,output,*,backend=None):
                  'decision_time':at,'availability_cutoff':source['availability_cutoff'],'model':{'approach_id':aid,'version':'installed_headless_codex'},
                  'holdings':holdings,'research_source':data,'news':{'consumed':not bool(source.get('acquisition_failure')),'layer':'selected_headlines' if not source.get('acquisition_failure') else 'not_consumed',
                  'items':prepared['actual_source']['news'],'prepared_context':prepared['messages']},
-                 'numeric':{'prepared':prepared},'invocation_state':'not_invoked' if source.get('acquisition_failure') else 'invoking','purpose':'interim_research_no_primary_execution','trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),'code_versions':source.get('code_versions',{})}
+                 'processing_code_versions':_processing_versions(),'numeric':{'prepared':prepared},'invocation_state':'not_invoked' if source.get('acquisition_failure') else 'invoking','purpose':'interim_research_no_primary_execution','trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),'code_versions':source.get('code_versions',{})}
         backend.capture_input(interim,aid,slot,payload,shared,at)
-        backend.start_run(interim,aid,slot,iid,book['portfolio_id'],at,metadata={'family':'language_model','native_cadence':'thirty_minute_interim','trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),'code_versions':source.get('code_versions',{})})
+        backend.start_run(interim,aid,slot,iid,book['portfolio_id'],at,metadata={'family':'language_model','native_cadence':'thirty_minute_interim','processing_code_versions':_processing_versions(),'trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation'),'code_versions':source.get('code_versions',{})})
         if not backend.claim_run(rid,socket.gethostname()+':'+str(os.getpid()),stamp(),lease_seconds=600):raise NotClaimed('interim already claimed')
     try:
         if source.get('acquisition_failure'):
