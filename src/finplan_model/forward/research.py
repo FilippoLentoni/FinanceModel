@@ -50,9 +50,13 @@ class ReviewFailure(RuntimeError):
 def stamp():return datetime.now(UTC).isoformat().replace('+00:00','Z')
 
 
-def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',timeout=180,allow_forecast=True):
-    """Real Codex execution. Public prompt/request/output are retained; auth stays in CLI."""
-    path=Path(output);path.parent.mkdir(parents=True,exist_ok=True)
+def prepare_review(source,holdings,*,allow_forecast=True,destination='direct_codex'):
+    """The exact reviewer prompt, response schema and public source for one review.
+
+    Shared by the local Codex reviewer (:func:`review`) and the offline Claude reviewer
+    (:mod:`finplan_model.forward.llm_review`): same evidence selection, DS-14 outbound
+    guard, bucketed descriptors and prompt text. No CLI is invoked here.
+    """
     response_schema=copy.deepcopy(POLICY_SCHEMA)
     scoped_prompt=PROMPT
     if not allow_forecast:
@@ -83,7 +87,7 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
     descriptors=encode_state(view,book)
     descriptors['scope']='forward-only collected evidence; model pretraining cutoff not verified'
     ctx=RunContext(environment='beta',purpose='research',run_id=source.get('scheduled_slot'),synthetic=True)
-    check_outbound_payload(descriptors,ctx=ctx,raw_values=raw_values_of(source.get('observations',[])),destination='direct_codex')
+    check_outbound_payload(descriptors,ctx=ctx,raw_values=raw_values_of(source.get('observations',[])),destination=destination)
     u=source.get('research_universe') or {}
     member_columns=['symbol','name','sector','membership_effective_at','effective_date_precision']
     coverage_columns=['symbol','searched','status','total_eligible_news_count','selected_news_ids']
@@ -102,6 +106,14 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
             'limitations':source.get('limitations',[]),'news_selection':{'method':'latest_publication_then_news_id','max_items':40,'max_prompt_bytes':MAX_REVIEW_BYTES,
                  'available_count':len(source.get('news',[])),'source_bundle_checksum':sha256_checksum(canonical_json_bytes(source))}}
     prompt=scoped_prompt+'\nACTUAL INPUT JSON:\n'+canonical_json_bytes({'source':actual,'holdings':holdings}).decode()
+    return {'prompt':prompt,'response_schema':response_schema,'actual_source':actual,'selected':selected}
+
+
+def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',timeout=180,allow_forecast=True):
+    """Real Codex execution. Public prompt/request/output are retained; auth stays in CLI."""
+    path=Path(output);path.parent.mkdir(parents=True,exist_ok=True)
+    prepared=prepare_review(source,holdings,allow_forecast=allow_forecast)
+    prompt,response_schema,actual,selected=prepared['prompt'],prepared['response_schema'],prepared['actual_source'],prepared['selected']
     configured_model=os.environ.get('FINPLAN_CODEX_MODEL')
     if not configured_model:
         config_file=Path.home()/'.codex'/'config.toml'

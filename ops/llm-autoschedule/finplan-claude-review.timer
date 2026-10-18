@@ -1,0 +1,12 @@
+[Unit]
+Description=Claude review of the 09:00 and 15:00 New York research prompts (decisions at 09:45 and 15:45)
+
+[Timer]
+# Prompts are prepared shortly after 09:00/15:00; each run answers at most the newest
+# unanswered prompt, so repeated ticks are idempotent.
+OnCalendar=Mon..Fri *-*-* 09,15:05/5:00 America/New_York
+Persistent=false
+Unit=finplan-claude-review.service
+
+[Install]
+WantedBy=timers.target

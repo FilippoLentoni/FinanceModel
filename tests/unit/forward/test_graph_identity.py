@@ -1,7 +1,5 @@
 """Hosted graph dependencies are frozen without requiring the Agent package in Model builds."""
 import copy
-import sys
-from types import ModuleType
 
 import pytest
 
@@ -33,12 +31,9 @@ def response(strategy='ppo',checksum=CHECKSUM,with_capture=True):
 
 
 def stub_agent(monkeypatch,invoke):
-    agent=ModuleType('finplan_agent');agent.__path__=[]
-    modeling=ModuleType('finplan_agent.modeling');modeling.__path__=[]
-    hosted=ModuleType('finplan_agent.modeling.hosted');hosted.invoke_graph=invoke
-    agent.modeling=modeling;modeling.hosted=hosted
-    for name,module in [('finplan_agent',agent),('finplan_agent.modeling',modeling),('finplan_agent.modeling.hosted',hosted)]:
-        monkeypatch.setitem(sys.modules,name,module)
+    # The agent client lives in FinanceModel (forward.agent_client); no FinanceAgent import.
+    from finplan_model.forward import agent_client
+    monkeypatch.setattr(agent_client,'invoke_graph',invoke)
 
 
 def call(monkeypatch,returned,*,shared=None):

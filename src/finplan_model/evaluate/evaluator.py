@@ -197,15 +197,25 @@ def evaluate_point_rebalance(
     decision_at: str, opportunity_at: str, recorded_at: str,
     universe: Sequence[str], max_quote_age_seconds: float = 120.0,
     execution_calendar: str = "XNYS", quote_protocol: str = "native_completed_1m_unadjusted_close/1",
+    execution_timing: str | None = None,
 ) -> dict[str, Any]:
     """One forward paper rebalance on genuine native quotes, sharing the daily fill kernel.
 
     No minute observations become daily Bar objects. The previous hourly policy can
     execute only when actual quotes were captured at the next declared opportunity.
     Quoted, available and executed times remain distinct, preventing hindsight fills.
+
+    ``execution_timing="same_run_regular_session_quote"`` (XNYS only; twice-daily
+    experiments): the decision issued in a scheduled run fills at the quote the platform
+    collected for that same run (``opportunity_at`` = the scheduled slot). The quote
+    precedes the decision, which never consumes it; the fill is valid only while
+    ``recorded_at - quoted_at <= max_quote_age_seconds``, inside the regular session,
+    and the decision itself was issued at or after its slot and before the fill.
+    Fees, spread, slippage and liquidity are the same kernel as the next-quote rule.
     """
     import math
     import os
+    from datetime import timedelta
     from pathlib import Path
     from finplan_model.core.clock import parse_utc
     from finplan_model.sim.engine import ExecutionKernel, _Book
@@ -217,11 +227,18 @@ def evaluate_point_rebalance(
     if execution_calendar not in protocols or quote_protocol != protocols[execution_calendar][0]:
         raise FinplanError.validation("unsupported calendar/quote protocol pair", pointer="/quote_protocol")
     _, execution_rule, liquidity_units = protocols[execution_calendar]
+    same_run = execution_timing == "same_run_regular_session_quote"
+    if execution_timing not in (None, execution_rule, "same_run_regular_session_quote") or (same_run and execution_calendar != "XNYS"):
+        raise FinplanError.validation("unsupported execution timing for this calendar", pointer="/execution_timing")
+    if same_run:
+        execution_rule = "same_run_regular_session_quote"
     if config.liquidity.unfilled!='cancel':raise FinplanError.validation('point evaluator requires explicit cancel remainders; no implicit carry',pointer='/liquidity/unfilled')
     ids=tuple(sorted(universe))
     if len(ids)!=len(set(ids)) or not ids:raise FinplanError.validation('point evaluation needs distinct universe',pointer='/universe')
     decision,opportunity,recorded=map(parse_utc,(decision_at,opportunity_at,recorded_at))
-    if not decision<opportunity<=recorded:raise FinplanError.precondition('point execution must follow its declared opportunity and actual decision',reason='execution_time_not_eligible')
+    if same_run:
+        if not opportunity<=decision<=recorded:raise FinplanError.precondition('same-run execution must follow its scheduled slot and actual decision',reason='execution_time_not_eligible')
+    elif not decision<opportunity<=recorded:raise FinplanError.precondition('point execution must follow its declared opportunity and actual decision',reason='execution_time_not_eligible')
     if not math.isfinite(cash) or cash<0 or set(positions)-set(ids) or any(not math.isfinite(q) or q<0 for q in positions.values()):raise FinplanError.validation('invalid point book',pointer='/positions')
     policy=coerce_target(target,ids)
     for i in ids:
@@ -231,7 +248,13 @@ def evaluate_point_rebalance(
         if isinstance(price,bool) or not isinstance(price,(int,float)) or not math.isfinite(price) or price<=0:raise FinplanError.validation('invalid point quote price',pointer='/quotes')
         available,quoted=map(parse_utc,(q['available_at'],q['quoted_at']))
         bar_started=parse_utc(q.get('bar_started_at',q['quoted_at']))
-        if (execution_calendar=='XNYS' and bar_started<decision) or not decision<quoted<=available<=recorded or available<opportunity or not 0<=(recorded-quoted).total_seconds()<=max_quote_age_seconds:
+        if same_run:
+            # The run's own quote: collected for this slot (not before slot - max age),
+            # really available before the fill, and still fresh when the fill is recorded.
+            window_start=opportunity-timedelta(seconds=max_quote_age_seconds)
+            if bar_started<window_start or not window_start<=quoted<=available<=recorded or not 0<=(recorded-quoted).total_seconds()<=max_quote_age_seconds:
+                raise FinplanError.precondition('same-run execution quote was not captured for this slot or is no longer fresh',reason='missed_eligible_execution_price',instrument=i)
+        elif (execution_calendar=='XNYS' and bar_started<decision) or not decision<quoted<=available<=recorded or available<opportunity or not 0<=(recorded-quoted).total_seconds()<=max_quote_age_seconds:
             raise FinplanError.precondition('execution quote was not actually captured in its eligible window',reason='missed_eligible_execution_price',instrument=i)
         if execution_calendar == 'XNYS':
             regular=q.get('regular_session',{})

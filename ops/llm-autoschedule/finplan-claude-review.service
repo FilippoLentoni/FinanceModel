@@ -1,0 +1,15 @@
+[Unit]
+Description=Answer the newest direct_claude_news reviewer prompt with Claude Code (beta-competition-v1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Standalone script (stdlib + boto3, no finplan imports; any interpreter with boto3, run isolated -I);
+# dev-box credentials need DynamoDB
+# Query/GetItem/PutItem on finplan-beta-financialplanning-research-input (+ its approach-index).
+ExecStart=/home/ec2-user/projects/FinanceModel/.venv/bin/python -I /home/ec2-user/projects/FinanceModel/ops/llm-autoschedule/claude_review.py
+Environment=TMPDIR=/home/ec2-user/projects/.worktmp/pytest-tmp
+UMask=0077
+TimeoutStartSec=1200
+NoNewPrivileges=true

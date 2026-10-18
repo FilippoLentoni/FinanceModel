@@ -20,9 +20,9 @@ class Approach:
     def to_dict(self):
         row=asdict(self)
         row['input_capabilities']=self.input_capabilities or {
-            'news':self.news_layer,'prices':'native_hourly_BTC_ETH_candles' if self.adapter=='crypto_native' else 'bucketed_text_market_descriptors' if self.adapter=='codex' else 'captured_remote_tool_boundaries' if self.adapter in ('langgraph','agent_tool') else 'not_consumed' if self.approach_id=='cash' else 'eligibility_only' if self.approach_id in ('equal_weight','buy_and_hold') else 'completed_daily_history',
+            'news':self.news_layer,'prices':'native_hourly_BTC_ETH_candles' if self.adapter=='crypto_native' else 'bucketed_text_market_descriptors' if self.adapter in ('codex','claude_offline') else 'captured_remote_tool_boundaries' if self.adapter in ('langgraph','agent_tool') else 'not_consumed' if self.approach_id=='cash' else 'eligibility_only' if self.approach_id in ('equal_weight','buy_and_hold') else 'completed_daily_history',
             'holdings':'not_consumed' if self.approach_id=='cash' else 'predecision_book',
-            'numeric':'bucketed_market_descriptors_and_fixed_role_public_messages' if self.adapter in ('jev','qwen') else 'frozen_named_observation' if self.adapter=='actor' else 'solver_mean_covariance_or_scenarios' if self.family=='optimization' else 'exact_prompt_and_context' if self.adapter in ('codex','langgraph','agent_tool') else 'control_rule',
+            'numeric':'bucketed_market_descriptors_and_fixed_role_public_messages' if self.adapter in ('jev','qwen') else 'frozen_named_observation' if self.adapter=='actor' else 'solver_mean_covariance_or_scenarios' if self.family=='optimization' else 'exact_prompt_and_context' if self.adapter in ('codex','langgraph','agent_tool','claude_offline') else 'control_rule',
             'current_quotes':'valuation_only', 'forecast':'not_available_unless_explicitly_supplied'}
         if self.adapter=='crypto_native':row['native_investable_universe']=['BTC-USD','ETH-USD']
         return row
@@ -66,6 +66,24 @@ AGENT_TOOLS = {
 APPROACHES += tuple(Approach('agent_'+model,'Agent via MCP tool: '+label,'agentic','agent_tool',native_cadence='hourly',
     requires='supported_authenticated_hosted_backend',strategy_name=model)
     for model,label in (('min_variance','min variance'),('cvar','CVaR'),('ppo','PPO')))
+
+# Opt-in approaches: registered only by experiments that name them explicitly
+# (``--approaches`` / the competition definition), so experiments registered from the
+# full default registry keep their immutable approach list.
+OPTIONAL_APPROACHES = (
+    # Claude Code runs only on the dev box: the runner prepares the exact reviewer prompt
+    # (llm_prompt record), the dev-box timer answers it (llm_response record) and the
+    # decision slot consumes the newest valid response available before its cutoff.
+    Approach('direct_claude_news','Direct Claude financial news','language_model','claude_offline',native_cadence='twice_daily_research_0900_1500_NY',
+             news_layer='headlines_and_selected_context',requires='offline_claude_review_response',version='claude-offline-review/1'),
+)
+
+
+def optional_approaches(approach_ids=None):
+    """Registry rows of the opt-in approaches named in ``approach_ids``."""
+    wanted=set(approach_ids or ())
+    return [a.to_dict() for a in OPTIONAL_APPROACHES if a.approach_id in wanted]
+
 
 def evaluated_optimizer_variants():
     # Exact finite evaluated grids declared by selection.protocol and classical.benchmark.

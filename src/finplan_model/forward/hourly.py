@@ -26,6 +26,12 @@ from .research import review,stamp
 from .forecasts import freeze,reconcile,freeze_outcome
 from .paper import apply_next_session,apply_forward_quotes
 from .policy_artifacts import freeze_policy_references,restore_frozen_policies
+from .schedule import HOURLY,horizon_hour,previous_slot,validate_slot
+
+#: Same-run execution rule (twice-daily experiments): fill at the run's own quote.
+SAME_RUN='same_run_regular_session_quote'
+#: Agent approaches are not invoked when less Lambda time remains (each call may take 200 s).
+AGENT_DEADLINE_SECONDS=240
 
 DEFAULT_EXPERIMENT='beta-forward-hourly-v1'
 REGION='us-east-2'
@@ -215,7 +221,7 @@ def _portfolio_holdings(book,source):
 
 
 def _graph_adapter(base,source,holdings,before):
-    from finplan_agent.modeling.hosted import invoke_graph
+    from .agent_client import invoke_graph
     expected=source.get('served_advisory_policy')
     expected_ref=source.get('served_advisory_policy_ref') or {}
     if not expected or expected['instruments']!=source['investable_universe']:
@@ -245,7 +251,7 @@ def _agent_tool_adapter(base,source,holdings,before,*,invoke=None):
     """Ask the deployed agent to run exactly one model tool; reject anything else it returns."""
     from .registry import AGENT_TOOLS
     if invoke is None:
-        from finplan_agent.modeling.hosted import invoke_tool as invoke
+        from .agent_client import invoke_tool as invoke
     model=base['model']['strategy_name'];tool,fixed=AGENT_TOOLS[model];universe=list(source['investable_universe'])
     if model=='ppo':
         served=source.get('served_advisory_policy')
@@ -299,8 +305,36 @@ def _current_news(backend,experiment,cutoff):
     return max(candidates,key=lambda s:s['available_at']) if candidates else None
 
 
+def _deadline_gate(adapter,remaining_seconds):
+    """Do not start a remote agent call that cannot finish inside the runner's time budget."""
+    if remaining_seconds is None:return adapter
+    def gated(base,source,holdings,before):
+        if remaining_seconds()<AGENT_DEADLINE_SECONDS:
+            before({'framework':'langgraph','boundary':'not_invoked_runner_deadline','invocation_state':'not_invoked',
+                    'minimum_remaining_seconds':AGENT_DEADLINE_SECONDS,'reason':'Runner time budget nearly exhausted; remote agent call not started'})
+            return {'status':'unavailable','reason':'runner_deadline','forecast':{'available':False}}
+        return adapter(base,source,holdings,before)
+    return gated
+
+
+def _horizon(slot,comparison_policy):
+    """Registered horizon fields; twice-daily books satisfy the platform ledger's hourly horizon.
+
+    The vendored platform ledger (FinancialPlanning 60a1150) accepts paper fills only for
+    a registry with an hour-aligned ``first_scheduled_slot`` and ``cadence_seconds=3600``,
+    and treats a decision as tradable only when it started within ``cadence_seconds`` of its
+    slot. A twice-daily experiment therefore registers the hour containing its first slot and
+    a 3600 s tradable window; ``decision_opportunity`` declares the actual schedule.
+    """
+    if comparison_policy.get('decision_opportunity','hourly')==HOURLY:
+        return {'first_scheduled_slot':slot,'scheduled_start_at':slot,'cadence_seconds':3600,'decision_offset_seconds':300}
+    return {'first_scheduled_slot':horizon_hour(slot),'scheduled_start_at':slot,'cadence_seconds':3600,'decision_offset_seconds':0,
+            'platform_execution_horizon':'first_scheduled_slot is the hour containing the first decision slot and cadence_seconds the 3600 s tradable window the platform ledger requires; decision_opportunity declares the actual schedule'}
+
+
 def _register(backend,experiment,approaches,source,at,slot,comparison_policy=None):
-    policy={**(comparison_policy or POLICY),'investable_universe':source['investable_universe'],'first_scheduled_slot':slot,'scheduled_start_at':slot,'cadence_seconds':3600,'decision_offset_seconds':300}
+    comparison_policy=comparison_policy or POLICY
+    policy={**comparison_policy,'investable_universe':source['investable_universe'],**_horizon(slot,comparison_policy)}
     old=backend.read_registry(experiment)
     if old:
         if {k:v for k,v in old['comparison_policy'].items() if k not in ('first_scheduled_slot','scheduled_start_at')}!={k:v for k,v in policy.items() if k not in ('first_scheduled_slot','scheduled_start_at')}:raise ValueError('existing experiment comparison policy is immutable; new experiment required')
@@ -433,6 +467,68 @@ def _reconcile_forecasts(backend,experiment,at):
     if token:raise ValueError('pending forecast query exceeded bounded10000 records; heads retained for recovery')
     return {'status':'pending' if any(row['status']!='realized' for row in entries) else 'complete','forecasts':entries}
 
+def _unresolved(header):
+    from .execution_reconcile import POLICIES
+    return header['status'] in POLICIES and not header.get('execution_ref') and not header.get('execution_disposition_ref')
+
+
+def execute_same_run(backend,experiment,aid,slot,rid,source,comparison_policy,*,now=None,lookback=10):
+    """Fill one just-persisted decision at its own run's quote; retire older unfilled ones.
+
+    Idempotent: an executed or disposed decision is left alone, and a refused fill keeps its
+    original execution-attempt receipt (never retried with a later clock). The quote is the
+    slot's frozen ``current_quotes`` (FinancialPlanning collected it immediately before the
+    run); validation is :func:`finplan_model.evaluate.evaluator.evaluate_point_rebalance`
+    with ``execution_timing=same_run_regular_session_quote``. Older decisions of the same
+    book that never filled are superseded by this one (they never execute later).
+    """
+    from .execution_reconcile import _attempt
+    from .corporate_actions import book_inception
+    header=backend.read_run_header(rid)
+    result={'run_id':rid}
+    if header.get('execution_ref') or header.get('execution_disposition_ref'):
+        result['status']='already_resolved'
+    elif not _unresolved(header):
+        result['status']='not_applicable'
+    elif backend.repo.get('portfolio_observation',identifier('mo',experiment,aid,slot,'execution_attempt')):
+        result['status']='attempt_already_recorded'
+    else:
+        run=backend.read_run(rid);book=backend.get_portfolio(run['portfolio_id'])
+        recorded=now or stamp()
+        if book.get('unresolved_action_ref'):
+            _attempt(backend,experiment,aid,slot,run,recorded,'pending_corporate_action_reconciliation');result.update(status='not_filled',reason='pending_corporate_action_reconciliation')
+        elif book['revision']!=run['portfolio_revision']:
+            reason='captured_portfolio_revision_changed; no policy rebase or fill'
+            _attempt(backend,experiment,aid,slot,run,recorded,reason);result.update(status='not_filled',reason=reason)
+        else:
+            applied=apply_forward_quotes(run['outcome'],book['paper_state'],source.get('current_quotes',{}),
+                decision_at=run.get('finished_at',run['started_at']),opportunity_at=slot,recorded_at=recorded,
+                config=evaluator_config(comparison_policy),universe=source['investable_universe'],execution_calendar=comparison_policy.get('market_calendar','XNYS'),
+                quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
+                max_quote_age_seconds=comparison_policy['execution_price_freshness_seconds'],
+                book_created_at=book_inception(backend,book,book['paper_state']),execution_timing=SAME_RUN)
+            if applied['status'] in ('applied','no_op'):
+                backend.commit_paper_step(rid,book['revision'],applied['state'],applied['fills'],applied['execution'],now or stamp())
+                result.update(status=applied['status'],fills=len(applied['fills']))
+            else:
+                reason=applied.get('reason','eligible_execution_price_unavailable')
+                _attempt(backend,experiment,aid,slot,run,recorded,reason);result.update(status='not_filled',reason=reason)
+    current=backend.read_run_header(rid)
+    if current['status'] in ('applied','no_op') or _unresolved(current):
+        older=[];cursor=slot
+        for _ in range(lookback):
+            cursor=previous_slot(cursor,comparison_policy['decision_opportunity'])
+            row=backend.repo.get('research_run',identifier('mr',experiment,aid,cursor))
+            if row and _unresolved(backend.read_run_header(row.id)):older.append(row.id)
+        superseded=[]
+        for old in reversed(older):
+            try:backend.mark_execution_superseded(old,rid,now or stamp());superseded.append(old)
+            except Exception as exc:
+                result.setdefault('supersede_failures',[]).append({'run_id':old,'error_type':type(exc).__name__,'reason':str(exc)});break
+        if superseded:result['superseded_run_ids']=superseded
+    return result
+
+
 def select_approaches(approaches,approach_ids=None):
     """Restrict an experiment to an explicit, ordered set of approach IDs (all when None)."""
     if not approach_ids:return approaches
@@ -442,16 +538,28 @@ def select_approaches(approaches,approach_ids=None):
     if len(set(approach_ids))!=len(approach_ids):raise ValueError('duplicate approach ids')
     return [by_id[aid] for aid in approach_ids]
 
-def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None,approach_ids=None):
+def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,research=None,now=None,external_adapters=None,account_missed=False,cohort=None,comparison_policy=None,managed_cost_reader=None,approach_ids=None,remaining_seconds=None,llm_response_reader=None):
+    """One scheduled slot of a forward experiment (hourly or a declared other opportunity).
+
+    ``comparison_policy['decision_opportunity']`` selects slot validation (``hourly``:
+    hour-aligned; ``market_twice_daily_0945_1545_NY``: weekday 09:45/15:45 New York).
+    ``execution_timing=same_run_regular_session_quote`` executes each decision right after
+    it is persisted at this slot's quotes (:func:`execute_same_run`) instead of at the next
+    run. ``remaining_seconds`` (Lambda) stops new remote agent calls near the deadline.
+    """
     import_costs = backend is None or managed_cost_reader is not None
     comparison_policy=comparison_policy or POLICY
+    opportunity=comparison_policy.get('decision_opportunity','hourly')
+    same_run=comparison_policy.get('execution_timing')==SAME_RUN
     backend=backend or evidence_backend();at=now or stamp();output=Path(output);output.mkdir(parents=True,exist_ok=True)
     reconciliation_attempt=None;processing_versions=_processing_versions()
     deadline=datetime.fromisoformat(at.replace('Z','+00:00'));slot_dt=datetime.fromisoformat(slot.replace('Z','+00:00'))
     if slot_dt.tzinfo is None or deadline.tzinfo is None:raise ValueError('aware hourly timestamps required')
     slot_dt=slot_dt.astimezone(UTC);slot=slot_dt.isoformat().replace('+00:00','Z')
     if slot_dt>deadline:raise ValueError('future scheduled slot forbidden')
-    if slot_dt.minute or slot_dt.second or slot_dt.microsecond:raise ValueError('hourly slot must be hour aligned')
+    if opportunity==HOURLY:
+        if slot_dt.minute or slot_dt.second or slot_dt.microsecond:raise ValueError('hourly slot must be hour aligned')
+    else:slot=validate_slot(slot,opportunity)
     missed=account_missed or (deadline-slot_dt).total_seconds()>3600
     prior_shared_id=identifier('mi',experiment,'__shared__',slot,'shared_source')
     prior_shared=backend.repo.get('research_input',prior_shared_id)
@@ -490,7 +598,8 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         features=policy.get('environment',{}).get('features',[])
         layer=next((f for f in features if 'news' in f or 'gdelt' in f),'not_consumed')
         extras.append(Approach(name,name.replace('_',' '),'reinforcement_learning','actor',news_layer=layer,requires='verified_frozen_policy_bundle',version=policy['configuration_id']).to_dict())
-    approaches=source.get('registry_approaches') or registry(extras)
+    from .registry import optional_approaches
+    approaches=source.get('registry_approaches') or registry(extras+optional_approaches(approach_ids))
     approaches=select_approaches(approaches,approach_ids)
     cohort_id='cohort_'+hashlib.sha256(canonical_json_bytes(sorted(source['investable_universe']))).hexdigest()[:16]
     comparison_policy_id=sha256_checksum(canonical_json_bytes({**comparison_policy,'investable_universe':source['investable_universe']}))
@@ -523,7 +632,11 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                     'reason':'skipped_missing_point_in_time; no historical input fabricated',
                     'code_versions':copy.deepcopy(source['code_versions']),'processing_code_versions':copy.deepcopy(processing_versions),
                     'code_version_scope':'workflow_processing_only; model_not_invoked','trigger':os.environ.get('FINPLAN_EXPERIMENT_TRIGGER','manual_validation')}
-        if not missed:
+        if not missed and same_run:
+            # Decisions fill in their own run; nothing from an earlier slot executes here.
+            source['execution_reconciliation']={'mode':SAME_RUN,'approaches':[],'failures':[],'incomplete':[],
+                'forecast_reconciliation':_reconcile_forecasts(backend,experiment,at)}
+        elif not missed:
             source['execution_reconciliation']=reconcile_durable(backend,experiment,source,at,slot,comparison_policy)
         frozen_holdings={}
         for approach in approaches:
@@ -540,12 +653,17 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     from .public_preflight import jev_adapter,qwen_adapter
     from .approved_jev import adapter as approved_jev_adapter
     from .approved_qwen import adapter as approved_qwen_adapter
-    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'agent_tool':_agent_tool_adapter,'jev':approved_jev_adapter(experiment),'qwen':approved_qwen_adapter(experiment),**(external_adapters or {})}
+    from .llm_review import claude_adapter
+    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'agent_tool':_agent_tool_adapter,'jev':approved_jev_adapter(experiment),'qwen':approved_qwen_adapter(experiment),
+              'claude_offline':claude_adapter(backend,experiment,read_item=llm_response_reader),**(external_adapters or {})}
+    for name in ('langgraph','agent_tool'):adapters[name]=_deadline_gate(adapters[name],remaining_seconds)
+    executions={}
     for approach in approaches:
         aid=approach['approach_id'];rid=identifier('mr',experiment,aid,slot);iid=identifier('mi',experiment,aid,slot,'model_input')
         book=backend.ensure_portfolio(experiment,aid,comparison_policy['initial_capital'],source['investable_universe'],at)
         old=backend.repo.get('research_run',rid)
         if old and old.doc['status']!='running':
+            if same_run and not missed:executions[aid]=execute_same_run(backend,experiment,aid,slot,rid,source,comparison_policy,now=now)
             if not _existing_valuation(backend,experiment,aid,slot,rid,iid,book['portfolio_id']):
                 original=backend.read_input(old.doc['input_id'])['payload'];completed=backend.read_run(rid)
                 original_holdings=original['holdings']
@@ -614,10 +732,14 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
                            'activity_receipts':outcome.get('capture_receipts',[])}
             outcome['graph_sub_boundary_ref']=backend.capture_input(experiment,aid,slot,extra_payload,shared,at,kind='graph_sub_boundary_inputs')
         backend.finish_run(rid,outcome,now or stamp())
+        if same_run and not missed:executions[aid]=execute_same_run(backend,experiment,aid,slot,rid,source,comparison_policy,now=now)
         state=backend.get_portfolio(book['portfolio_id'])
         current=_portfolio_holdings(state,source)
         record_slot_observation(backend,experiment,aid,slot,rid,iid,state,current,source,at,outcome,comparison_policy,recorded_at=now or stamp())
-        summary.append({'approach_id':aid,'run_id':rid,'input_id':iid,'portfolio_id':book['portfolio_id'],'status':outcome['status']})
+        row={'approach_id':aid,'run_id':rid,'input_id':iid,'portfolio_id':book['portfolio_id'],'status':outcome['status']}
+        if outcome.get('reason'):row['reason']=outcome['reason']
+        if aid in executions:row['execution']=executions[aid]
+        summary.append(row)
     active=[r for r in summary if r['status']=='running_other_owner']
     reconciliation=reconciliation_attempt if reconciliation_attempt is not None else source.get('execution_reconciliation') or {}
     cost_import = {'status': 'not_requested_for_injected_backend', 'affected_reporting_days': [], 'incomplete': False}
@@ -629,6 +751,8 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         except Exception as exc:
             cost_import = {'status': 'failed', 'error_type': type(exc).__name__, 'affected_reporting_days': [], 'incomplete': True}
         (output/'managed-cost-import.json').write_bytes(canonical_json_bytes(cost_import))
+    for row in summary:
+        if row['approach_id'] in executions and 'execution' not in row:row['execution']=executions[row['approach_id']]
     result={'slot':slot,'experiment_id':experiment,'generated_at':stamp(),'approaches':summary,'shared_input_id':shared['input_id'],
             'status':'incomplete' if active or reconciliation.get('incomplete') or cost_import.get('incomplete') else 'complete',
             'managed_cost_import':cost_import,

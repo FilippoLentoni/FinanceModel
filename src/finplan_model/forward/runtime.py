@@ -89,11 +89,11 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
         base['model']['adapter_provenance']={'consumed':False,
             'role':'Source selection and artifact acquisition metadata; not policy observation values',
             'native_input':copy.deepcopy(approach_metadata['native_input_provenance'])}
-    if approach.adapter in ('codex','langgraph','agent_tool','crypto_native') or approach_id=='cash':
+    if approach.adapter in ('codex','claude_offline','langgraph','agent_tool','crypto_native') or approach_id=='cash':
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False
         base['collected_not_consumed']={'price_history':{'shared_source_checksum':base['shared_source_checksum'],
-             'status':'not_supplied_to_this_approach','reason':'DS-14 protected raw series; exact derived/provider request is in prepared' if approach.adapter=='codex' else 'Actual graph sub-boundaries are captured separately' if approach.adapter=='langgraph' else 'No daily-price history supplied; actual native hourly inputs are in prepared' if approach.adapter=='crypto_native' else 'Constant cash control consumes no market history'}}
+             'status':'not_supplied_to_this_approach','reason':'DS-14 protected raw series; exact derived/provider request is in prepared' if approach.adapter in ('codex','claude_offline') else 'Actual graph sub-boundaries are captured separately' if approach.adapter=='langgraph' else 'No daily-price history supplied; actual native hourly inputs are in prepared' if approach.adapter=='crypto_native' else 'Constant cash control consumes no market history'}}
     if approach.adapter=='crypto_native':
         base['numeric']['frequency']='hourly_crypto_24x7'
     captured=False
@@ -109,7 +109,7 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
             payload['news']={'consumed':True,'layer':approach.news_layer,'items':copy.deepcopy(prepared.get('news_dataset',news_dataset)),
                              'prepared_context':copy.deepcopy(prepared['news_evidence']),
                              'metadata_only':True,'text_status':'No article text supplied to policy'}
-        elif approach.adapter=='codex':
+        elif approach.adapter in ('codex','claude_offline'):
             invoked=payload['invocation_state']!='not_invoked'
             payload['news']={'consumed':invoked,'layer':'selected_headlines' if invoked else 'prepared_not_supplied',
                              'items':copy.deepcopy(prepared.get('actual_source',source).get('news',[])) if invoked else [],
