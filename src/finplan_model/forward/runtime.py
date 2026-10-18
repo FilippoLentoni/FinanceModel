@@ -89,7 +89,7 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
         base['model']['adapter_provenance']={'consumed':False,
             'role':'Source selection and artifact acquisition metadata; not policy observation values',
             'native_input':copy.deepcopy(approach_metadata['native_input_provenance'])}
-    if approach.adapter in ('codex','langgraph','crypto_native') or approach_id=='cash':
+    if approach.adapter in ('codex','langgraph','agent_tool','crypto_native') or approach_id=='cash':
         base['numeric'].pop('price_history',None)
         base['numeric']['price_history_consumed']=False
         base['collected_not_consumed']={'price_history':{'shared_source_checksum':base['shared_source_checksum'],

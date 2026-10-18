@@ -20,9 +20,9 @@ class Approach:
     def to_dict(self):
         row=asdict(self)
         row['input_capabilities']=self.input_capabilities or {
-            'news':self.news_layer,'prices':'native_hourly_BTC_ETH_candles' if self.adapter=='crypto_native' else 'bucketed_text_market_descriptors' if self.adapter=='codex' else 'captured_remote_tool_boundaries' if self.adapter=='langgraph' else 'not_consumed' if self.approach_id=='cash' else 'eligibility_only' if self.approach_id in ('equal_weight','buy_and_hold') else 'completed_daily_history',
+            'news':self.news_layer,'prices':'native_hourly_BTC_ETH_candles' if self.adapter=='crypto_native' else 'bucketed_text_market_descriptors' if self.adapter=='codex' else 'captured_remote_tool_boundaries' if self.adapter in ('langgraph','agent_tool') else 'not_consumed' if self.approach_id=='cash' else 'eligibility_only' if self.approach_id in ('equal_weight','buy_and_hold') else 'completed_daily_history',
             'holdings':'not_consumed' if self.approach_id=='cash' else 'predecision_book',
-            'numeric':'bucketed_market_descriptors_and_fixed_role_public_messages' if self.adapter in ('jev','qwen') else 'frozen_named_observation' if self.adapter=='actor' else 'solver_mean_covariance_or_scenarios' if self.family=='optimization' else 'exact_prompt_and_context' if self.adapter in ('codex','langgraph') else 'control_rule',
+            'numeric':'bucketed_market_descriptors_and_fixed_role_public_messages' if self.adapter in ('jev','qwen') else 'frozen_named_observation' if self.adapter=='actor' else 'solver_mean_covariance_or_scenarios' if self.family=='optimization' else 'exact_prompt_and_context' if self.adapter in ('codex','langgraph','agent_tool') else 'control_rule',
             'current_quotes':'valuation_only', 'forecast':'not_available_unless_explicitly_supplied'}
         if self.adapter=='crypto_native':row['native_investable_universe']=['BTC-USD','ETH-USD']
         return row
@@ -55,6 +55,17 @@ APPROACHES += tuple(Approach('crypto_'+name,'Crypto '+name.replace('_',' '),'opt
 APPROACHES += tuple(Approach('classical_'+name+'_etf_news','MCP classical '+name+' ETF news sensitivity','optimization','classical_news',
     news_layer='derived_sentiment_uncertainty_mean_covariance_scenarios',requires='eligible_licensed_ETF_search_metadata',strategy_name=name,version='etf-search-metadata/1')
     for name in ('min_variance','mean_variance','cvar'))
+
+# The same models run through the deployed agent: one prompt + explicit MCP tool request
+# per model and hour, in books separate from the direct runs, so agent errors are visible.
+AGENT_TOOLS = {
+    'min_variance': ('recommend_classical_portfolio', {'algorithm': 'min_variance'}),
+    'cvar': ('recommend_classical_portfolio', {'algorithm': 'cvar'}),
+    'ppo': ('recommend_portfolio', {}),
+}
+APPROACHES += tuple(Approach('agent_'+model,'Agent via MCP tool: '+label,'agentic','agent_tool',native_cadence='hourly',
+    requires='supported_authenticated_hosted_backend',strategy_name=model)
+    for model,label in (('min_variance','min variance'),('cvar','CVaR'),('ppo','PPO')))
 
 def evaluated_optimizer_variants():
     # Exact finite evaluated grids declared by selection.protocol and classical.benchmark.

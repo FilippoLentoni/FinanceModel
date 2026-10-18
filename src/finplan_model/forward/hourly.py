@@ -241,6 +241,38 @@ def _graph_adapter(base,source,holdings,before):
     return response
 
 
+def _agent_tool_adapter(base,source,holdings,before,*,invoke=None):
+    """Ask the deployed agent to run exactly one model tool; reject anything else it returns."""
+    from .registry import AGENT_TOOLS
+    if invoke is None:
+        from finplan_agent.modeling.hosted import invoke_tool as invoke
+    model=base['model']['strategy_name'];tool,fixed=AGENT_TOOLS[model];universe=list(source['investable_universe'])
+    if model=='ppo':
+        served=source.get('served_advisory_policy')
+        if not served or served['instruments']!=universe:
+            before({'framework':'langgraph','boundary':'not_invoked_tool_universe_precondition','requested_tool':tool,
+                    'tool_universe':served.get('instruments') if served else None,'supplied_universe':universe,'invocation_state':'not_invoked'})
+            return {'status':'unavailable','reason':'agent_tool_serves_a_different_fixed_universe','forecast':{'available':False}}
+    arguments={**fixed,'input_snapshot_id':source['input_snapshot_id'],'as_of':max(r['session_date'] for r in source['observations']),
+               'holdings':{k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')}}
+    response=invoke(tool,arguments,f'Give me a portfolio recommendation using model {model}.',before)
+    if response.get('status') in ('failed','unavailable'):
+        return response
+    called=response.get('tools_called') or [];weights=response.get('target_weights')
+    if called!=[tool]:
+        return {**response,'status':'failed','reason':'agent_did_not_run_exactly_the_requested_tool','requested_tool':tool,'tools_called':called}
+    if not isinstance(weights,list) or response.get('cash_weight') is None:
+        return {**response,'status':'unavailable','reason':'agent_returned_no_recommendation'}
+    if response.get('served_strategy') not in (model,None) and model!='ppo':
+        return {**response,'status':'failed','reason':'agent_returned_a_different_model','served_strategy':response.get('served_strategy')}
+    outside=[w['instrument_id'] for w in weights if w['instrument_id'] not in universe and w.get('weight')]
+    if outside:
+        return {**response,'status':'failed','reason':'agent_allocated_outside_the_experiment_universe','outside_instruments':outside}
+    response['target_weights']=[w for w in weights if w['instrument_id'] in universe]
+    response['allocation_origin']=f'FinanceModel {model} run by the deployed agent via MCP tool {tool}'
+    return response
+
+
 def _codex_adapter(output):
     def adapter(base,source,holdings,before):return review(source,holdings,Path(output)/'codex-policy.json',capture=before)
     return adapter
@@ -479,7 +511,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
         source['model_identity_blockers']={**source.get('model_identity_blockers',{}),**restore_errors}
     else:
         if not missed:
-            research=research or _current_news(backend,experiment.removesuffix('-cohort8').removesuffix('-nine'),at)
+            research=research or _current_news(backend,experiment.removesuffix('-cohort8').removesuffix('-nine').removesuffix('-ten'),at)
         source={**copy.deepcopy(source),'news':copy.deepcopy([n for n in (research or {}).get('news',[]) if n.get('quality')!='quarantined_missing_publication_time' and n.get('published_at') and n['published_at']<=at and n.get('available_at','9999')<=at]),'raw_news':copy.deepcopy((research or {}).get('news',[])),
                 'research_universe':copy.deepcopy((research or {}).get('universe')),'research_coverage':copy.deepcopy((research or {}).get('coverage',[])),
                 'research_workers':copy.deepcopy((research or {}).get('workers',[])),
@@ -508,7 +540,7 @@ def run_hourly(slot,experiment,output,*,backend=None,source=None,policies=None,r
     from .public_preflight import jev_adapter,qwen_adapter
     from .approved_jev import adapter as approved_jev_adapter
     from .approved_qwen import adapter as approved_qwen_adapter
-    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'jev':approved_jev_adapter(experiment),'qwen':approved_qwen_adapter(experiment),**(external_adapters or {})}
+    adapters={'codex':_codex_adapter(output),'langgraph':_graph_adapter,'agent_tool':_agent_tool_adapter,'jev':approved_jev_adapter(experiment),'qwen':approved_qwen_adapter(experiment),**(external_adapters or {})}
     for approach in approaches:
         aid=approach['approach_id'];rid=identifier('mr',experiment,aid,slot);iid=identifier('mi',experiment,aid,slot,'model_input')
         book=backend.ensure_portfolio(experiment,aid,comparison_policy['initial_capital'],source['investable_universe'],at)
