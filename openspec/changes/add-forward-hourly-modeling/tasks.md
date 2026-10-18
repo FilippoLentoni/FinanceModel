@@ -13,3 +13,5 @@
 - [x] Verify all three processing release identities on new missing-hour/source-failure/interim records and immutable earlier-version retries
 - [x] Capture native Jev/Qwen preparation with explicit not-invoked status, bounded dependency metadata and unchanged approval controls; do not count preflight as model evaluation
 - [ ] Exercise approved managed Jev/Qwen current-book inference and exact response bridge; historical pilot output cannot substitute
+- [x] Block execution and fresh valuation consistently on captured unresolved corporate actions, including older daily events hidden from the current quote window
+- [ ] Implement authoritative dividend/split entitlements, share/cash adjustments and immutable reconciliation receipts before claiming affected-event return coverage

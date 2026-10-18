@@ -50,15 +50,14 @@ def apply_next_session(policy,state,market,*,decision_at,observed_at,config=None
             'common_evaluator_result':result.to_dict(),'checksum':sha256_checksum(canonical_json_bytes(result.to_dict()))}
 
 
-def apply_forward_quotes(policy,state,quote_bundle,*,decision_at,opportunity_at,recorded_at,config,universe,execution_calendar="XNYS",quote_protocol="native_completed_1m_unadjusted_close/1",max_quote_age_seconds=120):
+def apply_forward_quotes(policy,state,quote_bundle,*,decision_at,opportunity_at,recorded_at,config,universe,execution_calendar="XNYS",quote_protocol="native_completed_1m_unadjusted_close/1",max_quote_age_seconds=120,book_created_at=None):
     """Apply a prior-hour policy to an actual fresh quote at the declared next opportunity."""
     from finplan_model.evaluate.evaluator import evaluate_point_rebalance
     from finplan_model.core.errors import FinplanError
     quotes={q['instrument_id']:q for q in quote_bundle.get('quotes',[])}
-    held={p['instrument_id'] for p in state['positions'] if p['quantity']}
-    for instrument in held:
-        if quotes.get(instrument,{}).get('corporate_actions'):
-            return {'status':'pending_market_data','reason':'pending_corporate_action_reconciliation','fills':[]}
+    from .corporate_actions import unreconciled_actions
+    actions=unreconciled_actions(state,{'current_quotes':quote_bundle},recorded_at,book_created_at=book_created_at)
+    if actions:return {'status':'pending_market_data','action_status':'PENDING_ACTION_DATA','reason':'pending_corporate_action_reconciliation','fills':[],'corporate_action_evidence':actions}
     target={'weights':{r['instrument_id']:r['weight'] for r in policy['target_weights']},'cash':policy['cash_weight'],
             'solution_status':'no_effect' if policy.get('status')=='hold' else policy.get('solution_status','feasible')}
     try:

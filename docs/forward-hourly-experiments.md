@@ -202,3 +202,12 @@ identifies the workflow that recorded the failure, while `not_invoked` and
 execution. New interim failure records retain all three identities as well.
 Same-slot retries preserve the original input/source bytes and earlier recorded
 versions; the current process never backfills provenance into archived evidence.
+
+Corporate-action safety: captured daily dividends/splits and current quote events
+use the same execution and valuation eligibility guard. An unresolved held-symbol
+event produces `PENDING_ACTION_DATA`, no simulated fill and no rankable valuation.
+The mutable paper state's `as_of` is never treated as acquisition proof. Explicit
+position acquisition metadata, when available, or immutable book creation bounds
+can exclude demonstrably older events; otherwise the guard is conservative.
+Actual dividend cash entitlements, split share adjustments and their immutable
+ledger receipts remain unimplemented coverage, rather than fabricated returns.

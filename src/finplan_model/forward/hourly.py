@@ -308,9 +308,8 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
              'net_external_cash_flows_since_decision':0,'transaction_cost':0,'model_cost':outcome.get('usage',{}).get('cost_usd'),
              'reason':'No eligible fresh current quote; completed daily marks explicitly carried forward',
              'decision_status':outcome['status'],'execution_status':outcome.get('execution_status','not_applicable')}
-    held={p['instrument_id'] for p in holdings['positions'] if p['quantity']}
-    action_rows=[r for r in source.get('execution_observations',[]) if r['instrument_id'] in held and
-                 r['session_date']>=holdings.get('as_of','0000') and (r.get('dividend') or r.get('split_ratio') not in (None,0,1))]
+    from .corporate_actions import unreconciled_actions,book_inception
+    action_rows=unreconciled_actions(holdings,source,at,book_created_at=book_inception(backend,book,holdings))
     payload['corporate_action_status']='unreconciled_captured_event' if action_rows else 'no_captured_daily_event; current_quote_event_coverage_separate'
     payload['corporate_action_evidence']=action_rows
     # Root current-price adapter returns real unadjusted quotes only for valuation. Never
@@ -339,8 +338,8 @@ def record_slot_observation(backend,experiment,approach_id,slot,run_id,input_id,
         payload.update(value=holdings['cash'],observation_kind='valid',quote_status='fresh',
                        reason='Cash-only synthetic book; no market quote is required for its actual cash balance',
                        quote_provenance={'basis':'authoritative_paper_cash_balance','revision':holdings.get('revision',book['revision'])},value_as_of=at)
-    if action_rows or any(quotes.get(i,{}).get('corporate_actions') for i in needed):
-        payload.update(observation_kind='pending',quote_status='corporate_action_unreconciled',value=None,reason='Captured dividend/split requires authoritative action reconciliation; ranking blocked')
+    if action_rows:
+        payload.update(observation_kind='pending',quote_status='corporate_action_unreconciled',action_status='PENDING_ACTION_DATA',value=None,reason='Captured dividend/split requires authoritative action reconciliation; ranking blocked')
     if source.get('native_crypto_dataset'):
         payload['market_session']={'status':'open','session_date':datetime.fromisoformat(at.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York')).date().isoformat(),
             'source':{'calendar':'CRYPTO_24X7','provider':'coinbase_exchange_public','dataset_checksum':source['native_crypto_dataset']['dataset_checksum'],

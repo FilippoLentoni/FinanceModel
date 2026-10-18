@@ -15,7 +15,7 @@ POLICIES=frozenset(('succeeded','hold','reused','pending_execution'))
 def _parse(value):return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(UTC)
 
 
-def _attempt(backend,experiment,aid,slot,run,at,reason,status='execution_pending'):
+def _attempt(backend,experiment,aid,slot,run,at,reason,status='execution_pending',evidence=None):
     from .hourly import identifier
     oid=identifier('mo',experiment,aid,slot,'execution_attempt')
     existing=backend.repo.get('portfolio_observation',oid)
@@ -26,6 +26,7 @@ def _attempt(backend,experiment,aid,slot,run,at,reason,status='execution_pending
         return
     backend.record_observation(experiment,aid,slot,run['portfolio_id'],{
         'run_id':run['run_id'],'status':status,'reason':reason,'actual_fills':[],
+        'corporate_action_evidence':evidence or [],
         'observed_at':at,'value':None,'observation_kind':'pending','quote_status':'missing'},at,kind='execution_attempt')
 
 
@@ -129,15 +130,20 @@ def reconcile_executions(backend,experiment,source,at,slot,comparison_policy,*,a
                 elif book['revision']!=selected['portfolio_revision']:
                     _attempt(backend,experiment,aid,slot,selected,at,'captured_portfolio_revision_changed; no policy rebase or fill')
                 else:
-                    opportunity=(_parse(slot)+timedelta(minutes=5)).isoformat().replace('+00:00','Z')
-                    result=apply(selected['outcome'],book['paper_state'],source.get('current_quotes',{}),
-                        decision_at=selected.get('finished_at',selected['started_at']),opportunity_at=opportunity,recorded_at=at,
-                        config=config,universe=source['investable_universe'],execution_calendar=comparison_policy.get('market_calendar','XNYS'),
-                        quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
-                        max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120))
-                    if result['status'] in ('applied','no_op'):
-                        backend.commit_paper_step(selected['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
-                    else:_attempt(backend,experiment,aid,slot,selected,at,result.get('reason','eligible_execution_price_unavailable'))
+                    from .corporate_actions import unreconciled_actions,book_inception
+                    action_rows=unreconciled_actions(book['paper_state'],source,at,book_created_at=book_inception(backend,book,book['paper_state']))
+                    if action_rows:
+                        _attempt(backend,experiment,aid,slot,selected,at,'pending_corporate_action_reconciliation','PENDING_ACTION_DATA',action_rows)
+                    else:
+                        opportunity=(_parse(slot)+timedelta(minutes=5)).isoformat().replace('+00:00','Z')
+                        result=apply(selected['outcome'],book['paper_state'],source.get('current_quotes',{}),
+                            decision_at=selected.get('finished_at',selected['started_at']),opportunity_at=opportunity,recorded_at=at,
+                            config=config,universe=source['investable_universe'],execution_calendar=comparison_policy.get('market_calendar','XNYS'),
+                            quote_protocol=comparison_policy.get('quote_protocol','native_completed_1m_unadjusted_close/1'),
+                            max_quote_age_seconds=comparison_policy.get('execution_price_freshness_seconds',120),book_created_at=book_inception(backend,book,book['paper_state']))
+                        if result['status'] in ('applied','no_op'):
+                            backend.commit_paper_step(selected['run_id'],book['revision'],result['state'],result['fills'],result['execution'],stamp())
+                        else:_attempt(backend,experiment,aid,slot,selected,at,result.get('reason','eligible_execution_price_unavailable'))
                 latest=backend.read_run_header(selected['run_id'])
                 pending_id=selected['run_id'] if latest['status'] in POLICIES and not latest.get('execution_ref') and not latest.get('execution_disposition_ref') else None
             else:pending_id=None
