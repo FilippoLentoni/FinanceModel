@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import math
+import re
 import time
 from datetime import date, datetime
 from typing import Any, Callable
@@ -60,7 +61,7 @@ def validate_policy(output, universe, holdings):
 
 
 def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id, capture: Callable,
-                      config=None, policy=None, news_dataset=None, external_adapters=None, approach_metadata=None, native_decision_time=None):
+                      config=None, policy=None, news_dataset=None, external_adapters=None, approach_metadata=None, native_decision_time=None, shared_source_checksum=None):
     """Capture callback must durably persist its immutable payload before returning.
 
     Failures to capture propagate and prevent execution. A failed precondition still saves
@@ -69,13 +70,17 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
     from .registry import Approach
     approach=Approach(**{k:v for k,v in approach_metadata.items() if k in Approach.__dataclass_fields__}) if approach_metadata else next(a for a in APPROACHES if a.approach_id==approach_id)
     universe=list(source['investable_universe'])
+    # Workflow supplies the checksum of its already persisted/verified shared artifact.
+    # Direct callers compute it once; neither path mutates the original source.
+    shared_checksum=shared_source_checksum if shared_source_checksum is not None else sha256_checksum(canonical_json_bytes(source))
+    if not isinstance(shared_checksum,str) or not re.fullmatch(r'sha256:[0-9a-f]{64}',shared_checksum):raise ValueError('invalid verified shared-source checksum')
     base={'schema_version':'finplan-model-input/1','approach_id':approach_id,'run_id':run_id,'input_id':input_id,
           'decision_time':cutoff,'availability_cutoff':cutoff,'model':{**approach.to_dict(),'code_versions':source.get('code_versions',{})},'code_versions':source.get('code_versions',{}),
           'trigger':source.get('trigger','manual_validation'),'holdings':copy.deepcopy(holdings),'constraints':copy.deepcopy((config or {}).get('constraints',{})),
-          'shared_source_checksum':sha256_checksum(canonical_json_bytes(source)),
+          'shared_source_checksum':shared_checksum,
           'news':{'consumed':False,'layer':'not_consumed','items':[],'reason':'News not consumed'},
           'numeric':{'frequency':'completed_daily','price_history_consumed':False,
-              'source_history_reference':{'shared_source_checksum':sha256_checksum(canonical_json_bytes(source)),
+              'source_history_reference':{'shared_source_checksum':shared_checksum,
                    'layer':'shared_source_only; exact consumed solver arrays or actor price window are in prepared'}}}
     if approach.adapter in ('codex','langgraph','crypto_native') or approach_id=='cash':
         base['numeric'].pop('price_history',None)

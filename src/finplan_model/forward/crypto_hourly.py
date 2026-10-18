@@ -115,7 +115,8 @@ def main():
     args = parser.parse_args()
     result = run(args.slot, args.experiment, args.output, account_missed=args.account_missed)
     print(canonical_json_bytes(result).decode())
+    return 75 if result.get("status")=="incomplete" else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

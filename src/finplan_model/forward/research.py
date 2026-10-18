@@ -168,14 +168,31 @@ def review(source,holdings,output,*,capture=lambda payload:None,codex='codex',ti
     return response
 
 
+def run_cycle_with_recovery(slot,experiment,output,*,runner=None,clock=None,sleep=None,timeout=900):
+    """Wait for the original captured cycle's lease; never replace its inputs."""
+    from .hourly import NotClaimed,run_interim
+    clock=clock or time.monotonic;sleep=sleep or time.sleep;runner=runner or run_interim
+    deadline=clock()+timeout
+    incomplete={'status':'incomplete','reason':'original interim invocation lease remains active at bounded recovery deadline',
+                'slot':slot,'experiment_id':experiment+'-interim'}
+    while True:
+        if clock()>=deadline:return incomplete
+        try:return runner(slot,experiment,output)
+        except NotClaimed:
+            remaining=deadline-clock()
+            if remaining<=0:return incomplete
+            sleep(min(30.,remaining))
+
+
 def main():
     parser=argparse.ArgumentParser();commands=parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('cycle');p.add_argument('--slot',required=True);p.add_argument('--experiment',required=True);p.add_argument('--output',required=True)
     p=commands.add_parser('review');p.add_argument('--source',required=True);p.add_argument('--holdings',required=True);p.add_argument('--output',required=True)
     args=parser.parse_args()
     if args.command=='cycle':
-        from .hourly import run_interim
-        result=run_interim(args.slot,args.experiment,args.output);print(json.dumps(result))
+        result=run_cycle_with_recovery(args.slot,args.experiment,args.output);print(json.dumps(result))
+        return 75 if result['status']=='incomplete' else 0
     else:result=review(json.loads(Path(args.source).read_text()),json.loads(Path(args.holdings).read_text()),args.output);print(json.dumps({'output':args.output,'status':result['status'],'input_checksum':result['input_checksum'],'response_payload_checksum':result['response_payload_checksum']}))
+    return 0
 
-if __name__=='__main__':main()
+if __name__=='__main__':raise SystemExit(main())

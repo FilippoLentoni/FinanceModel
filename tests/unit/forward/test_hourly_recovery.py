@@ -36,11 +36,23 @@ class FakeEvidence:
     def finish_run(self,rid,outcome,at):self.records['research_run',rid].update(status=outcome['status'],outcome=copy.deepcopy(outcome),finished_at=at)
     def read_run(self,rid):return copy.deepcopy(self.records['research_run',rid])
     def record_observation(self,experiment,aid,slot,pid,payload,at,kind='valuation'):
-        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'kind':kind,'payload':copy.deepcopy(payload)}
+        oid=identifier('mo',experiment,aid,slot,kind);doc={'observation_id':oid,'portfolio_id':pid,'experiment_id':experiment,'approach_id':aid,'slot':slot,'observed_at':at,'kind':kind,'run_id':payload.get('run_id'),'input_id':payload.get('input_id'),'payload':copy.deepcopy(payload)}
         self.records.setdefault(('portfolio_observation',oid),doc);return doc
     def query_day(self,experiment,day,kind='runs',page_size=100,next_token=None):
         table={'runs':'research_run','observations':'portfolio_observation','inputs':'research_input'}[kind]
         return [copy.deepcopy(doc) for (k,_),doc in self.records.items() if k==table and doc['experiment_id']==experiment and doc['slot'][:10]==day],None
+    def read_run_header(self,rid):return {k:copy.deepcopy(v) for k,v in self.records['research_run',rid].items() if k!='outcome'}
+    def query_run_headers(self,experiment,aid,before_slot,*,page_size=100,next_token=None):
+        rows=[self.read_run_header(rid) for (kind,rid),doc in self.records.items() if kind=='research_run' and doc['experiment_id']==experiment and doc['approach_id']==aid and doc['slot']<before_slot]
+        rows.sort(key=lambda r:r['slot'],reverse=True);offset=int(next_token or 0)
+        return rows[offset:offset+page_size],str(offset+page_size) if offset+page_size<len(rows) else None
+    def read_execution_frontier(self,rid):return copy.deepcopy(self.records['research_run',rid].get('_frontier'))
+    def record_execution_frontier(self,rid,pending_run_id,at,previous_frontier_run_id=None):
+        row=self.records['research_run',rid];proof={'pending_run_id':pending_run_id,'covered_through_slot':row['slot']}
+        row.update(execution_frontier_ref={'checksum':'controlled'},_frontier=proof);return proof
+    def mark_execution_superseded(self,rid,replacement,at):
+        self.records['research_run',rid].update(status='superseded',execution_disposition_ref={'replacement_run_id':replacement})
+        return {'status':'superseded','replacement_run_id':replacement}
     def query_pending_forecasts(self,*args,**kwargs):return [],None
 
 
@@ -87,3 +99,65 @@ def test_missed_historical_slot_has_all_explicit_statuses_and_no_replacement_dat
     assert shared['observations']==[] and shared['news']==[]
     assert shared['historical_slot_missing'] is True
     assert len([r for (k,_),r in e.records.items() if k=='portfolio_observation'])==len(result['approaches'])
+
+
+def test_current_slot_active_600second_lease_stays_incomplete_and_recovers_without_reinference(tmp_path):
+    class Leased(FakeEvidence):
+        def claim_run(self,rid,owner,at,lease_seconds):
+            from datetime import datetime
+            row=self.records['research_run',rid]
+            now=datetime.fromisoformat(at.replace('Z','+00:00')).timestamp()
+            if row.get('lease_until',0)>now:return False
+            self.calls.append(rid);row['lease_until']=now+lease_seconds;return True
+    e=Leased();result=run(e,tmp_path);rid=identifier('mr','controlled-recovery','cash',result['slot'])
+    from datetime import datetime
+    row=e.records['research_run',rid];row['status']='running';row['lease_until']=datetime.fromisoformat('2026-07-11T00:15:00+00:00').timestamp()
+    row.pop('outcome');row.pop('finished_at');calls=list(e.calls);original=dict(e.artifacts)
+    active=run(e,tmp_path)
+    assert active['status']=='incomplete' and active['incomplete_approaches'][0]['run_id']==rid
+    assert e.calls==calls and e.artifacts==original
+    recovered=run_hourly(result['slot'],'controlled-recovery',tmp_path,backend=e,source=source(),policies={},research={},now='2026-07-11T00:15:00Z',external_adapters={'codex':lambda *a:pytest.fail('terminal adapter repeated'),'langgraph':lambda *a:pytest.fail('terminal adapter repeated')})
+    assert recovered['status']=='complete'
+    assert e.calls==calls+[rid] and e.artifacts==original
+    assert e.records['research_run',rid]['outcome']['reason']=='recovered_interrupted_invocation_original_input_preserved'
+
+
+def test_hourly_cli_incomplete_returns_temporary_failure(monkeypatch,tmp_path):
+    from finplan_model.forward import hourly
+    import sys
+    monkeypatch.setattr(sys,'argv',['hourly','--output',str(tmp_path)])
+    monkeypatch.setattr(hourly,'run_hourly',lambda *a,**k:{'status':'incomplete'})
+    assert hourly.main()==75
+
+
+def test_136_terminal_approaches_and_one_active_lease_do_not_reopen_model_artifacts(tmp_path):
+    from finplan_model.forward.hourly import _register
+    from finplan_model.forward.registry import Approach
+    class Active(FakeEvidence):
+        def claim_run(self,*a,**k):return False
+    e=Active();experiment='controlled-many-terminal';slot='2026-07-11T00:00:00Z';at='2026-07-11T00:05:00Z'
+    rows=[Approach('controlled_'+str(n),'Controlled replay '+str(n),'control','baseline').to_dict() for n in range(137)]
+    data=source();data['registry_approaches']=rows;data['availability_cutoff']=at
+    _register(e,experiment,rows,data,at,slot)
+    shared=e.capture_shared_source(experiment,slot,data,at)
+    for index,row in enumerate(rows):
+        aid=row['approach_id'];book=e.ensure_portfolio(experiment,aid,100000,data['investable_universe'],at)
+        item=e.capture_input(experiment,aid,slot,{'holdings':{'positions':[],'cash':100000,'portfolio_value':100000}},shared,at)
+        rid=e.start_run(experiment,aid,slot,item['input_id'],book['portfolio_id'],at,row)['run_id']
+        if index<136:
+            e.finish_run(rid,{'status':'failed','reason':'Controlled terminal fixture'},at)
+            e.record_observation(experiment,aid,slot,book['portfolio_id'],{'run_id':rid,'input_id':item['input_id'],'portfolio_id':book['portfolio_id'],'value':None},at)
+        else:e.records['research_run',rid]['lease_until']=1783728900
+    original_read=e.read_input
+    e.read_input=lambda iid: original_read(iid) if iid==shared['input_id'] else pytest.fail('terminal model input reopened')
+    e.read_run=lambda rid:pytest.fail('terminal outcome reopened')
+    result=run_hourly(slot,experiment,tmp_path,backend=e,now=at)
+    assert result['status']=='incomplete' and len(result['approaches'])==137
+    assert len([r for r in result['approaches'] if r.get('retry')=='existing_terminal'])==136
+
+
+def test_wrong_bound_valuation_fails_instead_of_skipping_original_evidence(tmp_path):
+    e=FakeEvidence();result=run(e,tmp_path)
+    oid=identifier('mo','controlled-recovery','cash',result['slot'],'valuation')
+    e.records['portfolio_observation',oid]['run_id']='controlled-wrong-run'
+    with pytest.raises(ValueError,match='original run/input/portfolio'):run(e,tmp_path)

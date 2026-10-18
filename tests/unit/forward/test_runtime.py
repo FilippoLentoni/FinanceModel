@@ -187,3 +187,28 @@ def test_codex_prepared_but_not_invoked_news_is_not_consumed():
     assert captured[0]['news']['consumed'] is False and captured[0]['news']['items']==[]
     assert captured[0]['news']['context_status']=='prepared_not_supplied'
     assert captured[0]['numeric']['prepared']['actual_source']['news']==selected
+
+
+def test_verified_shared_checksum_is_reused_without_reserializing_full_source(monkeypatch):
+    import finplan_model.forward.runtime as runtime
+    s=source();checksum=sha256_checksum(canonical_json_bytes(s));captured=[];original=runtime.canonical_json_bytes
+    def forbid_full_source(value):
+        if value is s:pytest.fail('already verified shared source must not be canonicalized per approach')
+        return original(value)
+    monkeypatch.setattr(runtime,'canonical_json_bytes',forbid_full_source)
+    outcome=evaluate_approach('cash',s,holdings(),cutoff='2026-07-11T00:00:00Z',run_id='r',input_id='i',capture=captured.append,shared_source_checksum=checksum)
+    assert outcome['status']=='recommended'
+    assert captured[0]['shared_source_checksum']==checksum
+    assert captured[0]['numeric']['source_history_reference']['shared_source_checksum']==checksum
+    assert sha256_checksum(original(s))==checksum
+
+
+def test_direct_adapter_computes_shared_hash_once(monkeypatch):
+    import finplan_model.forward.runtime as runtime
+    s=source();captured=[];original=runtime.canonical_json_bytes;calls=[]
+    def counted(value):
+        if value is s:calls.append(True)
+        return original(value)
+    monkeypatch.setattr(runtime,'canonical_json_bytes',counted)
+    evaluate_approach('cash',s,holdings(),cutoff='2026-07-11T00:00:00Z',run_id='r',input_id='i',capture=captured.append)
+    assert len(calls)==1

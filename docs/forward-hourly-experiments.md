@@ -159,3 +159,38 @@ for location-valued `contract_version`/`decision_at` fields while preserving val
 existing requests. The immutable legacy v1 request schema still lacks its check
 marker: the three pre-existing producer-schema audit failures are not waived,
 rewritten or represented as passing by this source hardening.
+
+Execution recovery uses metadata-only approach queries and a verified permanent
+execution frontier. The frontier retains one explicitly pending original policy;
+older eligible policies have separate immutable superseded dispositions. These
+records never stand in for paper ledger receipts or change the recommendation.
+Only the selected original policy artifact is expanded. The backend verifies the
+covered interval before accepting a frontier, and query overflow or unresolved
+running heads leave the hour explicitly incomplete.
+
+A running invocation retains its original600-second lease and captured inputs.
+An immediate restart returns temporary exit75 and does not re-invoke the model.
+After expiry, recovery records an explicit interrupted-invocation failure using
+the original input; missing historical valuations remain missing. Other completed
+approaches are not invoked again. Late recovery after the shared input bundle has
+been frozen repairs bookkeeping only and cannot execute a trade retroactively.
+The scheduler retries only exit75 with the same permanent slot within a bounded
+command deadline; generic failures remain failures.
+
+The shared source checksum is taken from the verified captured source artifact
+once per hour, rather than repeatedly canonicalizing the full source for each
+approach. Every model capture retains that exact checksum; the storage boundary
+checks it against the authoritative shared-input reference before creating the
+model artifact or invoking inference.
+
+Existing valuation metadata includes the original run/input/book bindings for
+new records. Same-slot retries validate those bindings and avoid reopening model
+artifacts when the valuation already exists. Legacy observations verify their
+original stored bytes; missing valuations are repaired from captured inputs.
+A mismatched observation fails integrity checks rather than being skipped.
+
+The interim `research cycle` command waits in30-second steps for the original
+lease for up to900 seconds, retaining the same slot. After expiry it records an
+explicit interrupted-cycle failure from the existing input and emits the durable
+receipt without calling the reviewer or retrieving sources again. An unresolved
+lease at the deadline returns exit75 and no successful receipt.
