@@ -4,6 +4,7 @@
 !uv.lock
 !README.md
 !vendor/finplan-contracts/*.whl
+!vendor/finplan-platform/*.whl
 !src/finplan_model/**
 !config/*.json
 **/__pycache__

@@ -32,6 +32,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY pyproject.toml uv.lock README.md ./
 COPY vendor/finplan-contracts/ ./vendor/finplan-contracts/
+COPY vendor/finplan-platform/ ./vendor/finplan-platform/
 RUN uv sync --frozen --no-dev --extra rl --no-install-project
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev --extra rl --no-editable

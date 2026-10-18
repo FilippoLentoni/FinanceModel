@@ -92,7 +92,7 @@ def test_build_context_allow_list_excludes_everything_else():
     lines = [l.strip() for l in IGNORE.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
     assert lines[0] == "*"
     allowed = {l[1:] for l in lines if l.startswith("!")}
-    assert allowed == {"pyproject.toml", "uv.lock", "README.md", "vendor/finplan-contracts/*.whl", "src/finplan_model/**", "config/*.json"}
+    assert allowed == {"pyproject.toml", "uv.lock", "README.md", "vendor/finplan-contracts/*.whl", "vendor/finplan-platform/*.whl", "src/finplan_model/**", "config/*.json"}
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed; the image is built in the pipeline build stage")
