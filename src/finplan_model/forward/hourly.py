@@ -251,15 +251,18 @@ def _agent_tool_adapter(base,source,holdings,before,*,invoke=None):
     """Ask the deployed agent to run exactly one model tool; reject anything else it returns.
 
     ``instruments`` is the cohort universe, so the tool optimises (classical) or selects its
-    frozen policy (PPO) on exactly the symbols the direct books use. ``holdings`` are the inputs
-    the matching direct book consumes: feature-close ``HoldingsView`` weights for classical
-    (:func:`runtime.classical_tool_holdings`), the runner's book holdings for PPO. For PPO the
-    served policy must be the direct ``ppo`` book's frozen artifact (same checksum).
+    frozen policy (PPO) on exactly the symbols the direct books use. The tool's ``holdings`` are
+    the matching direct book's frozen pre-decision holdings (``comparison_holdings``; the agent
+    book's own only when absent), as that book consumes them: feature-close ``HoldingsView``
+    weights for classical (:func:`runtime.classical_tool_holdings`), the runner's book holdings
+    for PPO. The agent book still trades from its own ``holdings``. For PPO the served policy
+    must be the direct ``ppo`` book's frozen artifact (same checksum).
     """
-    from .registry import AGENT_TOOLS
+    from .registry import AGENT_DIRECT_BOOKS, AGENT_TOOLS
     if invoke is None:
         from .agent_client import invoke_tool as invoke
     model=base['model']['strategy_name'];tool=AGENT_TOOLS[model];universe=list(source['investable_universe'])
+    holdings=(source.get('comparison_holdings') or {}).get(AGENT_DIRECT_BOOKS[model]) or holdings
     if model=='ppo':
         # The direct ppo book's actor consumes these exact runner holdings.
         scenario={k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')}

@@ -83,3 +83,16 @@ def test_tool_errors_pass_through_unchanged():
     def invoke(name, arguments, prompt, before):
         return {'status': 'failed', 'error_code': 'HOSTED_HTTP_503'}
     assert _agent_tool_adapter(_base('ppo'), _source(), HOLDINGS, lambda p: None, invoke=invoke) == {'status': 'failed', 'error_code': 'HOSTED_HTTP_503'}
+
+
+def test_the_tool_receives_the_direct_books_holdings_when_the_agent_book_diverged():
+    # The agent book is all cash (an earlier slot failed); the direct books hold positions.
+    cash_book = {'weights': [{'instrument_id': i, 'weight': 0.} for i in UNIVERSE], 'cash_weight': 1., 'portfolio_value': 100000.,
+                 'high_watermark': 100000., 'positions': [], 'cash': 100000.}
+    source = {**_source(), 'comparison_holdings': {'classical_cvar': HOLDINGS, 'ppo': HOLDINGS, 'agent_cvar': cash_book, 'agent_ppo': cash_book}}
+    invoke = _reply('generate_portfolio_recommendation_cvar', {'AAPL': .6, 'MSFT': .4}, 'cvar')
+    _agent_tool_adapter(_base('cvar'), source, cash_book, lambda p: None, invoke=invoke)
+    assert invoke.call[1]['holdings']['weights'] == [{'instrument_id': 'AAPL', 'weight': .01}, {'instrument_id': 'MSFT', 'weight': 0.}]
+    invoke = _reply('generate_portfolio_recommendation_ppo', {'AAPL': .2}, 'ppo', PPO_CHECKSUM)
+    _agent_tool_adapter(_base('ppo'), source, cash_book, lambda p: None, invoke=invoke)
+    assert invoke.call[1]['holdings'] == {k: HOLDINGS[k] for k in ('weights', 'cash_weight', 'portfolio_value', 'high_watermark')}

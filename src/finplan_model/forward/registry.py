@@ -64,6 +64,9 @@ AGENT_TOOLS = {
     'cvar': 'generate_portfolio_recommendation_cvar',
     'ppo': 'generate_portfolio_recommendation_ppo',
 }
+# The direct book whose pre-decision holdings each agent tool call receives, so the agent book
+# and its direct book see identical model inputs for the slot even when their books diverged.
+AGENT_DIRECT_BOOKS = {'min_variance': 'classical_min_variance', 'cvar': 'classical_cvar', 'ppo': 'ppo'}
 APPROACHES += tuple(Approach('agent_'+model,'Agent via MCP tool: '+label,'agentic','agent_tool',native_cadence='hourly',
     requires='supported_authenticated_hosted_backend',strategy_name=model)
     for model,label in (('min_variance','min variance'),('cvar','CVaR'),('ppo','PPO')))
