@@ -59,6 +59,9 @@ def check_public(value: Any) -> None:
         raise CredentialEvidenceError("Credential-shaped evidence is prohibited")
 
 
+SECRET_NAME = "finplan/{}/financeagent/modeling-runner-client"
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -72,7 +75,11 @@ def machine_token(ssm: Any, secrets: Any, env: str, opener: Any) -> tuple[str, l
     endpoint = urllib.parse.urlsplit(meta["token_endpoint"])
     if endpoint.scheme != "https" or not (endpoint.hostname or "").endswith(".amazoncognito.com") or endpoint.path != "/oauth2/token" or endpoint.query:
         raise ValueError("invalid token endpoint")
-    secret_id = ssm.get_parameter(Name=REFS["secret"].format(env))["Parameter"]["Value"]
+    try:
+        secret_id = ssm.get_parameter(Name=REFS["secret"].format(env))["Parameter"]["Value"]
+    except ssm.exceptions.ParameterNotFound:
+        # FinanceAgent publishes this ref only after a bootstrap re-run; the name is deterministic.
+        secret_id = SECRET_NAME.format(env)
     secret = json.loads(secrets.get_secret_value(SecretId=secret_id)["SecretString"])
     basic = base64.b64encode((secret["client_id"] + ":" + secret["client_secret"]).encode()).decode()
     request = urllib.request.Request(meta["token_endpoint"], data=b"grant_type=client_credentials", headers={
