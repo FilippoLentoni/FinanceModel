@@ -52,3 +52,9 @@ def test_release_publishes_the_runner_reference_and_budget_role():
     assert plan["forward-runner-function-arn"] == ("/finplan/beta/financemodel/api/forward-runner-function-arn", "arn-token")
     assert n.role_name("beta", n.FORWARD_RUNNER_ROLE) in release.enforced_role_names("beta", {"ForwardRunnerFunctionArn": "x"})
     assert n.role_name("gamma", n.FORWARD_RUNNER_ROLE) not in release.enforced_role_names("gamma", {})
+
+
+def test_runner_may_use_the_platform_key_through_dynamodb_and_s3():
+    from infra.stacks.policies import forward_runner_policy
+    key = next(s for s in forward_runner_policy("beta")["Statement"] if s["Sid"] == "ExperimentLedgerKey")
+    assert set(key["Condition"]["StringEquals"]["kms:ViaService"]) == {"s3.us-east-2.amazonaws.com", "dynamodb.us-east-2.amazonaws.com"}

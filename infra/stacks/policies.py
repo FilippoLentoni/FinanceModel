@@ -325,7 +325,7 @@ def forward_runner_policy(env: str, *, partition: str = PARTITION, region: str =
         {"Sid": "ExperimentLedgerArtifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:GetObjectTagging", "s3:PutObjectTagging"], "Resource": [reports + "/modeling-evidence/*"]},
         {"Sid": "ExperimentLedgerBucket", "Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetEncryptionConfiguration"], "Resource": [reports]},
         {"Sid": "ExperimentLedgerKey", "Effect": "Allow", "Action": ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"], "Resource": [_arn("kms", "key/*", partition=partition, region=region, account=account)],
-         "Condition": {"StringEquals": {"kms:ViaService": f"s3.{region}.amazonaws.com"}, "ForAnyValue:StringLike": {"kms:ResourceAliases": f"alias/finplan-{env}-financialplanning-*"}}},
+         "Condition": {"StringEquals": {"kms:ViaService": [f"s3.{region}.amazonaws.com", f"dynamodb.{region}.amazonaws.com"]}, "ForAnyValue:StringLike": {"kms:ResourceAliases": f"alias/finplan-{env}-financialplanning-*"}}},
         {"Sid": "ReadFrozenPolicies", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
         {"Sid": "ListFrozenPolicies", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "artifacts/policy_inference/*"}}},
         {"Sid": "ReadApprovedInputs", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*", "v1/research-news/latest", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
