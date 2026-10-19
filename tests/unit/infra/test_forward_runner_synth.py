@@ -57,4 +57,4 @@ def test_release_publishes_the_runner_reference_and_budget_role():
 def test_runner_may_use_the_platform_key_through_dynamodb_and_s3():
     from infra.stacks.policies import forward_runner_policy
     key = next(s for s in forward_runner_policy("beta")["Statement"] if s["Sid"] == "ExperimentLedgerKey")
-    assert set(key["Condition"]["StringEquals"]["kms:ViaService"]) == {"s3.us-east-2.amazonaws.com", "dynamodb.us-east-2.amazonaws.com"}
+    assert set(key["Condition"]["StringEquals"]["kms:ViaService"]) == {"s3.${AWS::Region}.amazonaws.com", "dynamodb.${AWS::Region}.amazonaws.com"}
