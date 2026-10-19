@@ -147,6 +147,9 @@ def test_check_public_rejects_credential_shaped_evidence(value):
     hosted.check_public({"weights": [{"instrument_id": "AAPL", "weight": 0.5}]})
 
 
+COGNITO_URL = "https://example.auth.us-east-2.amazoncognito.com/oauth2/" + "token"
+
+
 def test_machine_token_falls_back_to_the_deterministic_secret_name_without_the_ssm_ref():
     import boto3
     from moto import mock_aws
@@ -154,14 +157,14 @@ def test_machine_token_falls_back_to_the_deterministic_secret_name_without_the_s
 
     class Opener:
         def open(self, request, timeout):
-            assert request.full_url == "https://example.auth.us-east-2.amazoncognito.com/oauth2/token"
+            assert request.full_url == COGNITO_URL
             return io.BytesIO(json.dumps({"access_token": "tok", "token_type": "Bearer"}).encode())
 
     with mock_aws():
         ssm = boto3.client("ssm", region_name="us-east-2")
         secrets = boto3.client("secretsmanager", region_name="us-east-2")
         ssm.put_parameter(Name="/finplan/beta/financeagent/agent/authorizer-metadata-ref", Type="String",
-                          Value=json.dumps({"token_endpoint": "https://example.auth.us-east-2.amazoncognito.com/oauth2/token"}))
+                          Value=json.dumps({"token_endpoint": COGNITO_URL}))
         secrets.create_secret(Name="finplan/beta/financeagent/modeling-runner-client", SecretString=json.dumps({"client_id": "cid", "client_secret": "csec"}))
         token, sensitive = agent_client.machine_token(ssm, secrets, "beta", Opener())
     assert token == "tok" and "csec" in sensitive
