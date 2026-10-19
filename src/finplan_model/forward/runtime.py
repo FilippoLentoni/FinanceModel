@@ -36,6 +36,33 @@ def input_market(source, cutoff):
     return market
 
 
+def book_holdings_view(source, holdings, cutoff, universe):
+    """The point-in-time view and holdings marked as the direct classical/baseline books see them.
+
+    Positions and cash of the pre-decision book, marked at the latest eligible snapshot feature
+    close of each universe instrument. The agent-tool path sends exactly these weights (see
+    :func:`classical_tool_holdings`) so agent and direct classical books solve the same problem.
+    """
+    market=input_market(source,cutoff)
+    decision=max(market.sessions)
+    view=PointInTimeView(market,decision,datetime.fromisoformat(cutoff.replace('Z','+00:00')),tuple(universe))
+    shares={p['instrument_id']:float(p['quantity']) for p in holdings.get('positions',[])}
+    quotes={i:view.latest(i) for i in universe}
+    if any(q is None for q in quotes.values()):raise FinplanError.precondition('missing eligible instrument prices',reason='prices_unavailable')
+    cash=float(holdings.get('cash',holdings.get('cash_balance',0)))
+    value=cash+sum(shares.get(i,0)*quotes[i] for i in universe)
+    return view,HoldingsView(shares,cash,quotes,value)
+
+
+def classical_tool_holdings(source, holdings, cutoff, universe):
+    """Tool ``holdings`` equal to the direct classical book's ``HoldingsView`` (weights by universe,
+    cash weight and value); the high watermark keeps the book's peak and never falls below value."""
+    _,hv=book_holdings_view(source,holdings,cutoff,universe)
+    weights=hv.weights
+    return {'weights':[{'instrument_id':i,'weight':float(weights.get(i,0.))} for i in universe],'cash_weight':float(hv.cash_weight),
+            'portfolio_value':float(hv.value),'high_watermark':float(max(holdings.get('high_watermark') or 0.,hv.value))}
+
+
 def validate_policy(output, universe, holdings):
     """Strict weights-only policy; intents are derived from the pre-decision book."""
     weights=output.get('target_weights',output.get('weights'))
@@ -130,16 +157,8 @@ def evaluate_approach(approach_id, source, holdings, *, cutoff, run_id, input_id
             before({'boundary':'constant_cash_control','parameters':{},'price_history_consumed':False,'holdings_consumed':False})
             output={'weights':{i:0. for i in universe},'cash':1.,'solution_status':'not_applicable','forecast':{'available':False,'status':'not_available'}}
         elif approach.adapter in ('baseline','classical'):
-            market=input_market(source,cutoff)
-            decision=max(market.sessions)
-            view=PointInTimeView(market,decision,datetime.fromisoformat(cutoff.replace('Z','+00:00')),tuple(universe))
-            positions=holdings.get('positions',[])
-            shares={p['instrument_id']:float(p['quantity']) for p in positions}
-            quotes={i:view.latest(i) for i in universe}
-            if any(q is None for q in quotes.values()):raise FinplanError.precondition('missing eligible instrument prices',reason='prices_unavailable')
-            cash=float(holdings.get('cash',holdings.get('cash_balance',0)))
-            value=cash+sum(shares.get(i,0)*quotes[i] for i in universe)
-            hv=HoldingsView(shares,cash,quotes,value)
+            view,hv=book_holdings_view(source,holdings,cutoff,universe)
+            quotes=dict(hv.prices)
             simulation=SimulationConfig.from_dict(config or {})
             if approach.adapter=='baseline':strategy=build_strategy(approach.strategy_name or approach_id,approach.parameters or {},constraints=simulation.constraints)
             else:

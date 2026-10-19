@@ -3,9 +3,9 @@
   "package": "finplan-platform",
   "version": "0.1.0",
   "artifact": "vendor/finplan-platform/finplan_platform-0.1.0-py3-none-any.whl",
-  "sha256": "327aeb1cb584283986bb3efec95f0a1751903ed3b74c5089e697664baa3583a5",
+  "sha256": "1cda0121f0f61ce178152e9ee6162094e7dffc41cd98947181c625e3356a1d0c",
   "source": "FinancialPlanning repository (pyproject finplan-platform, packages platform/finplan_platform), built with: git archive <source_commit> | tar -x; SOURCE_DATE_EPOCH=315532800 uv build --wheel",
-  "source_commit": "60a11505fef499e54cc76b4c82fe8db3a8cfb551",
+  "source_commit": "84951b30ad92152050f91c1619dcaef183a52c5d",
   "source_date_epoch": 315532800,
   "served_environments": [
     "beta"

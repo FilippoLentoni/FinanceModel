@@ -256,6 +256,8 @@ def inference_role_policy(env: str, *, partition: str = PARTITION, region: str =
         _log_statement(env, n.STRATEGY_INFERENCE, partition=partition, region=region, account=account),
         {"Sid": "ReadInferenceConfiguration", "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": [_ssm_param(p, partition=partition, region=region, account=account) for p in params]},
         {"Sid": "ReadFrozenStrategy", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": [f"{research}/artifacts/policy_inference/*"]},
+        # generate_portfolio_recommendation_ppo selects the frozen export trained on the requested universe.
+        {"Sid": "ListFrozenStrategies", "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": [research], "Condition": {"StringLike": {"s3:prefix": "artifacts/policy_inference/*"}}},
         {"Sid": "ReadApprovedSnapshots", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/snapshots/*")},
         {"Sid": "ReadVersionedNewsState", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/research-news/latest", "v1/gdelt-metadata", "v1/gdelt-intraday-metadata")},
         {"Sid": "ReadSavedPortfolio", "Effect": "Allow", "Action": ["execute-api:Invoke"], "Resource": _platform_reads(region, account, partition, "v1/plans/*", "v1/portfolios/*", "v1/portfolios/*/state")},

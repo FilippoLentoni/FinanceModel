@@ -425,8 +425,10 @@ job (then `cancelled`), and the unchanged terminal state for a finished run.
 
 ## Beta advisory interfaces
 
-`recommend_portfolio`: `GET /v1/recommendations` is a compatibility route for small requests.
-MCP serving invokes the dedicated strategy Lambda directly with a longer bounded deadline.
+`generate_portfolio_recommendation_ppo`: `GET /v1/recommendations` is a compatibility route for
+small requests (`request` must name the required `instruments`). MCP serving invokes the dedicated
+strategy Lambda directly with a longer bounded deadline; it serves the frozen PPO policy trained on
+exactly the requested `instruments` (else `PRECONDITION_FAILED`, reason `no_policy_for_universe`).
 `activate_advisory`: `PUT /v1/advisory-policy` pins a succeeded `prepare_policy` export after
 explicit operator intent; production selection is unchanged. `performance_evidence`:
 `GET /v1/performance-evidence` returns a bounded published-allocation comparison when an

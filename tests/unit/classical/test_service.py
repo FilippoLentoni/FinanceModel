@@ -1,11 +1,17 @@
 import copy
 
 import pytest
+from finplan_contracts.schemas import load_store
 from finplan_contracts.validate import validate
 
 from finplan_model.classical.storage import reference
 from finplan_model.classical_api import handle
 from finplan_model.core.errors import FinplanError
+
+
+UNIVERSE = ["AAPL", "GOOGL", "NFLX", "NVDA", "VOO"]
+OPS = {"min_variance": "generate_portfolio_recommendation_min_variance",
+       "cvar": "generate_portfolio_recommendation_cvar"}
 
 
 def invoke(ctx, op, body):
@@ -14,16 +20,18 @@ def invoke(ctx, op, body):
     )
 
 
-@pytest.mark.parametrize("algorithm", ["min_variance", "mean_variance", "cvar"])
+def recommend(ctx, body, algorithm="min_variance"):
+    return invoke(ctx, OPS[algorithm], {"instruments": UNIVERSE, **body})
+
+
+@pytest.mark.parametrize("algorithm", ["min_variance", "cvar"])
 def test_issued_plans_are_immutable_feasible_and_arithmetic_reconciles(
     context, algorithm
 ):
     before = copy.deepcopy(context.state)
-    a = invoke(context, "recommend_classical_portfolio", {"algorithm": algorithm})
-    assert (
-        invoke(context, "recommend_classical_portfolio", {"algorithm": algorithm}) == a
-    )
-    assert validate(a, "tools/recommend-classical-portfolio-response").valid
+    a = recommend(context, {}, algorithm)
+    assert recommend(context, {}, algorithm) == a
+    assert validate(a, "tools/generate-portfolio-recommendation-" + algorithm.replace("_", "-") + "-response").valid
     rec = a["recommendation"]
     nav = rec["portfolio_state"]["portfolio_value"]
     assert sum(
@@ -55,7 +63,7 @@ def test_issued_plans_are_immutable_feasible_and_arithmetic_reconciles(
 
 
 def test_explanation_reproduces_pinned_inputs_and_detects_changed_output(context):
-    a = invoke(context, "recommend_classical_portfolio", {})
+    a = recommend(context, {})
     e = invoke(
         context,
         "explain_classical_recommendation",
@@ -79,15 +87,9 @@ def test_explanation_reproduces_pinned_inputs_and_detects_changed_output(context
 
 
 def test_plan_over_plan_attribution_reconciles_target_and_trade_changes(context):
-    a = invoke(
-        context,
-        "recommend_classical_portfolio",
-        {"input_snapshot_id": context.sid, "as_of": context.dates[150].isoformat()},
+    a = recommend(context, {"input_snapshot_id": context.sid, "as_of": context.dates[150].isoformat()},
     )
-    b = invoke(
-        context,
-        "recommend_classical_portfolio",
-        {
+    b = recommend(context, {
             "input_snapshot_id": context.sid,
             "as_of": context.dates[151].isoformat(),
             "settings": {"turnover_penalty": 0.002},
@@ -140,9 +142,8 @@ def test_compare_refuses_unreproduced_issued_endpoints(context, tamper):
 
 
 def test_incompatible_horizon_fails_before_counterfactual(context):
-    a = invoke(context, "recommend_classical_portfolio", {})
-    b = invoke(
-        context, "recommend_classical_portfolio", {"settings": {"horizon_sessions": 10}}
+    a = recommend(context, {})
+    b = recommend(context, {"settings": {"horizon_sessions": 10}}
     )
     with pytest.raises(FinplanError, match="horizon"):
         invoke(
@@ -158,10 +159,7 @@ def test_incompatible_horizon_fails_before_counterfactual(context):
 def test_paper_performance_forward_window_reconciles_and_has_no_invented_actuals(
     context,
 ):
-    a = invoke(
-        context,
-        "recommend_classical_portfolio",
-        {"input_snapshot_id": context.sid, "as_of": context.dates[170].isoformat()},
+    a = recommend(context, {"input_snapshot_id": context.sid, "as_of": context.dates[170].isoformat()},
     )
     result = invoke(
         context, "evaluate_classical_performance", {"analysis_id": a["analysis_id"]}
@@ -193,7 +191,7 @@ def test_paper_performance_forward_window_reconciles_and_has_no_invented_actuals
 
 
 def test_no_forward_history_and_future_boundary_are_explicit(context):
-    a = invoke(context, "recommend_classical_portfolio", {})
+    a = recommend(context, {})
     assert (
         invoke(
             context, "evaluate_classical_performance", {"analysis_id": a["analysis_id"]}
@@ -209,10 +207,7 @@ def test_no_forward_history_and_future_boundary_are_explicit(context):
 
 
 def test_changed_paper_revision_has_only_unattributed_gap(context):
-    a = invoke(
-        context,
-        "recommend_classical_portfolio",
-        {"input_snapshot_id": context.sid, "as_of": context.dates[170].isoformat()},
+    a = recommend(context, {"input_snapshot_id": context.sid, "as_of": context.dates[170].isoformat()},
     )
     context.platform.portfolio_states[context.pid]["revision"] = 2
     context.platform.portfolio_states[context.pid]["paper_state"]["cash_balance"] = 100
@@ -224,10 +219,7 @@ def test_changed_paper_revision_has_only_unattributed_gap(context):
 
 
 def test_explicit_historical_scenario_is_not_misrepresented_as_saved_actuals(context):
-    a = invoke(
-        context,
-        "recommend_classical_portfolio",
-        {
+    a = recommend(context, {
             "input_snapshot_id": context.sid,
             "as_of": context.dates[90].isoformat(),
             "holdings": {
@@ -257,16 +249,15 @@ def test_cross_environment_unknown_operation_and_unsupported_settings_rejected(c
         handle(
             {
                 "environment": "prod",
-                "operation": "recommend_classical_portfolio",
-                "request": {},
+                "operation": "generate_portfolio_recommendation_min_variance",
+                "request": {"instruments": UNIVERSE},
             },
             context.service,
         )
     with pytest.raises(FinplanError):
         invoke(context, "arbitrary_tool", {})
     with pytest.raises(FinplanError):
-        invoke(
-            context, "recommend_classical_portfolio", {"settings": {"solver": "remote"}}
+        recommend(context, {"settings": {"solver": "remote"}}
         )
 
 
@@ -276,14 +267,11 @@ def test_request_idempotency_replays_original_plan_and_refuses_reused_key(contex
         "input_snapshot_id": context.sid,
         "as_of": context.dates[150].isoformat(),
     }
-    a = invoke(context, "recommend_classical_portfolio", body)
+    a = recommend(context, body)
     context.state["revision"] = 2
-    assert invoke(context, "recommend_classical_portfolio", body) == a
+    assert recommend(context, body) == a
     with pytest.raises(FinplanError) as err:
-        invoke(
-            context,
-            "recommend_classical_portfolio",
-            {**body, "as_of": context.dates[151].isoformat()},
+        recommend(context, {**body, "as_of": context.dates[151].isoformat()},
         )
     assert err.value.code == "IDEMPOTENCY_KEY_REUSED"
 
@@ -396,3 +384,100 @@ def test_eight_profile_optimizers_consume_current_numeric_metadata_and_freeze_se
     assert out['recommendation']['decision_timing']=='after_completed_close_for_next_session'
     assert out['recommendation']['news_timing']=='eligible_news_at_decision_with_completed_prices'
     assert calls[0][2]=='platform'
+
+
+SCENARIO_HOLDINGS = {"weights": [{"instrument_id": "AAPL", "weight": 0.5}], "cash_weight": 0.5,
+                     "portfolio_value": 10000.0, "high_watermark": 10000.0}
+
+
+@pytest.mark.parametrize("algorithm", ["min_variance", "cvar"])
+def test_instruments_restrict_the_optimised_universe(context, algorithm):
+    body = {"input_snapshot_id": context.sid, "as_of": context.dates[150].isoformat(),
+            "holdings": SCENARIO_HOLDINGS, "instruments": ["VOO", "AAPL", "NVDA"]}
+    a = invoke(context, OPS[algorithm], body)
+    assert validate(a, "tools/generate-portfolio-recommendation-" + algorithm.replace("_", "-") + "-response").valid
+    rec = a["recommendation"]
+    assert rec["strategy"] == algorithm
+    assert [w["instrument_id"] for w in rec["target_weights"]] == ["VOO", "AAPL", "NVDA"]
+    assert [d["instrument_id"] for d in rec["decisions"]] == ["VOO", "AAPL", "NVDA"]
+    assert sum(w["weight"] for w in rec["target_weights"]) + rec["cash_weight"] == pytest.approx(1.0)
+    assert context.service.store.get(a["analysis_id"])["solve_inputs"]["instruments"] == ["VOO", "AAPL", "NVDA"]
+
+
+def test_restricted_tool_matches_the_direct_classical_book(context):
+    """The agent tool and the direct ``classical_*`` book solve the same problem."""
+    from finplan_model.classical.strategy import ClassicalStrategy
+    from finplan_model.jobs.market_loader import load_market
+    from finplan_model.sim.market import HoldingsView
+
+    universe = ["AAPL", "NVDA", "VOO"]
+    as_of = context.dates[150]
+    for algorithm in ("min_variance", "cvar"):
+        rec = invoke(context, OPS[algorithm], {"input_snapshot_id": context.sid, "as_of": as_of.isoformat(),
+                     "instruments": universe, "holdings": {"weights": [], "cash_weight": 1.0,
+                     "portfolio_value": 10000.0, "high_watermark": 10000.0}})["recommendation"]
+        market, _ = load_market(context.platform, context.sid)
+        view = market.view(as_of, universe)
+        direct = ClassicalStrategy(algorithm).decide(view, HoldingsView({}, 10000.0, {i: 1.0 for i in universe}, 10000.0))
+        assert [w["weight"] for w in rec["target_weights"]] == pytest.approx([direct.weights[i] for i in universe], abs=1e-12)
+
+
+def test_requested_instrument_missing_from_snapshot_is_a_typed_error(context):
+    with pytest.raises(FinplanError) as err:
+        recommend(context, {"instruments": ["AAPL", "TSLA", "MSFT"]})
+    assert err.value.code == "VALIDATION_FAILED"
+    assert err.value.details["missing_instruments"] == ["TSLA", "MSFT"]
+
+
+def test_holdings_outside_the_requested_instruments_are_rejected(context):
+    holdings = {**SCENARIO_HOLDINGS, "weights": [{"instrument_id": "NFLX", "weight": 0.5}]}
+    with pytest.raises(FinplanError) as err:
+        recommend(context, {"input_snapshot_id": context.sid, "as_of": context.dates[150].isoformat(),
+                            "holdings": holdings, "instruments": ["AAPL", "VOO"]})
+    assert err.value.code == "VALIDATION_FAILED" and err.value.details["outside_instruments"] == ["NFLX"]
+
+
+def test_saved_book_positions_must_be_covered_by_the_requested_instruments(context):
+    with pytest.raises(FinplanError) as err:
+        recommend(context, {"instruments": ["AAPL", "VOO"]})
+    assert err.value.code == "VALIDATION_FAILED" and err.value.details["uncovered_positions"]
+
+
+def test_algorithm_comes_from_the_tool_and_instruments_are_required(context):
+    with pytest.raises(FinplanError):
+        recommend(context, {"algorithm": "cvar"})
+    with pytest.raises(FinplanError):
+        invoke(context, OPS["cvar"], {})
+    with pytest.raises(FinplanError):
+        recommend(context, {"settings": {"cvar_alpha": 0.95}})  # min-variance has no CVaR setting
+    with pytest.raises(FinplanError):
+        invoke(context, "recommend_classical_portfolio", {"algorithm": "cvar"})
+
+
+def test_top_level_instruments_must_equal_the_request(context):
+    body = {"instruments": UNIVERSE}
+    event = {"environment": "beta", "operation": OPS["cvar"], "request": body}
+    assert handle({**event, "instruments": UNIVERSE}, context.service)["recommendation"]["strategy"] == "cvar"
+    with pytest.raises(FinplanError) as err:
+        handle({**event, "instruments": ["AAPL"]}, context.service)
+    assert err.value.code == "VALIDATION_FAILED"
+    with pytest.raises(FinplanError):
+        handle({"environment": "beta", "operation": "get_classical_analysis", "request": {"analysis_id": "ca_x"}, "instruments": UNIVERSE}, context.service)
+
+
+def test_list_returns_only_kinds_the_response_contract_can_represent(context):
+    from finplan_model.classical_api import LISTABLE_KINDS
+
+    schema = load_store().get("tools/list-classical-analyses-response").schema
+    assert list(LISTABLE_KINDS) == schema["properties"]["analyses"]["items"]["properties"]["analysis_kind"]["enum"]
+    plan = recommend(context, {})
+    for kind in ("recursive_cycle", "recursive_iteration", "crypto_experiment", "research_discovery", "served_model_input"):
+        context.service.issue(kind, {"summary": "internal " + kind}, {"kind": kind}, portfolio_id=context.pid)
+    for body in ({}, {"portfolio_id": context.pid}, {"limit": 1}):
+        listed = invoke(context, "list_classical_analyses", body)
+        assert validate(listed, "tools/list-classical-analyses-response").valid
+        assert [r["analysis_id"] for r in listed["analyses"]] == [plan["analysis_id"]]
+    with pytest.raises(FinplanError) as err:
+        invoke(context, "list_classical_analyses", {"kind": "recursive_cycle"})
+    assert err.value.code == "VALIDATION_FAILED" and err.value.details["allowed_kinds"] == list(LISTABLE_KINDS)
+    assert invoke(context, "list_classical_analyses", {"kind": "recommendation"})["analyses"][0]["analysis_id"] == plan["analysis_id"]

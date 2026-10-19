@@ -1,4 +1,9 @@
-"""Direct Lambda interface for frozen strategy inference; no training or selection writes."""
+"""Direct Lambda interface for frozen strategy inference; no training or selection writes.
+
+Serves the MCP tool ``generate_portfolio_recommendation_ppo``: the payload is
+``{"environment", "request", "headers", "instruments"?}``; the frozen PPO policy is the one
+trained on exactly ``request.instruments`` (see :mod:`finplan_model.rl.policy_selection`).
+"""
 from __future__ import annotations
 
 import json
@@ -11,7 +16,7 @@ from finplan_model.core.clock import SystemClock
 from finplan_model.core.config import load_config
 from finplan_model.core.errors import FinplanError, as_finplan_error
 from finplan_model.core.outcome import require_valid
-from finplan_model.rl.advisory import recommendation
+from finplan_model.rl.advisory import PPO_RESPONSE, recommendation
 
 log = logging.getLogger("finplan_model.serving")
 log.setLevel(logging.INFO)
@@ -41,6 +46,7 @@ def build_service():
     from finplan_model.core.artifacts import S3ArtifactStore
     from finplan_model.core.aws_clients import s3_client
     from finplan_model.core.platform import HttpPlatformClient
+    from finplan_model.rl.policy_selection import list_exports
 
     env = os.environ["FINPLAN_ENVIRONMENT"]
     cfg = load_config(env, Path(os.environ["FINPLAN_CONFIG_DIR"]))
@@ -52,6 +58,7 @@ def build_service():
         advisory_parameter=SsmStrategyParameter(ssm, cfg.ssm_name("config", "advisory-policy")),
         research_plan_parameter=SsmStrategyParameter(ssm, f"/finplan/{env}/financialplanning/config/research-plan-ref"),
         artifacts=S3ArtifactStore(s3_client(cfg.region, session=session), bucket),
+        policy_exports=lambda: list_exports(s3_client(cfg.region, session=session), bucket),
         capture_served_input=lambda payload:capture_served_input(s3_client(cfg.region,session=session),bucket,payload),
         platform=HttpPlatformClient(endpoint, region=cfg.region, credentials=session.get_credentials()),
     )
@@ -61,9 +68,10 @@ def build_service():
 def handle(event, service):
     if not isinstance(event, dict) or event.get("environment") != service.env:
         raise FinplanError.validation("serving request belongs to another environment", pointer="/environment")
-    if set(event) - {"environment", "request", "headers"}:
+    if set(event) - {"environment", "request", "headers", "instruments"}:
         raise FinplanError.validation("unknown serving request field", pointer="")
-    return require_valid(recommendation(service, event.get("request")), "tools/recommend-portfolio-response")
+    # ``request.instruments`` is authoritative; a top-level copy must agree with it.
+    return require_valid(recommendation(service, event.get("request"), event.get("instruments")), PPO_RESPONSE)
 
 
 def handler(event, context=None):

@@ -1,8 +1,9 @@
 """Consumer-side HTTP client of the deployed beta FinanceAgent runtime (AgentCore).
 
 FinanceModel's forward runner asks the deployed agent to run one named model tool
-(``invoke_tool``) or the LangGraph recommendation workflow (``invoke_graph``) for an
-isolated synthetic scenario. This module is the consumer side of the agent's public
+(``invoke_tool``: ``generate_portfolio_recommendation_min_variance`` / ``_cvar`` / ``_ppo``,
+used by the ``agent_*`` books) or the LangGraph structured recommendation workflow
+(``invoke_graph``, the ``hosted_langgraph`` book) for an isolated synthetic scenario. This module is the consumer side of the agent's public
 invocation contract, copied from FinanceAgent ``finplan_agent.modeling.hosted`` /
 ``machine`` / ``capture.check_public`` (FinanceAgent c781fad) so that no FinanceAgent
 source is imported across repositories at run time; FinanceAgent deletes its copy later.
@@ -133,6 +134,8 @@ def invoke_tool(tool: str, arguments: dict[str, Any], prompt: str, capture_befor
         final["target_weights"] = recommendation["target_weights"]
         final["cash_weight"] = recommendation["cash_weight"]
         final["served_strategy"] = recommendation.get("strategy")
+        if recommendation.get("policy_artifact_checksum"):
+            final["served_policy_artifact_checksum"] = recommendation["policy_artifact_checksum"]
     final["forecast"] = {"available": False, "status": "not_available", "reason": "A target allocation is not a portfolio value forecast"}
     return final
 
@@ -144,14 +147,14 @@ def invoke_graph(arguments: dict[str, Any], capture_before: Callable[[dict[str, 
     payload = {"recommendation": arguments, "stream": False, "capture_inputs": True}
     check_public(payload)
     final = _post(session, payload, capture_before, timeout,
-                  {"numerical_policy": "FinanceModel served policy via recommend_portfolio; identity verified against the returned artifact", "news": "News not consumed by the graph request unless the served policy explicitly reports news features"})
+                  {"numerical_policy": "FinanceModel model chosen by the agent's structured recommendation workflow; identity verified against the returned artifact", "news": "News not consumed by the graph request unless the served policy explicitly reports news features"})
     if final.get("status") == "failed" and "error_code" in final and "answer" not in final:
         return final
     recommendation = (final.get("answer") or {}).get("recommendation")
     if isinstance(recommendation, dict) and isinstance(recommendation.get("target_weights"), list) and recommendation.get("cash_weight") is not None:
         final["target_weights"] = recommendation["target_weights"]
         final["cash_weight"] = recommendation["cash_weight"]
-        final["allocation_origin"] = "FinanceModel served policy via LangGraph recommend_portfolio tool"
+        final["allocation_origin"] = "FinanceModel model via the LangGraph structured recommendation workflow"
         final["served_strategy"] = recommendation.get("strategy")
         final["forecast"] = {"available": False, "status": "not_available", "reason": "A target allocation is not a portfolio value forecast"}
     else:

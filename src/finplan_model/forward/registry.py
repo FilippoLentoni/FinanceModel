@@ -57,11 +57,12 @@ APPROACHES += tuple(Approach('classical_'+name+'_etf_news','MCP classical '+name
     for name in ('min_variance','mean_variance','cvar'))
 
 # The same models run through the deployed agent: one prompt + explicit MCP tool request
-# per model and hour, in books separate from the direct runs, so agent errors are visible.
+# per model and slot, in books separate from the direct runs, so agent errors are visible.
+# Each tool's name fixes its model; the runner passes ``instruments`` = the cohort universe.
 AGENT_TOOLS = {
-    'min_variance': ('recommend_classical_portfolio', {'algorithm': 'min_variance'}),
-    'cvar': ('recommend_classical_portfolio', {'algorithm': 'cvar'}),
-    'ppo': ('recommend_portfolio', {}),
+    'min_variance': 'generate_portfolio_recommendation_min_variance',
+    'cvar': 'generate_portfolio_recommendation_cvar',
+    'ppo': 'generate_portfolio_recommendation_ppo',
 }
 APPROACHES += tuple(Approach('agent_'+model,'Agent via MCP tool: '+label,'agentic','agent_tool',native_cadence='hourly',
     requires='supported_authenticated_hosted_backend',strategy_name=model)

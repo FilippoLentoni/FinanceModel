@@ -49,8 +49,15 @@ class ClassicalService:
             doc["solve_inputs"] = solve_inputs
         return public(self.store.put(doc))
 
-    def recommend(self, body):
-        algorithm = body.get("algorithm", "min_variance")
+    def recommend(self, body, *, algorithm=None):
+        """One classical plan. ``algorithm`` is fixed by the calling MCP tool/operation.
+
+        ``body['instruments']`` (required by the ``generate_portfolio_recommendation_*``
+        tools) restricts the optimised universe to exactly those snapshot instruments, in the
+        requested order; every one must be in the snapshot and holdings may not reference
+        others. Internal callers (weekly review) omit it and use the snapshot/profile universe.
+        """
+        algorithm = algorithm or body.get("algorithm", "min_variance")
         if algorithm not in ("min_variance", "mean_variance", "cvar"):
             raise FinplanError.validation(
                 "unsupported classical algorithm", pointer="/algorithm"
@@ -58,6 +65,21 @@ class ClassicalService:
         cfg = settings(body.get("settings"))
         snap, saved = resolve_inputs(self, body)
         market, content = load_market(self.d.platform, snap)
+        requested = body.get("instruments")
+        if requested is not None:
+            missing = [i for i in requested if i not in set(market.instruments)]
+            if missing:
+                raise FinplanError.validation(
+                    "requested instruments are missing from the snapshot",
+                    pointer="/instruments", missing_instruments=missing,
+                )
+            if "holdings" in body:
+                outside = sorted({r["instrument_id"] for r in body["holdings"]["weights"]} - set(requested))
+                if outside:
+                    raise FinplanError.validation(
+                        "holdings reference instruments outside the requested instruments",
+                        pointer="/holdings/weights", outside_instruments=outside,
+                    )
         # A zero holding is a portfolio state, not removal from the investable universe.
         # Keep approved assets eligible after a full exit and when starting from cash.
         instruments = sorted(market.instruments)
@@ -73,6 +95,16 @@ class ClassicalService:
                 # Preserve the complete original investable book when source
                 # ingestion grows to a superset. Zero quantities remain eligible.
                 instruments=sorted(legacy)
+            if requested is not None:
+                outside = sorted(set(requested) - set(instruments))
+                held = sorted({r['instrument_id'] for r in saved['paper_state']['positions']} - set(requested))
+                if outside or held:
+                    raise FinplanError.validation(
+                        "requested instruments must be within the saved paper profile and cover its positions",
+                        pointer="/instruments", outside_profile=outside, uncovered_positions=held,
+                    )
+        if requested is not None:
+            instruments = list(requested)
         if not 1 <= len(instruments) <= 9:
             raise FinplanError.precondition(
                 "classical beta attribution supports one to nine instruments",

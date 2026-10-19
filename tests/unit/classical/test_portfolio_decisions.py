@@ -35,7 +35,7 @@ def issued_ppo(context, index=110):
         context.service.d.artifacts = InMemoryArtifactStore()
     artifact = context.service.d.artifacts.put_json(bundle, kind="policy_inference").to_dict()
     context.service.d.advisory_parameter = SimpleNamespace(read=lambda: json.dumps({"export_run_id": "run_01KDVDP88REHGPBXFX6CHX92KS", "artifact": artifact}))
-    return serve({"environment": "beta", "request": {"portfolio_id": context.pid, "input_snapshot_id": context.sid, "as_of": context.dates[index].isoformat()}}, context.service)
+    return serve({"environment": "beta", "request": {"portfolio_id": context.pid, "instruments": instruments, "input_snapshot_id": context.sid, "as_of": context.dates[index].isoformat()}}, context.service)
 
 
 @pytest.mark.parametrize("family", ["ppo", "classical"])
@@ -135,8 +135,8 @@ def test_fresh_request_key_creates_distinct_acceptable_proposal(context):
 
 
 def test_hypothetical_optimization_has_analysis_but_no_acceptable_proposal(context):
-    result = handle({"environment": "beta", "operation": "recommend_classical_portfolio", "request": {
-        "input_snapshot_id": context.sid, "as_of": context.dates[110].isoformat(),
+    result = handle({"environment": "beta", "operation": "generate_portfolio_recommendation_min_variance", "request": {
+        "instruments": list(context.market.instruments), "input_snapshot_id": context.sid, "as_of": context.dates[110].isoformat(),
         "holdings": {"weights": [], "cash_weight": 1., "portfolio_value": 10000., "high_watermark": 10000.},
     }}, context.service)
     assert result["analysis_id"]
@@ -177,11 +177,11 @@ def accept_for_test(context, result, *, recorded_index=111, costs=5.):
     return revision
 
 
-@pytest.mark.parametrize("algorithm", ["min_variance", "mean_variance", "cvar"])
+@pytest.mark.parametrize("algorithm", ["min_variance", "cvar"])
 def test_saved_cash_only_book_can_allocate_across_approved_universe(context, algorithm):
     context.state["paper_state"].update(positions=[], cash_balance=10000.)
     before = copy.deepcopy(context.state)
-    result = handle({"environment": "beta", "operation": "recommend_classical_portfolio", "request": {"portfolio_id": context.pid, "algorithm": algorithm}}, context.service)
+    result = handle({"environment": "beta", "operation": "generate_portfolio_recommendation_" + algorithm, "request": {"portfolio_id": context.pid, "instruments": list(context.market.instruments)}}, context.service)
     rec = result["recommendation"]
     assert {r["instrument_id"] for r in rec["target_weights"]} == set(context.market.instruments)
     assert sum(r["weight"] for r in rec["target_weights"]) == pytest.approx(1.)

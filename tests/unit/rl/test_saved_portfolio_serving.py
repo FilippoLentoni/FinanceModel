@@ -68,7 +68,7 @@ def context(monkeypatch):
 
 
 def request(ctx, body):
-    return serving.handle({"environment": "beta", "request": body}, ctx.service)
+    return serving.handle({"environment": "beta", "request": {"instruments": ["A", "B"], **body}}, ctx.service)
 
 
 def test_default_saved_book_is_marked_with_raw_closes_and_interim_peak(context):
@@ -107,20 +107,85 @@ def test_repeated_recommendations_do_not_change_state_or_selection(context):
     assert context.proposals[0]["execution"]["transaction_cost_bps"] == 2.
 
 
-def test_saved_book_scoped_policy_routes_without_changing_default(context):
+def test_policy_is_selected_by_requested_universe_not_by_portfolio_routing(context):
     parameter=context.service.d.advisory_parameter
     pointer=json.loads(parameter.read())
     original=json.loads(context.service.d.artifacts.get(pointer['artifact']))
-    scoped={**original,'source_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY02'}
-    ref=context.service.d.artifacts.put_json(scoped,kind='policy_inference').to_dict()
-    pointer['portfolio_policies']={PID:{'export_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY03','artifact':ref}}
-    context.service.d.advisory_parameter=SimpleNamespace(read=lambda:json.dumps(pointer))
-    rec=request(context,{})['recommendation']
-    assert rec['policy_source_run_id']==scoped['source_run_id']
+    # A selected multi-seed ensemble on the same universe outranks the pinned single seed,
+    # whichever portfolio asks (same rule as the forward runner's direct ppo book).
+    ensemble={**original,'source_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY02','members':[{'seed':0},{'seed':1}]}
+    other={**original,'source_run_id':'run_01JABCDEFGHJKMNPQRSTVWXY04','instruments':['A','B','C']}
+    ref=context.service.d.artifacts.put_json(ensemble,kind='policy_inference').to_dict()
+    other_ref=context.service.d.artifacts.put_json(other,kind='policy_inference').to_dict()
+    context.service.d.policy_exports=lambda:[(ref,ensemble),(other_ref,other)]
+    saved=request(context,{})['recommendation']
     explicit=request(context,{'input_snapshot_id':SID,'as_of':'2026-10-09',
                               'holdings':{'weights':[],'cash_weight':1.,'portfolio_value':10000.,'high_watermark':10000.}})['recommendation']
-    assert explicit['policy_source_run_id']==original['source_run_id']
-    assert json.loads(context.service.d.advisory_parameter.read())['artifact']==pointer['artifact']
+    for rec in (saved,explicit):
+        assert rec['policy_source_run_id']==ensemble['source_run_id']
+        assert rec['policy_artifact_checksum']==ref['checksum']
+        assert rec['export_run_id']==ensemble['source_run_id']
+        assert rec['diagnostics']['policy_selection']['policy_instruments']==['A','B']
+        assert [w['instrument_id'] for w in rec['target_weights']]==['A','B']
+    assert parameter.read()==json.dumps(pointer)
+
+
+def test_pinned_export_run_identifies_the_selected_pinned_policy(context):
+    rec=request(context,{'instruments':['B','A']})['recommendation']
+    pointer=json.loads(context.service.d.advisory_parameter.read())
+    assert rec['export_run_id']==pointer['export_run_id'] and rec['policy_artifact_checksum']==pointer['artifact']['checksum']
+
+
+@pytest.mark.parametrize('instruments',[['A'],['A','B','C'],['A','C']])
+def test_no_policy_for_the_requested_universe_is_a_typed_error(context,instruments):
+    with pytest.raises(FinplanError) as exc:
+        request(context,{'instruments':instruments})
+    assert exc.value.code=='PRECONDITION_FAILED' and exc.value.details['reason']=='no_policy_for_universe'
+    assert exc.value.details['requested_instruments']==sorted(instruments)
+    assert not context.captured and not context.proposals and context.calls==[]
+
+
+def test_news_or_other_algorithm_exports_are_never_served_as_ppo(context):
+    pointer=json.loads(context.service.d.advisory_parameter.read())
+    original=json.loads(context.service.d.artifacts.get(pointer['artifact']))
+    news={**original,'members':[{'seed':0},{'seed':1}],'environment':{'window':2,'features':['etf_news_metadata_v1']}}
+    sac={**original,'strategy_id':'sac','members':[{'seed':0},{'seed':1}]}
+    refs=[(context.service.d.artifacts.put_json(b,kind='policy_inference').to_dict(),b) for b in (news,sac)]
+    context.service.d.policy_exports=lambda:refs
+    rec=request(context,{})['recommendation']
+    assert rec['policy_artifact_checksum']==pointer['artifact']['checksum']
+
+
+def test_holdings_outside_the_requested_instruments_are_rejected(context):
+    with pytest.raises(FinplanError) as exc:
+        request(context,{'input_snapshot_id':SID,'as_of':'2026-10-09','holdings':{'weights':[{'instrument_id':'C','weight':0.}],
+                 'cash_weight':1.,'portfolio_value':10000.,'high_watermark':10000.}})
+    assert exc.value.code=='VALIDATION_FAILED' and exc.value.details['outside_instruments']==['C']
+
+
+def test_requested_instrument_missing_from_snapshot_is_a_validation_error(context):
+    pointer=json.loads(context.service.d.advisory_parameter.read())
+    wider={**json.loads(context.service.d.artifacts.get(pointer['artifact'])),'instruments':['A','B','C']}
+    ref=context.service.d.artifacts.put_json(wider,kind='policy_inference').to_dict()
+    context.service.d.policy_exports=lambda:[(ref,wider)]
+    with pytest.raises(FinplanError) as exc:
+        request(context,{'instruments':['A','B','C']})
+    assert exc.value.code=='VALIDATION_FAILED' and exc.value.details['missing_instruments']==['C']
+    assert not context.captured
+
+
+def test_top_level_instruments_must_match_the_request(context):
+    body={'instruments':['A','B']}
+    serving.handle({'environment':'beta','request':body,'instruments':['A','B']},context.service)
+    with pytest.raises(FinplanError) as exc:
+        serving.handle({'environment':'beta','request':body,'instruments':['A']},context.service)
+    assert exc.value.code=='VALIDATION_FAILED'
+
+
+def test_missing_instruments_is_a_validation_error(context):
+    with pytest.raises(FinplanError) as exc:
+        serving.handle({'environment':'beta','request':{}},context.service)
+    assert exc.value.code=='VALIDATION_FAILED'
 
 
 def test_saved_recommendation_fails_closed_if_decision_cannot_be_persisted(context):

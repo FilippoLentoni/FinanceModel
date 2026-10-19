@@ -75,7 +75,7 @@ class MemoryStore:
         self.docs[aid] = copy.deepcopy(doc)
         return copy.deepcopy(doc)
 
-    def list(self, *, portfolio_id=None, kind=None, limit=20):
+    def list(self, *, portfolio_id=None, kind=None, limit=20, kinds=None):
         rows = sorted(
             self.docs.values(),
             key=lambda d: (d["created_at"], d["analysis_id"]),
@@ -86,6 +86,7 @@ class MemoryStore:
             for d in rows
             if (not portfolio_id or d.get("portfolio_id") == portfolio_id)
             and (not kind or d["analysis_kind"] == kind)
+            and (kinds is None or d["analysis_kind"] in kinds)
         ][:limit]
 
     def get_claim(self, key):
@@ -188,7 +189,7 @@ class S3Store:
         )
         return doc
 
-    def list(self, *, portfolio_id=None, kind=None, limit=20):
+    def list(self, *, portfolio_id=None, kind=None, limit=20, kinds=None):
         args = {"Bucket": self.bucket, "Prefix": "classical/index/", "MaxKeys": 100}
         out = []
         for _ in range(10):
@@ -197,7 +198,7 @@ class S3Store:
                 entry = self._get(item["Key"].removeprefix("classical/"))
                 if (not portfolio_id or entry.get("portfolio_id") == portfolio_id) and (
                     not kind or entry["analysis_kind"] == kind
-                ):
+                ) and (kinds is None or entry["analysis_kind"] in kinds):
                     out.append(self.get(entry["analysis_id"]))
                     if len(out) >= limit:
                         return out

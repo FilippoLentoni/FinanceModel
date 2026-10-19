@@ -53,18 +53,56 @@ def activate(service, principal, body):
     return {'advisory_policy':doc}
 
 
-def recommendation(service, body):
-    require_valid(body,'tools/recommend-portfolio-invocation-request')
-    if service.env!='beta' or service.d.advisory_parameter is None:
+PPO_REQUEST = 'tools/generate-portfolio-recommendation-ppo-request'
+PPO_RESPONSE = 'tools/generate-portfolio-recommendation-ppo-response'
+
+
+def _policy_inventory(service):
+    """Every frozen export this service may serve: ``[(artifact_ref, bundle, export_run_id|None)]``.
+
+    The bounded research-storage listing (``artifacts/policy_inference/*``, the same inventory
+    the forward runner's direct PPO book selects from) plus the operator-pinned advisory
+    policies, deduplicated by artifact checksum. Pinned entries contribute their export run.
+    """
+    entries={}
+    lister=getattr(service.d,'policy_exports',None)
+    if lister is not None:
+        for ref,bundle in lister():
+            entries.setdefault(ref['checksum'],[ref,bundle,None])
+    parameter=getattr(service.d,'advisory_parameter',None)
+    raw=parameter.read() if parameter is not None else None
+    if raw:
+        pinned=json.loads(raw)
+        for doc in [pinned,*pinned.get('portfolio_policies',{}).values()]:
+            if not doc.get('artifact'):continue
+            checksum=doc['artifact']['checksum']
+            if checksum not in entries:
+                entries[checksum]=[doc['artifact'],json.loads(service.d.artifacts.get(doc['artifact'])),None]
+            entries[checksum][2]=entries[checksum][2] or doc.get('export_run_id')
+    if lister is None and not raw:
+        raise FinplanError.precondition('no frozen PPO policy is available in this environment',reason='no_advisory_policy')
+    return [tuple(e) for e in entries.values()]
+
+
+def select_policy(service, instruments):
+    """The frozen price-only PPO policy trained on exactly ``instruments`` (typed error otherwise)."""
+    from .policy_selection import select_for_universe
+    inventory=_policy_inventory(service)
+    ref,bundle=select_for_universe([(ref,bundle) for ref,bundle,_ in inventory],instruments)
+    export_run_id=next(run for r,_,run in inventory if r['checksum']==ref['checksum'])
+    return {'artifact':ref,'export_run_id':export_run_id or bundle['source_run_id'],
+            'export_run_id_basis':'operator_pinned_export_run' if export_run_id else 'policy_source_run_id; exported evaluated members carry no separate export run'},bundle
+
+
+def recommendation(service, body, instruments=None):
+    """Serve ``generate_portfolio_recommendation_ppo``: the frozen policy for the requested universe."""
+    require_valid(body,PPO_REQUEST)
+    if instruments is not None and list(instruments)!=list(body['instruments']):
+        raise FinplanError.validation('top-level instruments must equal request.instruments',pointer='/instruments')
+    if service.env!='beta':
         raise FinplanError.precondition('advisory strategy serving is unavailable in this environment',reason='advisory_disabled')
-    raw=service.d.advisory_parameter.read()
-    if not raw:
-        raise FinplanError.precondition('no advisory policy is pinned',reason='no_advisory_policy')
-    pinned=json.loads(raw)
+    pinned,bundle=select_policy(service,body['instruments'])
     snapshot_id,saved=resolve_inputs(service,body)
-    if saved is not None:
-        pinned=pinned.get('portfolio_policies',{}).get(saved['portfolio_id'],pinned)
-    bundle=json.loads(service.d.artifacts.get(pinned['artifact']))
     if bundle.get('format') != 'finplan-strategy-bundle/1' or bundle.get('mode') != 'advisory_paper':
         raise FinplanError.precondition('the selected strategy artifact format is unsupported',reason='policy_format_invalid')
     if saved is not None:
@@ -73,13 +111,17 @@ def recommendation(service, body):
         allowed=approved_profile_instruments(metadata,portfolio_id=saved['portfolio_id'],available_instruments=bundle['instruments'])
         if set(allowed)!=set(bundle['instruments']):
             raise FinplanError.precondition('selected frozen policy is incompatible with the isolated paper profile universe',reason='paper_profile_policy_incompatible')
+    elif 'holdings' in body:
+        outside=sorted({r['instrument_id'] for r in body['holdings']['weights']}-set(body['instruments']))
+        if outside:
+            raise FinplanError.validation('holdings reference instruments outside the requested instruments',pointer='/holdings/weights',outside_instruments=outside)
     market,content=load_market(service.d.platform,snapshot_id)
     as_of=completed_date(service,body,market,bundle['instruments'])
     if as_of.isoformat()<=bundle['available_after']:
         raise FinplanError.precondition('advisory decisions must follow training and validation selection',reason='decision_before_selection_end')
-    missing=set(bundle['instruments'])-set(market.instruments)
+    missing=sorted(set(bundle['instruments'])-set(market.instruments))
     if missing:
-        raise FinplanError.precondition('snapshot does not cover the trained universe',reason='universe_not_covered')
+        raise FinplanError.validation('requested instruments are missing from the snapshot',pointer='/instruments',missing_instruments=missing)
     lookback=int(bundle['environment']['window'])+1 if bundle.get('members') else None
     dates,px=market.view(as_of,bundle['instruments']).price_matrix('close',lookback=lookback)
     if not dates or dates[-1]!=as_of:
@@ -137,6 +179,9 @@ def recommendation(service, body):
         error.details['actual_model_inputs']=captured_inputs
         raise error from exc
     rec.setdefault('diagnostics',{})['actual_model_inputs']=captured_inputs
+    rec['diagnostics']['policy_selection']={'rule':'price_only_ppo_exact_universe; selected ensemble first (finplan_model.rl.policy_selection)',
+        'requested_instruments':list(body['instruments']),'policy_instruments':list(bundle['instruments']),
+        'policy_artifact':pinned['artifact'],'export_run_id_basis':pinned['export_run_id_basis']}
     with_quantities(rec,metadata)
     rec.update({'as_of':as_of.isoformat(),'input_snapshot_id':snapshot_id,'snapshot_checksum':content.snapshot.manifest_checksum,'policy_artifact_checksum':pinned['artifact']['checksum'],'export_run_id':pinned['export_run_id'],'decision_timing':'after_completed_close_for_next_session','bias_disclosures':content.snapshot.record.get('bias_disclosures',[])})
     rec['decision_at']=decision_cutoff

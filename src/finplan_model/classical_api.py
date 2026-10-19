@@ -25,7 +25,8 @@ _SERVICE = None
 OPS = (
     "get_etf_research_inputs",
     "get_crypto_experiment", "recommend_crypto_portfolio", "list_crypto_history", "discover_research_data",
-    "recommend_classical_portfolio",
+    "generate_portfolio_recommendation_min_variance",
+    "generate_portfolio_recommendation_cvar",
     "explain_classical_recommendation",
     "compare_classical_plans",
     "evaluate_classical_performance",
@@ -40,6 +41,18 @@ OPS = (
     "evaluate_portfolio_decision",
     "run_recursive_improvement",
 )
+
+
+#: The algorithm is fixed by the MCP tool / operation name, never by a request field.
+RECOMMEND_OPS = {
+    "generate_portfolio_recommendation_min_variance": "min_variance",
+    "generate_portfolio_recommendation_cvar": "cvar",
+}
+
+
+#: ``analysis_kind`` values ``tools/list-classical-analyses-response`` can represent.
+LISTABLE_KINDS = ("recommendation", "explanation", "comparison", "performance", "research",
+                  "feedback", "research_run", "market_events")
 
 
 class JobApi:
@@ -222,7 +235,7 @@ def handle(event, service):
             "classical serving request belongs to another environment",
             pointer="/environment",
         )
-    if set(event) - {"environment", "operation", "request", "headers"}:
+    if set(event) - {"environment", "operation", "request", "headers", "instruments"}:
         raise FinplanError.validation("unknown classical serving field", pointer="")
     op = event.get("operation")
     if op not in OPS:
@@ -247,6 +260,12 @@ def handle(event, service):
                 pointer=issues[0].pointer, schema=schema,
             )
     body = require_valid(event.get("request", {}), schema)
+    if "instruments" in event:
+        # ``request.instruments`` is authoritative; the top-level copy must agree with it.
+        if op not in RECOMMEND_OPS or event["instruments"] != body.get("instruments"):
+            raise FinplanError.validation(
+                "top-level instruments must equal request.instruments", pointer="/instruments"
+            )
     if op == "get_etf_research_inputs":
         from .etf_news import handle as etf_handle
         return require_valid(etf_handle(service, body), "tools/get-etf-research-inputs-response")
@@ -255,7 +274,7 @@ def handle(event, service):
         return require_valid(crypto_handle(service, op, body), "tools/" + op.replace("_", "-") + "-response")
     idem_key = (
         body.get("idempotency_key")
-        if op in ("recommend_classical_portfolio", "submit_portfolio_feedback", "run_recursive_improvement")
+        if op in (*RECOMMEND_OPS, "submit_portfolio_feedback", "run_recursive_improvement")
         else None
     )
     idem_claim = (
@@ -281,8 +300,8 @@ def handle(event, service):
                 public(service.store.get(prior["analysis_id"])),
                 "tools/" + op.replace("_", "-") + "-response",
             )
-    if op == "recommend_classical_portfolio":
-        result = service.recommend(body)
+    if op in RECOMMEND_OPS:
+        result = service.recommend(body, algorithm=RECOMMEND_OPS[op])
     elif op == "explain_classical_recommendation":
         result = service.explanation(body)
     elif op == "compare_classical_plans":
@@ -292,10 +311,18 @@ def handle(event, service):
     elif op == "get_classical_analysis":
         result = public(service.store.get(body["analysis_id"]))
     elif op == "list_classical_analyses":
+        if body.get("kind") is not None and body["kind"] not in LISTABLE_KINDS:
+            raise FinplanError.validation(
+                "this analysis kind cannot be listed by list_classical_analyses; retrieve it by analysis_id",
+                pointer="/kind", allowed_kinds=list(LISTABLE_KINDS),
+            )
+        # Only kinds the response contract can represent; internal records (recursive
+        # cycles/iterations, crypto, discovery, served inputs) stay retrievable by id.
         rows = service.store.list(
             portfolio_id=body.get("portfolio_id"),
             kind=body.get("kind"),
             limit=body.get("limit", 20),
+            kinds=LISTABLE_KINDS,
         )
         summaries = [
             {

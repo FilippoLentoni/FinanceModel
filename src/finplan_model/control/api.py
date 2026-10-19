@@ -53,7 +53,7 @@ HTTP_STATUS = {
 _CID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}\Z")
 _RUN = r"(?P<run_id>[A-Za-z0-9_]{1,64})"
 ROUTES: tuple[tuple[str, re.Pattern[str], str], ...] = (
-    ("GET", re.compile(r"^/v1/recommendations/?\Z"), "recommend_portfolio"),
+    ("GET", re.compile(r"^/v1/recommendations/?\Z"), "generate_portfolio_recommendation_ppo"),
     ("GET", re.compile(r"^/v1/performance-evidence/?\Z"), "performance_evidence"),
     ("PUT", re.compile(r"^/v1/advisory-policy/?\Z"), "activate_advisory"),
     ("POST", re.compile(r"^/v1/jobs/?\Z"), "submit_job"),
@@ -120,7 +120,7 @@ class JobApi:
         principal = Principal.from_arn(identity.get("userArn") or identity.get("caller"))
         svc = self.service
         run_id = match.groupdict().get("run_id")
-        if op in ("recommend_portfolio", "performance_evidence", "activate_advisory"):
+        if op in ("generate_portfolio_recommendation_ppo", "performance_evidence", "activate_advisory"):
             from finplan_model.rl.advisory import activate, recommendation
             from finplan_model.rl.performance import performance_evidence
             if op == "activate_advisory":
@@ -131,7 +131,7 @@ class JobApi:
                     raise FinplanError.validation("request exceeds the read bound", pointer="/request")
                 try: body = json.loads(raw)
                 except (ValueError, TypeError): raise FinplanError.validation("request must contain a JSON object", pointer="/request") from None
-            if op == "recommend_portfolio": return 200, recommendation(svc, body)
+            if op == "generate_portfolio_recommendation_ppo": return 200, recommendation(svc, body)
             if op == "performance_evidence": return 200, performance_evidence(svc, body)
             return 200, activate(svc, principal, body)
         if op == "submit_job":

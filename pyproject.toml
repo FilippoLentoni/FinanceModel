@@ -10,7 +10,7 @@ dependencies = [
     # 1.0.0 is the first stable contract release (allowed in beta, gamma and prod). The exact
     # platform-built wheel is vendored under vendor/ (the same bytes the FinancialPlanning build
     # publishes to its CodeArtifact registry once its bootstrap is re-run).
-    "finplan-contracts==1.13.1",
+    "finplan-contracts==1.14.0",
     # FinancialPlanning platform package (ModelingEvidence: the authoritative beta experiment
     # ledger the forward runner writes through). Pinned exactly like finplan-contracts: exact
     # version, vendored reproducible wheel, SHA-256 in platform-pin.json and uv.lock.
@@ -47,7 +47,7 @@ dev = [
 default-groups = ["dev"]
 
 [tool.uv.sources]
-finplan-contracts = { path = "vendor/finplan-contracts/finplan_contracts-1.13.1-py3-none-any.whl" }
+finplan-contracts = { path = "vendor/finplan-contracts/finplan_contracts-1.14.0-py3-none-any.whl" }
 finplan-platform = { path = "vendor/finplan-platform/finplan_platform-0.1.0-py3-none-any.whl" }
 torch = [{ index = "pytorch-cpu" }]
 

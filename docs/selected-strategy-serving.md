@@ -22,12 +22,35 @@ that same-environment Lambda directly, avoiding the job API's shorter request pa
 270 seconds. Its role reads only the selected exported artifacts, the relevant SSM references and
 approved snapshot APIs. It cannot train, write model selection or create jobs.
 
-`recommend_portfolio` accepts `{}` to use the saved beta paper portfolio referenced by
-`/finplan/beta/financialplanning/config/research-plan-ref` and the latest approved research-universe
-snapshot. An optional `portfolio_id` selects another saved paper book. The platform operator must
-initialize the book first; missing state returns a typed error without creating holdings.
-The invocation contract is `tools/recommend-portfolio-invocation-request`; the original explicit
-request contract remains valid for existing callers.
+## `generate_portfolio_recommendation_ppo`
+
+The MCP tool `generate_portfolio_recommendation_ppo` (contract
+`tools/generate-portfolio-recommendation-ppo-request` / `-response`, finplan-contracts 1.14.0) invokes
+the strategy Lambda with `{"environment", "request", "headers", "instruments"}`. `request.instruments`
+(1–100 unique symbols) is required and authoritative; a top-level `instruments` copy must equal it.
+
+Policy selection is by universe, not by the pinned pointer: the service lists the bounded frozen
+exports under research storage `artifacts/policy_inference/` (content checksums verified; the
+operator-pinned policies are included) and keeps the price-only PPO exports whose fixed universe is
+exactly the requested set. Among those it prefers an originally selected multi-seed ensemble, then
+originally selected exports, then the greatest source run/configuration id. This is the same rule
+(`finplan_model.rl.policy_selection`) the forward runner uses for its direct `ppo` book, so the agent
+tool and the direct book serve the same bytes. No match is `PRECONDITION_FAILED` with reason
+`no_policy_for_universe` and the requested instruments; news/GDELT and SAC exports are never served by
+this tool. The response identifies the policy actually used: `strategy`, `policy_source_run_id`,
+`configuration_id`, `policy_seeds`, `policy_artifact_checksum`, `export_run_id` and
+`diagnostics.policy_selection`. `export_run_id` is the pinning export run when the selected artifact is
+an operator-pinned one; exported evaluated members carry no separate export run, so their
+`export_run_id` is the policy source run (`diagnostics.policy_selection.export_run_id_basis` says
+which). Target weights are returned only for the policy's (= requested) instruments. A requested
+instrument absent from the snapshot is `VALIDATION_FAILED` (`missing_instruments`); explicit holdings
+naming any other instrument are `VALIDATION_FAILED` (`outside_instruments`).
+
+Without `holdings`, the tool uses the saved beta paper portfolio referenced by
+`/finplan/beta/financialplanning/config/research-plan-ref` (or an explicit `portfolio_id`) and the
+latest approved research-universe snapshot; the saved profile's universe must equal the requested
+instruments. The platform operator must initialize the book first; missing state returns a typed
+error without creating holdings.
 
 For a reproducible experiment, supply an approved `input_snapshot_id`, an `as_of` completed session
 and `holdings` containing weights by instrument, cash weight, positive portfolio value and high

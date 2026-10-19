@@ -99,16 +99,16 @@ def assign_policy_variants(primary, bundles):
 
 
 def select_eight_asset_primary(bundles):
-    """Prefer an originally selected ensemble over newly exported individual seeds."""
-    candidates=[p for p in bundles if p.get('strategy_id')=='ppo' and len(p.get('instruments',[]))==8
-                and not any('news' in f or 'gdelt' in f for f in p.get('environment',{}).get('features',[]))]
-    if not candidates:raise ValueError('eight-asset frozen policy unavailable')
-    def priority(p):
-        evaluated=p.get('evaluated_variant')
-        selected=evaluated is None or evaluated.get('selected_in_original_run') is True
-        selected_ensemble=selected and len(p.get('members',[]))>1
-        return (selected_ensemble,selected,p.get('source_run_id',''),p.get('configuration_id',''))
-    return max(candidates,key=priority)
+    """Prefer an originally selected ensemble over newly exported individual seeds.
+
+    Same rule as the served ``generate_portfolio_recommendation_ppo`` tool
+    (:mod:`finplan_model.rl.policy_selection`), so the direct ``ppo`` book and the agent
+    tool select the same frozen bytes for the same universe.
+    """
+    from finplan_model.rl.policy_selection import price_only,select_primary
+    chosen=select_primary([p for p in bundles if p.get('strategy_id')=='ppo' and len(p.get('instruments',[]))==8 and price_only(p)])
+    if chosen is None:raise ValueError('eight-asset frozen policy unavailable')
+    return chosen
 
 
 def load_current_inputs(session=None,cohort=None):
@@ -248,20 +248,28 @@ def _graph_adapter(base,source,holdings,before):
 
 
 def _agent_tool_adapter(base,source,holdings,before,*,invoke=None):
-    """Ask the deployed agent to run exactly one model tool; reject anything else it returns."""
+    """Ask the deployed agent to run exactly one model tool; reject anything else it returns.
+
+    ``instruments`` is the cohort universe, so the tool optimises (classical) or selects its
+    frozen policy (PPO) on exactly the symbols the direct books use. ``holdings`` are the inputs
+    the matching direct book consumes: feature-close ``HoldingsView`` weights for classical
+    (:func:`runtime.classical_tool_holdings`), the runner's book holdings for PPO. For PPO the
+    served policy must be the direct ``ppo`` book's frozen artifact (same checksum).
+    """
     from .registry import AGENT_TOOLS
     if invoke is None:
         from .agent_client import invoke_tool as invoke
-    model=base['model']['strategy_name'];tool,fixed=AGENT_TOOLS[model];universe=list(source['investable_universe'])
+    model=base['model']['strategy_name'];tool=AGENT_TOOLS[model];universe=list(source['investable_universe'])
     if model=='ppo':
-        served=source.get('served_advisory_policy')
-        if not served or served['instruments']!=universe:
-            before({'framework':'langgraph','boundary':'not_invoked_tool_universe_precondition','requested_tool':tool,
-                    'tool_universe':served.get('instruments') if served else None,'supplied_universe':universe,'invocation_state':'not_invoked'})
-            return {'status':'unavailable','reason':'agent_tool_serves_a_different_fixed_universe','forecast':{'available':False}}
-    arguments={**fixed,'input_snapshot_id':source['input_snapshot_id'],'as_of':max(r['session_date'] for r in source['observations']),
-               'holdings':{k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')}}
-    response=invoke(tool,arguments,f'Give me a portfolio recommendation using model {model}.',before)
+        # The direct ppo book's actor consumes these exact runner holdings.
+        scenario={k:holdings[k] for k in ('weights','cash_weight','portfolio_value','high_watermark')}
+    else:
+        # The direct classical book marks positions at snapshot feature closes (HoldingsView).
+        from .runtime import classical_tool_holdings
+        scenario=classical_tool_holdings(source,holdings,base['decision_time'],universe)
+    arguments={'input_snapshot_id':source['input_snapshot_id'],'as_of':max(r['session_date'] for r in source['observations']),
+               'instruments':universe,'holdings':scenario}
+    response=invoke(tool,arguments,f'Give me a portfolio recommendation for {", ".join(universe)} using model {model}.',before)
     if response.get('status') in ('failed','unavailable'):
         return response
     called=response.get('tools_called') or [];weights=response.get('target_weights')
@@ -269,8 +277,14 @@ def _agent_tool_adapter(base,source,holdings,before,*,invoke=None):
         return {**response,'status':'failed','reason':'agent_did_not_run_exactly_the_requested_tool','requested_tool':tool,'tools_called':called}
     if not isinstance(weights,list) or response.get('cash_weight') is None:
         return {**response,'status':'unavailable','reason':'agent_returned_no_recommendation'}
-    if response.get('served_strategy') not in (model,None) and model!='ppo':
+    if response.get('served_strategy') not in (model,None):
         return {**response,'status':'failed','reason':'agent_returned_a_different_model','served_strategy':response.get('served_strategy')}
+    if model=='ppo':
+        expected=((source.get('frozen_policy_refs') or {}).get('ppo') or {}).get('artifact',{}).get('checksum')
+        observed=response.get('served_policy_artifact_checksum')
+        if expected and observed!=expected:
+            return {**response,'status':'failed','reason':'agent_tool_served_a_different_frozen_policy',
+                    'expected_policy_checksum':expected,'observed_policy_checksum':observed}
     outside=[w['instrument_id'] for w in weights if w['instrument_id'] not in universe and w.get('weight')]
     if outside:
         return {**response,'status':'failed','reason':'agent_allocated_outside_the_experiment_universe','outside_instruments':outside}

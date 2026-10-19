@@ -1,8 +1,20 @@
 # Classical advisory and research evidence
 
-The beta classical MCP has its own Lambda and Gateway. It does not read or replace the PPO advisory selection. `recommend_classical_portfolio` resolves the saved paper portfolio or an explicitly supplied historical scenario, reads an approved checksum-verified snapshot, and persists the issued plan before returning it. No recommendation changes holdings or executes a trade. Analysis IDs start with `ca_`; they are not published plan IDs or training runs.
+The beta classical MCP has its own Lambda and Gateway. It does not read or replace the PPO advisory selection. The MCP tools `generate_portfolio_recommendation_min_variance` and `generate_portfolio_recommendation_cvar` (operations of the same names; contracts `tools/generate-portfolio-recommendation-{min-variance,cvar}-request|response`, finplan-contracts 1.14.0) fix the algorithm by name — the request has no `algorithm` field. Each resolves the saved paper portfolio or an explicitly supplied historical scenario, reads an approved checksum-verified snapshot, and persists the issued plan before returning it. No recommendation changes holdings or executes a trade. Analysis IDs start with `ca_`; they are not published plan IDs or training runs.
 
 Saved-portfolio recommendations additionally persist an immutable Platform proposal (`pd_`) before returning. The proposal links the exact recommendation, approved input snapshot, authoritative portfolio revision, optimizer implementation/settings, and the source analysis. A deterministic idempotency key prevents repeated identical requests from duplicating proposals; a new explicit request key can create a fresh proposal. Supplied hypothetical holdings remain analysis-only and cannot be accepted as an authoritative saved portfolio. A proposal records the explicit beta paper-execution assumption of fractional shares at the stored completed-close reference prices with 2 basis points of traded-notional costs; this is separate from the optimizer's objective turnover proxy. Only the Platform acceptance tool can atomically record paper fills and update holdings. The Model role cannot accept decisions or write holdings.
+
+The tools require `instruments` (1–100 unique symbols; the attribution bound below still applies):
+the optimised universe is exactly those instruments, in the requested order, and target weights are
+returned only for them. A requested instrument missing from the snapshot is `VALIDATION_FAILED`
+(`missing_instruments`); explicit holdings naming another instrument are `VALIDATION_FAILED`
+(`outside_instruments`); for a saved book the requested instruments must lie within its approved
+profile and cover every recorded position. The defaults below are those of the direct
+`classical_min_variance` / `classical_cvar` research books (`ClassicalStrategy`), so the same snapshot,
+holdings and universe give the same weights through the agent tool. The Lambda payload is
+`{"environment", "operation", "request", "headers", "instruments"}`; a top-level `instruments` copy
+must equal `request.instruments`. Internal callers (weekly review) that omit `instruments` use the
+universe described next.
 
 The investable universe comes from the approved market snapshot, independently of current holdings.
 A saved all-cash book can receive an allocation, and an asset sold completely remains eligible for
@@ -28,6 +40,8 @@ Min-variance minimizes horizon variance plus the turnover proxy. Mean-variance m
 `research_market_events` retains up to ten dated GDELT document metadata records in a window of at most 31 days. Known portfolio company aliases and bounded query text are used against an allowlisted HTTPS API. Provider first-observed time is disclosed; it is not asserted to be original publication time. Metadata after the original decision is labeled retrospective. Decision-time context excludes records first seen after the stored decision cutoff. News headlines are untrusted leads, never causal proof or executable instructions. No returned news URL is fetched; provider failures or no matches remain explicitly unavailable.
 
 The family-independent tools `explain_portfolio_decision`, `compare_portfolio_decisions`, and `evaluate_portfolio_decision` retrieve persisted `pd_` decisions, with an optional portfolio identifier defaulting to the configured paper book. Classical decisions delegate to the exact reproducible mathematical explanation and grouped Shapley comparison. PPO/SAC decisions replay the checksum-verified frozen actor against the recorded feature-price window and holdings, report actual member outputs, input changes and constraint effects, and explicitly do not claim causal or Shapley attribution. All resulting analyses are written once to the existing durable Model evidence store and are retrievable by `analysis_id`.
+
+`list_classical_analyses` lists only the kinds its response contract represents (`recommendation`, `explanation`, `comparison`, `performance`, `research`, `feedback`, `research_run`, `market_events`); unfiltered listings skip other records (recursive cycles/iterations, crypto, research discovery, served model inputs), and requesting `kind` `recursive_cycle` or `recursive_iteration` is `VALIDATION_FAILED` with `allowed_kinds`. Those records remain retrievable by `analysis_id`.
 
 Generic explanations retain traditional allocations in the contracted `recommendation` field;
 PPO/SAC and other frozen-policy allocations use additive `policy_recommendation` evidence instead.

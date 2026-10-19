@@ -20,8 +20,8 @@ def setup(monkeypatch):
     market = synthetic_market(('A','B'), n_sessions=100)
     artifacts = InMemoryArtifactStore()
     bundle = {'format':'finplan-strategy-bundle/1','mode':'advisory_paper','source_run_id':'run_'+UID,
-              'configuration_id':'cfg_'+'a'*64, 'strategy_id':'equal_weight', 'parameters':{},
-              'instruments':['A','B'], 'constraints':{}, 'members':[], 'available_after':'2026-01-01'}
+              'configuration_id':'cfg_'+'a'*64, 'strategy_id':'ppo', 'environment':{'window':2},
+              'instruments':['A','B'], 'constraints':{}, 'members':[{'seed':0}], 'available_after':'2026-01-01'}
     ref = artifacts.put_json(bundle, kind='policy_inference')
     pointer = json.dumps({'export_run_id':'run_'+UID,'artifact':ref.to_dict()})
     deps = SimpleNamespace(advisory_parameter=SimpleNamespace(read=lambda:pointer), artifacts=artifacts, platform=None, capture_served_input=lambda payload:artifacts.put_json(payload,kind="served_model_input").to_dict())
@@ -29,7 +29,12 @@ def setup(monkeypatch):
     content = SimpleNamespace(snapshot=SimpleNamespace(manifest_checksum='sha256:'+'b'*64,record={}),
                               payload={'observations':[{'instrument_id':i,'session_date':b.session_date.isoformat(),'close':b.close} for i in market.instruments for b in market.bars_of(i)]})
     monkeypatch.setattr('finplan_model.rl.advisory.load_market',lambda *a:(market,content))
-    body = {'input_snapshot_id':'snap_'+UID,'as_of':market.sessions[-1].isoformat(),
+    from finplan_model.rl.inference import allocation_response
+    def recommend(frozen,px,holdings,*,input_capture=None,**_):
+        if input_capture:input_capture({'boundary':'controlled_fixed_policy_fixture','prices':px.tolist()})
+        return allocation_response(frozen,holdings,[.5,.5],0.)
+    monkeypatch.setattr('finplan_model.rl.advisory.recommend',recommend)
+    body = {'instruments':['A','B'],'input_snapshot_id':'snap_'+UID,'as_of':market.sessions[-1].isoformat(),
             'holdings':{'weights':[],'cash_weight':1.,'portfolio_value':1000.,'high_watermark':1000.}}
     return svc, body, ref
 
@@ -39,7 +44,7 @@ def test_serving_returns_contract_valid_repeatable_recommendation_without_job_de
     event = {'environment':'beta','request':body,'headers':{'X-Correlation-Id':'corr-test-0001'}}
     a = serving.handle(event, svc)
     assert serving.handle(event, svc) == a
-    assert a['recommendation']['strategy'] == 'equal_weight'
+    assert a['recommendation']['strategy'] == 'ppo'
     assert a['recommendation']['cash_weight'] == 0
     assert [w['weight'] for w in a['recommendation']['target_weights']] == [.5,.5]
     assert not hasattr(svc.d,'sagemaker') and not hasattr(svc.d,'run_io')
@@ -74,6 +79,8 @@ def test_inference_iam_only_allows_conditional_owned_input_evidence_writes():
         return evaluate(Request(action,resource),{'identity':policy},boundary).allowed
     research = f'arn:aws:s3:::finplan-beta-financemodel-research-workspace-{account}'
     assert allowed('s3:GetObject', research+'/artifacts/policy_inference/example.json')
+    listing=lambda prefix:evaluate(Request('s3:ListBucket',research,{'s3:prefix':prefix}),{'identity':policy},boundary).allowed
+    assert listing('artifacts/policy_inference/') and not listing('artifacts/rl_policy/')
     assert not allowed('s3:GetObject', research+'/artifacts/rl_policy/example.zip')
     for action in ('sagemaker:CreateProcessingJob','dynamodb:PutItem','s3:PutObject','ssm:PutParameter'):
         assert not allowed(action,'*')
@@ -117,7 +124,7 @@ def test_input_capture_precedes_solver_and_survives_failed_invocation(setup,monk
         input_capture(prepared)
         assert any(json.loads(blob)['prepared']==prepared for ref,blob in svc.d.artifacts.objects.values() if ref.kind=='served_model_input')
         raise ValueError('controlled solver failure')
-    monkeypatch.setattr('finplan_model.rl.advisory.recommend_baseline',failed)
+    monkeypatch.setattr('finplan_model.rl.advisory.recommend',failed)
     with pytest.raises(FinplanError) as caught:serving.handle({'environment':'beta','request':body},svc)
     entry=caught.value.details['actual_model_inputs'][0]
     assert entry['payload']['prepared']==prepared
@@ -132,7 +139,7 @@ def test_input_capture_storage_failure_prevents_solver_execution(setup,monkeypat
     def solve(*args,input_capture,**kwargs):
         input_capture({'boundary':'controlled_solver_fixture'})
         computed.append(True)
-    monkeypatch.setattr('finplan_model.rl.advisory.recommend_baseline',solve)
+    monkeypatch.setattr('finplan_model.rl.advisory.recommend',solve)
     with pytest.raises(FinplanError):serving.handle({'environment':'beta','request':body},svc)
     assert computed==[]
 

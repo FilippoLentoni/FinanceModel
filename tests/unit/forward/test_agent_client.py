@@ -72,26 +72,28 @@ def test_tool_call_sends_named_tool_and_reports_what_the_agent_ran(monkeypatch):
     class Opener:
         def open(self, request, timeout):
             payload = json.loads(request.data)
-            assert payload["tool_request"] == {"name": "recommend_classical_portfolio", "arguments": {**scenario(), "algorithm": "cvar"}}
+            assert payload["tool_request"] == {"name": "generate_portfolio_recommendation_cvar", "arguments": {**scenario(), "instruments": ["VOO"]}}
             assert payload["prompt"] == "Give me a portfolio recommendation using model cvar."
             assert request.full_url.startswith("https://bedrock-agentcore.us-east-2.amazonaws.com/runtimes/runtime-reference/invocations")
             return io.BytesIO(json.dumps({"status": "completed", "answer": {
-                "evidence": [{"tool": "recommend_classical_portfolio", "ok": True}],
-                "recommendation": {"target_weights": [{"instrument_id": "VOO", "weight": 0.6}], "cash_weight": 0.4, "strategy": "cvar"}}}).encode())
+                "evidence": [{"tool": "generate_portfolio_recommendation_cvar", "ok": True}],
+                "recommendation": {"target_weights": [{"instrument_id": "VOO", "weight": 0.6}], "cash_weight": 0.4, "strategy": "cvar",
+                                   "policy_artifact_checksum": "sha256:" + "c" * 64}}}).encode())
     monkeypatch.setattr(hosted.urllib.request, "build_opener", lambda *a: Opener())
     monkeypatch.setattr(hosted, "machine_token", lambda *a: ("private-test-token", []))
     captured = []
-    result = hosted.invoke_tool("recommend_classical_portfolio", {**scenario(), "algorithm": "cvar"},
+    result = hosted.invoke_tool("generate_portfolio_recommendation_cvar", {**scenario(), "instruments": ["VOO"]},
                                 "Give me a portfolio recommendation using model cvar.", captured.append, session=Session())
-    assert captured[0]["payload"]["tool_request"]["name"] == "recommend_classical_portfolio"
-    assert result["requested_tool"] == "recommend_classical_portfolio"
-    assert result["tools_called"] == ["recommend_classical_portfolio"]
+    assert captured[0]["payload"]["tool_request"]["name"] == "generate_portfolio_recommendation_cvar"
+    assert result["requested_tool"] == "generate_portfolio_recommendation_cvar"
+    assert result["tools_called"] == ["generate_portfolio_recommendation_cvar"]
     assert result["target_weights"] == [{"instrument_id": "VOO", "weight": 0.6}] and result["served_strategy"] == "cvar"
+    assert result["served_policy_artifact_checksum"] == "sha256:" + "c" * 64
 
 
 def test_tool_call_cannot_fall_back_to_saved_user_book():
     with pytest.raises(ValueError, match="explicit shared"):
-        hosted.invoke_tool("recommend_portfolio", {"portfolio_id": "user-book"}, "x", lambda p: None, session=Session())
+        hosted.invoke_tool("generate_portfolio_recommendation_ppo", {"portfolio_id": "user-book"}, "x", lambda p: None, session=Session())
 
 
 def test_http_error_and_leaked_secret_are_failed_results_not_evidence(monkeypatch):
@@ -101,12 +103,12 @@ def test_http_error_and_leaked_secret_are_failed_results_not_evidence(monkeypatc
             raise urllib.error.HTTPError(request.full_url, 503, "busy", {}, None)
     monkeypatch.setattr(hosted.urllib.request, "build_opener", lambda *a: Failing())
     monkeypatch.setattr(hosted, "machine_token", lambda *a: ("private-test-token", []))
-    assert hosted.invoke_tool("recommend_portfolio", scenario(), "x", lambda p: None, session=Session())["error_code"] == "HOSTED_HTTP_503"
+    assert hosted.invoke_tool("generate_portfolio_recommendation_ppo", scenario(), "x", lambda p: None, session=Session())["error_code"] == "HOSTED_HTTP_503"
     class Leaking:
         def open(self, request, timeout):
             return io.BytesIO(json.dumps({"status": "completed", "echo": "private-test-token"}).encode())
     monkeypatch.setattr(hosted.urllib.request, "build_opener", lambda *a: Leaking())
-    assert hosted.invoke_tool("recommend_portfolio", scenario(), "x", lambda p: None, session=Session())["error_code"] == "HOSTED_RESPONSE_REJECTED"
+    assert hosted.invoke_tool("generate_portfolio_recommendation_ppo", scenario(), "x", lambda p: None, session=Session())["error_code"] == "HOSTED_RESPONSE_REJECTED"
 
 
 def test_machine_token_uses_the_modeling_runner_client_and_never_returns_the_secret():
